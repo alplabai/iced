@@ -250,3 +250,34 @@ impl Default for Builder {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn end_of(arc: Arc) -> math::Point {
+        let mut builder = Builder::new();
+        builder.arc(arc);
+
+        let path = builder.build();
+
+        path.raw()
+            .iter()
+            .last()
+            .expect("arc should produce events")
+            .to()
+    }
+
+    #[test]
+    fn negative_sweep_ends_at_end_angle() {
+        let end = end_of(Arc {
+            center: Point::new(0.0, 0.0),
+            radius: 1.0,
+            start_angle: Radians(0.0),
+            end_angle: Radians(-std::f32::consts::FRAC_PI_2),
+        });
+
+        assert!(end.x.abs() < 1e-4, "x = {}", end.x);
+        assert!((end.y + 1.0).abs() < 1e-4, "y = {}", end.y);
+    }
+}
