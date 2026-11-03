@@ -202,7 +202,13 @@ impl Renderer {
             }
         }
 
-        let dimensions = BufferDimensions::new(viewport.physical_size());
+        let physical_size = viewport.physical_size();
+
+        if physical_size.width == 0 || physical_size.height == 0 {
+            return Vec::new();
+        }
+
+        let dimensions = BufferDimensions::new(physical_size);
 
         let texture_extent = wgpu::Extent3d {
             width: dimensions.width,

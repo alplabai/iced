@@ -237,6 +237,12 @@ pub fn present(
     background_color: Color,
     on_pre_present: impl FnOnce(),
 ) -> Result<(), compositor::SurfaceError> {
+    let size = viewport.physical_size();
+
+    if size.width == 0 || size.height == 0 {
+        return Err(compositor::SurfaceError::Outdated);
+    }
+
     match surface.get_current_texture() {
         wgpu::CurrentSurfaceTexture::Success(frame) => {
             let view = &frame
@@ -314,6 +320,10 @@ impl graphics::Compositor for Compositor {
         width: u32,
         height: u32,
     ) {
+        if width == 0 || height == 0 {
+            return;
+        }
+
         let capabilities = surface.get_capabilities(&self.adapter);
         let has_copy_src =
             capabilities.usages.contains(wgpu::TextureUsages::COPY_SRC);
