@@ -212,6 +212,7 @@ where
                     bounds,
                     border: Border {
                         color: Color::TRANSPARENT,
+                        radius: clamp_radius(style.border.radius, bounds),
                         ..style.border
                     },
                     ..renderer::Quad::default()
@@ -219,6 +220,20 @@ where
                 style.bar,
             );
         }
+    }
+}
+
+/// Clamps every corner of a [`border::Radius`] so it cannot exceed half of the
+/// smallest side of the given bounds.
+fn clamp_radius(radius: border::Radius, bounds: Rectangle) -> border::Radius {
+    let max = bounds.width.min(bounds.height).max(0.0) / 2.0;
+    let radius: [f32; 4] = radius.into();
+
+    border::Radius {
+        top_left: radius[0].min(max),
+        top_right: radius[1].min(max),
+        bottom_right: radius[2].min(max),
+        bottom_left: radius[3].min(max),
     }
 }
 
