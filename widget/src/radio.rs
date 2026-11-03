@@ -56,8 +56,12 @@
 //!     column![a, b, c, all]
 //! }
 //! ```
+use std::time::Duration;
+
 use crate::core::alignment;
+use crate::core::animation::{Animation, Easing};
 use crate::core::border::{self, Border};
+use crate::core::time::Instant;
 use crate::core::layout;
 use crate::core::mouse;
 use crate::core::renderer;
@@ -255,6 +259,27 @@ where
     }
 }
 
+struct State<Paragraph>
+where
+    Paragraph: text::Paragraph,
+{
+    /// The last update instant, used for animations.
+    now: Instant,
+    /// Animation scaling the dot in and out.
+    scale_in: Animation<bool>,
+    text_state: text::paragraph::Plain<Paragraph>,
+}
+
+impl<Paragraph> State<Paragraph>
+where
+    Paragraph: text::Paragraph,
+{
+    /// Whether there is an active animation.
+    fn is_animating(&self) -> bool {
+        self.scale_in.is_animating(self.now)
+    }
+}
+
 impl<Message, Theme> widget::Meta for Radio<'_, Message, Theme> where Theme: Catalog {}
 
 impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer> for Radio<'_, Message, Theme>
@@ -264,11 +289,21 @@ where
     Renderer: text::Renderer,
 {
     fn tag(&self) -> tree::Tag {
-        tree::Tag::of::<text::paragraph::Plain<Renderer::Paragraph>>()
+        tree::Tag::of::<State<Renderer::Paragraph>>()
     }
 
     fn state(&self) -> tree::State {
-        tree::State::new(text::paragraph::Plain::<Renderer::Paragraph>::default())
+        tree::State::new(State::<Renderer::Paragraph> {
+            now: Instant::now(),
+            scale_in: Animation::new(self.is_selected)
+                .easing(Easing::EaseInOut)
+                .duration(if cfg!(feature = "animations") {
+                    Duration::from_millis(200)
+                } else {
+                    Duration::ZERO
+                }),
+            text_state: text::paragraph::Plain::default(),
+        })
     }
 
     fn size(&self) -> Size<Length> {
@@ -282,6 +317,12 @@ where
         // The children of the tree are the radio and the label; they only
         // carry their geometry, so no state is needed.
         tree.children.resize_with(2, Tree::empty);
+
+        let state = tree.state.downcast_mut::<State<Renderer::Paragraph>>();
+
+        if self.is_selected != state.scale_in.value() {
+            state.scale_in.go_mut(self.is_selected, Instant::now());
+        }
     }
 
     fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &layout::Limits) {
@@ -289,12 +330,10 @@ where
 
         let radio = Size::new(self.size, self.size);
 
-        let state = tree
-            .state
-            .downcast_mut::<text::paragraph::Plain<Renderer::Paragraph>>();
+        let state = tree.state.downcast_mut::<State<Renderer::Paragraph>>();
 
         let label = widget::text::layout(
-            state,
+            &mut state.text_state,
             renderer,
             &limits.shrink(Size::new(radio.width + self.spacing, 0.0)),
             &self.label,
@@ -317,7 +356,7 @@ where
 
     fn update(
         &mut self,
-        _tree: &mut Tree,
+        tree: &mut Tree,
         event: &Event,
         layout: Layout,
         cursor: mouse::Cursor,
@@ -347,7 +386,14 @@ where
             }
         };
 
-        if let Event::Window(window::Event::RedrawRequested(_now)) = event {
+        if let Event::Window(window::Event::RedrawRequested(now)) = event {
+            let state = tree.state.downcast_mut::<State<Renderer::Paragraph>>();
+            state.now = *now;
+
+            if state.is_animating() {
+                shell.request_redraw();
+            }
+
             self.last_status = Some(current_status);
         } else if self
             .last_status
@@ -391,9 +437,7 @@ where
             }),
         );
 
-        let state = tree
-            .state
-            .downcast_ref::<text::paragraph::Plain<Renderer::Paragraph>>();
+        let state = tree.state.downcast_ref::<State<Renderer::Paragraph>>();
 
         let (radio_layout, _) = children.next().unwrap();
         let bounds = radio_layout.bounds();
@@ -415,7 +459,10 @@ where
             style.background,
         );
 
-        if self.is_selected {
+        if self.is_selected || state.is_animating() {
+            let dot_size = state.scale_in.interpolate(0.0, dot_size, state.now);
+            let alpha = state.scale_in.interpolate(0.0, 1.0, state.now);
+
             renderer.fill_quad(
                 renderer::Quad {
                     bounds: Rectangle {
@@ -424,10 +471,10 @@ where
                         width: bounds.width - dot_size,
                         height: bounds.height - dot_size,
                     },
-                    border: border::rounded(dot_size / 2.0),
+                    border: border::rounded(size / 2.0),
                     ..renderer::Quad::default()
                 },
-                style.dot_color,
+                style.dot_color.scale_alpha(alpha),
             );
         }
 
@@ -437,7 +484,7 @@ where
             renderer,
             defaults,
             label_layout.bounds(),
-            state.raw(),
+            state.text_state.raw(),
             crate::text::Style {
                 color: style.text_color,
                 selection: None,

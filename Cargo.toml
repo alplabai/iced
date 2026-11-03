@@ -91,6 +91,8 @@ wayland = ["iced_renderer/wayland", "iced_winit/wayland"]
 wayland-dlopen = ["iced_winit/wayland-dlopen"]
 # Enables client-side decorations in Wayland
 wayland-decorations = ["iced_winit/wayland-decorations"]
+# Enables widget animations
+animations = ["iced_widget/animations"]
 
 [dependencies]
 iced_debug.workspace = true
