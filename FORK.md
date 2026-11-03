@@ -27,5 +27,5 @@ This branch carries upstream iced-rs/iced pull requests merged on top of the bas
 ## Verification
 
 - One `cargo check --workspace --all-targets` for the batch of #3359, #2770 and #2779 (second run after adding `Animation::force`): passes.
-- `cargo test -p iced_core`: run once at the end (see commit/report).
+- `cargo test -p iced_core`: passed (9 + 14 tests).
 - Not run: iced_widget/iced_winit tests, any GPU rendering, and the animations were never executed visually (the `animations` feature was not built or exercised).
