@@ -57,7 +57,16 @@ where
     ///
     /// If any of the children have a [`Length::Fill`] strategy, you will need to
     /// call [`Column::width`] or [`Column::height`] accordingly.
+    ///
+    /// # Panics
+    /// Panics if `keys` and `children` have different lengths.
     pub fn from_vecs(keys: Vec<Key>, children: Vec<W>) -> Self {
+        assert_eq!(
+            keys.len(),
+            children.len(),
+            "keyed::Column::from_vecs requires exactly one key per child"
+        );
+
         Self {
             spacing: 0.0,
             padding: Padding::ZERO,
@@ -197,16 +206,33 @@ where
 
         let state = state.downcast_mut::<State<Key>>();
 
-        tree::diff_children_custom_with_search(
-            children,
-            &mut self.children,
-            Tree::diff,
-            |index| {
-                self.keys.get(index).or_else(|| self.keys.last()).copied()
-                    != Some(state.keys[index])
-            },
-            |child| Tree::new(child),
-        );
+        if state.keys != self.keys || children.len() != self.keys.len() {
+            // Reconcile children by key, so that widget state follows its key
+            // even if the children were reordered, inserted, or removed.
+            let mut old: Vec<Option<Tree>> =
+                std::mem::take(children).into_iter().map(Some).collect();
+
+            *children = self
+                .keys
+                .iter()
+                .zip(&self.children)
+                .map(|(key, child)| {
+                    let found = state
+                        .keys
+                        .iter()
+                        .zip(old.iter())
+                        .position(|(old_key, tree)| old_key == key && tree.is_some());
+
+                    found
+                        .and_then(|index| old[index].take())
+                        .unwrap_or_else(|| Tree::new(child))
+                })
+                .collect();
+        }
+
+        for (child_state, child) in children.iter_mut().zip(self.children.iter_mut()) {
+            Tree::diff(child_state, child);
+        }
 
         if state.keys != self.keys {
             state.keys.clone_from(&self.keys);

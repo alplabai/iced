@@ -163,7 +163,7 @@ where
         let (compact_layout, compact_tree) = children.next().unwrap();
         let mut show_title = true;
 
-        let padded_width = layout.bounds().width - self.padding.left + self.padding.right;
+        let padded_width = layout.bounds().width - self.padding.left - self.padding.right;
 
         if let Some(controls) = &self.controls
             && (show_controls || self.always_show_controls)
@@ -229,7 +229,7 @@ where
             let (controls_layout, _) = children.next().unwrap();
             let (compact_layout, _) = children.next().unwrap();
 
-            let padded_width = layout.bounds().width - self.padding.left + self.padding.right;
+            let padded_width = layout.bounds().width - self.padding.left - self.padding.right;
 
             if let Some(controls) = self.controls.as_ref() {
                 if title_layout.bounds().width + controls_layout.bounds().width > padded_width {
@@ -326,7 +326,7 @@ where
         let (title_layout, title_tree) = children.next().unwrap();
         let (controls_layout, controls_tree) = children.next().unwrap();
         let (compact_layout, compact_tree) = children.next().unwrap();
-        let padded_width = layout.bounds().width - self.padding.left + self.padding.right;
+        let padded_width = layout.bounds().width - self.padding.left - self.padding.right;
         let mut show_title = true;
 
         if let Some(controls) = &mut self.controls {
@@ -375,7 +375,7 @@ where
         let (title_layout, title_tree) = children.next().unwrap();
         let (controls_layout, controls_tree) = children.next().unwrap();
         let (compact_layout, compact_tree) = children.next().unwrap();
-        let padded_width = layout.bounds().width - self.padding.left + self.padding.right;
+        let padded_width = layout.bounds().width - self.padding.left - self.padding.right;
         let mut show_title = true;
 
         if let Some(controls) = &mut self.controls {
@@ -441,7 +441,7 @@ where
         let (title_layout, title_tree) = children.next().unwrap();
         let (controls_layout, controls_tree) = children.next().unwrap();
         let (compact_layout, compact_tree) = children.next().unwrap();
-        let padded_width = layout.bounds().width - self.padding.left + self.padding.right;
+        let padded_width = layout.bounds().width - self.padding.left - self.padding.right;
 
         let title_interaction =
             self.content
@@ -491,7 +491,7 @@ where
         let (title_layout, title_tree) = children.next().unwrap();
         let (controls_layout, controls_tree) = children.next().unwrap();
         let (compact_layout, compact_tree) = children.next().unwrap();
-        let padded_width = layout.bounds().width - self.padding.left + self.padding.right;
+        let padded_width = layout.bounds().width - self.padding.left - self.padding.right;
 
         let Self {
             content, controls, ..
