@@ -1029,6 +1029,16 @@ async fn run_instance<P>(
                             && !is_window_opening
                             && window_manager.is_empty()
                         {
+                            // Deliver any pending events (e.g. the last `Closed`
+                            // event) to subscriptions before exiting.
+                            for (id, event) in events.drain(..) {
+                                runtime.broadcast(subscription::Event::Interaction {
+                                    window: id,
+                                    event,
+                                    status: core::event::Status::Ignored,
+                                });
+                            }
+
                             control_sender
                                 .start_send(Control::Exit)
                                 .expect("Send control action");
