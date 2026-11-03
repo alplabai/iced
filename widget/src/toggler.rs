@@ -29,12 +29,16 @@
 //!     }
 //! }
 //! ```
+use std::time::Duration;
+
 use crate::core::alignment;
+use crate::core::animation::{Animation, Easing};
 use crate::core::border;
 use crate::core::layout;
 use crate::core::mouse;
 use crate::core::renderer;
 use crate::core::text;
+use crate::core::time::Instant;
 use crate::core::touch;
 use crate::core::widget;
 use crate::core::widget::tree::{self, Tree};
@@ -236,11 +240,17 @@ where
     Renderer: text::Renderer,
 {
     fn tag(&self) -> tree::Tag {
-        tree::Tag::of::<text::paragraph::Plain<Renderer::Paragraph>>()
+        tree::Tag::of::<State<Renderer::Paragraph>>()
     }
 
     fn state(&self) -> tree::State {
-        tree::State::new(text::paragraph::Plain::<Renderer::Paragraph>::default())
+        tree::State::new(State::<Renderer::Paragraph> {
+            now: Instant::now(),
+            transition: Animation::new(self.is_toggled)
+                .easing(Easing::EaseOut)
+                .duration(Duration::from_millis(200)),
+            text_state: text::paragraph::Plain::default(),
+        })
     }
 
     fn size(&self) -> Size<Length> {
@@ -254,6 +264,16 @@ where
         // The children of the tree are the track and the label; they only
         // carry their geometry, so no state is needed.
         tree.children.resize_with(2, Tree::empty);
+
+        let state = tree.state.downcast_mut::<State<Renderer::Paragraph>>();
+
+        if state.transition.value() != self.is_toggled {
+            if cfg!(feature = "animations") {
+                state.transition.go_mut(self.is_toggled, Instant::now());
+            } else {
+                state.transition.force_mut(self.is_toggled);
+            }
+        }
     }
 
     fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &layout::Limits) {
@@ -270,12 +290,10 @@ where
         let track = Size::new(2.0 * size, size);
 
         let label = if let Some(label) = self.label.as_deref() {
-            let state = tree
-                .state
-                .downcast_mut::<text::paragraph::Plain<Renderer::Paragraph>>();
+            let state = tree.state.downcast_mut::<State<Renderer::Paragraph>>();
 
             widget::text::layout(
-                state,
+                &mut state.text_state,
                 renderer,
                 &limits.shrink(Size::new(track.width + self.spacing, 0.0)),
                 label,
@@ -307,7 +325,7 @@ where
 
     fn update(
         &mut self,
-        _tree: &mut Tree,
+        tree: &mut Tree,
         event: &Event,
         layout: Layout,
         cursor: mouse::Cursor,
@@ -315,6 +333,15 @@ where
         shell: &mut Shell<'_, Message>,
         _viewport: &Rectangle,
     ) {
+        if let Event::Window(window::Event::RedrawRequested(now)) = event {
+            let state = tree.state.downcast_mut::<State<Renderer::Paragraph>>();
+            state.now = *now;
+
+            if state.transition.is_animating(*now) {
+                shell.request_redraw();
+            }
+        }
+
         let Some(on_toggle) = &self.on_toggle else {
             return;
         };
@@ -398,15 +425,13 @@ where
         if self.label.is_some() {
             let (label_layout, _) = children.next().unwrap();
 
-            let state = tree
-                .state
-                .downcast_ref::<text::paragraph::Plain<Renderer::Paragraph>>();
+            let state = tree.state.downcast_ref::<State<Renderer::Paragraph>>();
 
             crate::text::draw(
                 renderer,
                 defaults,
                 label_layout.bounds(),
-                state.raw(),
+                state.text_state.raw(),
                 crate::text::Style {
                     color: style.text_color,
                     selection: None,
@@ -422,6 +447,29 @@ where
             .border_radius
             .unwrap_or_else(|| border::Radius::new(bounds.height / 2.0));
 
+        let state = tree.state.downcast_ref::<State<Renderer::Paragraph>>();
+
+        // Progress of the toggle animation: 0.0 is fully off, 1.0 is fully on.
+        let progress = state.transition.interpolate(0.0, 1.0, state.now);
+
+        let background = if state.transition.is_animating(state.now) {
+            let status = self.last_status.unwrap_or(Status::Disabled {
+                is_toggled: self.is_toggled,
+            });
+
+            match (
+                theme.style(&self.class, status.with_toggled(false)).background,
+                theme.style(&self.class, status.with_toggled(true)).background,
+            ) {
+                (Background::Color(off), Background::Color(on)) => {
+                    Background::Color(off.mix(on, progress))
+                }
+                _ => style.background,
+            }
+        } else {
+            style.background
+        };
+
         renderer.fill_quad(
             renderer::Quad {
                 bounds,
@@ -433,7 +481,7 @@ where
                 },
                 ..renderer::Quad::default()
             },
-            style.background,
+            background,
         );
 
         let toggle_bounds = {
@@ -449,11 +497,8 @@ where
 
             Rectangle {
                 x: bounds.x
-                    + if self.is_toggled {
-                        bounds.width - bounds.height + padding
-                    } else {
-                        padding
-                    },
+                    + padding
+                    + progress * (bounds.width - bounds.height),
                 y: bounds.y + padding,
                 width: bounds.height - (2.0 * padding),
                 height: bounds.height - (2.0 * padding),
@@ -473,6 +518,27 @@ where
             },
             style.foreground,
         );
+    }
+}
+
+struct State<Paragraph>
+where
+    Paragraph: text::Paragraph,
+{
+    /// The last update instant, used for animations.
+    now: Instant,
+    /// Animation of the toggled state (`true` is fully on).
+    transition: Animation<bool>,
+    text_state: text::paragraph::Plain<Paragraph>,
+}
+
+impl Status {
+    fn with_toggled(self, is_toggled: bool) -> Self {
+        match self {
+            Status::Active { .. } => Status::Active { is_toggled },
+            Status::Hovered { .. } => Status::Hovered { is_toggled },
+            Status::Disabled { .. } => Status::Disabled { is_toggled },
+        }
     }
 }
 
