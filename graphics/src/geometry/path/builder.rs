@@ -261,11 +261,12 @@ mod tests {
 
         let path = builder.build();
 
-        path.raw()
-            .iter()
-            .last()
-            .expect("arc should produce events")
-            .to()
+        // The final `End` event reports the sub-path start from `to()`, so
+        // use its `last` point instead.
+        match path.raw().iter().last().expect("arc should produce events") {
+            lyon_path::Event::End { last, .. } => last,
+            event => event.to(),
+        }
     }
 
     #[test]
