@@ -2,7 +2,7 @@
 # document, audit) are disabled in this repository's Actions settings, so they
 # never run here. The org shares a 20-job Actions limit with Signex, so this
 # workflow runs only on pull requests into `dev`/`signex` and on pushes to them,
-# on Ubuntu only. See CONTRIBUTING.md.
+# on Ubuntu only. See .github/CONTRIBUTING.md.
 name: Fork CI
 on:
   pull_request:

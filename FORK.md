@@ -1,6 +1,6 @@
 # Fork notes
 
-Branch workflow (`master` mirror, `dev` integration, `signex` release): see `CONTRIBUTING.md`.
+Branch workflow (`master` mirror, `dev` integration, `signex` release): see `.github/CONTRIBUTING.md`.
 
 This branch carries upstream iced-rs/iced pull requests merged on top of the base.
 
