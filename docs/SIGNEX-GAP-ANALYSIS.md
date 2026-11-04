@@ -346,7 +346,7 @@ Risk: upstream may shape the API differently; per-frame tree cost.
 
 What Signex needs: dialogs are mouse-driven; focus code is limited to the command palette and field edit (`app/dispatch/command_palette.rs:56`, `app/handlers/canvas/field_edit.rs:60`, `app/handlers/detached_modals.rs:58`); Tab is hand-handled in the footprint canvas (`library/editor/footprint/canvas/input/keys.rs:196`).
 
-What iced provides: only text_input implements Focusable (`text_input.rs:475`; text_editor has `Status::Focused` at `:462/:745`). Nothing binds Tab to `focus_next`; examples wire it per app (modal, todos, toast, markdown, websocket).
+What iced provides: only text_input (`text_input.rs:475`) and combo_box (through its inner text_input) implement Focusable, while button, checkbox, radio, toggler, pick_list and slider do not; text_editor has `Status::Focused` at `:462/:745`). Nothing binds Tab to `focus_next`; examples wire it per app (modal, todos, toast, markdown, websocket).
 
 Upstream: [#489](https://github.com/iced-rs/iced/issues/489), [#552](https://github.com/iced-rs/iced/issues/552).
 
