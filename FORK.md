@@ -15,6 +15,16 @@ This branch carries upstream iced-rs/iced pull requests merged on top of the bas
 - [#3359](https://github.com/iced-rs/iced/pull/3359): fix culling of shadowed quads in tiny_skia (clean merge).
 - [#2770](https://github.com/iced-rs/iced/pull/2770): radio dot animation (hand-ported to the current `Widget` API; animated only with the `animations` feature).
 - [#2779](https://github.com/iced-rs/iced/pull/2779): toggler animation (hand-ported; `Status`/`Style` public API left unchanged, background colors are mixed and the knob position interpolated inside the widget; animated only with the `animations` feature; its `animations` example was not added). Also adds `Animation::force`/`force_mut` in core.
+- [#3513](https://github.com/iced-rs/iced/pull/3513): text editor clears the cached selection when highlighting re-shapes lines.
+- [#3521](https://github.com/iced-rs/iced/pull/3521): text selection offset in the checkbox label (adds `widget/tests/checkbox.rs`).
+- [#3505](https://github.com/iced-rs/iced/pull/3505): text selection inside `pane_grid` (only captures the press when a split resize starts).
+- [#3529](https://github.com/iced-rs/iced/pull/3529): `Rectangle::chord` endpoint distance for diagonal angles.
+- [#3393](https://github.com/iced-rs/iced/pull/3393): SVG text drawn with the iced fontdb (squashed; the `svg` feature now also enables `iced_renderer/svg-text`).
+- [#3179](https://github.com/iced-rs/iced/pull/3179), [#3220](https://github.com/iced-rs/iced/pull/3220): sensor distance is 0 when visible; `on_show` fires every time it enters view.
+- [#3139](https://github.com/iced-rs/iced/pull/3139): window blur (acrylic backdrop) on Windows 11.
+- [#3522](https://github.com/iced-rs/iced/pull/3522): Escape resets the image viewer.
+- [#3494](https://github.com/iced-rs/iced/pull/3494): `markdown::Settings::table_width` (new public field, default `None`).
+- #3514 and #3450 were re-checked against their current upstream heads: unchanged since merged.
 
 ## Skipped
 
@@ -22,6 +32,7 @@ This branch carries upstream iced-rs/iced pull requests merged on top of the bas
 - [#3227](https://github.com/iced-rs/iced/pull/3227): text_editor drag on double/triple click; behavior already present in `core/src/text/editor.rs`.
 - [#1542](https://github.com/iced-rs/iced/pull/1542): window drag-resize; the touched files no longer exist after the winit restructure.
 - [#2483](https://github.com/iced-rs/iced/pull/2483): animations for default widgets; based on a 2024 tree, conflicts in about 40 files including files deleted since (winit program/system, text_input cursor), 139 files changed. Superseded in practice by the smaller #2770/#2779 ports.
+- [#3443](https://github.com/iced-rs/iced/pull/3443): `blank` field in `window::Settings`; it refactors winit window/surface ownership into a new `Interface` type and conflicts with the frame clock, surface-error handling and #3450 work (9 hunks).
 - [#3021](https://github.com/iced-rs/iced/pull/3021): architectural port (winit run/shell plumbing rewritten); about 39 conflict hunks.
 
 ## Fork fixes
