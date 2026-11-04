@@ -61,6 +61,8 @@ Numbers refer to the ranks in `TRIAGE.md`, which has the status of all 20.
 - #16: pane_grid title bar padded width sign bug.
 - #18: canvas `Frame` contents are split into ordered sections so shapes, images and text keep draw order, and pasted/clipped child frames keep their own clip in tiny_skia (graphics, wgpu, tiny_skia).
 - #20: progress bar fill radius clamp.
+- #49: `MonitorData::size()` (and `Monitor::size()`) returned physical size multiplied by the scale factor; it now divides, so a 3840x2160 monitor at 2.0 reports 1920x1080. A non-positive or non-finite scale factor is treated as 1.0. Unit tests in `core/src/window/monitor.rs`. Callers that compensated for the bug (Signex's `monitor_logical_size`) must drop the correction when they re-pin to this fix.
+- #50: `winit::conversion::monitor_list` compared the primary monitor handle with itself, so every monitor was flagged primary; it now compares each handle with the primary one (`is_primary_monitor`). Unit tests in `winit/src/conversion.rs`.
 - #7 was not reproducible (a negative-sweep arc test was added); #13 was already handled in this tree. Other ranks were skipped.
 
 ## Verification
