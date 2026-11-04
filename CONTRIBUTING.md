@@ -1,3 +1,39 @@
+# Contributing to the Alp Lab fork
+
+This repository is Alp Lab's fork of [iced](https://github.com/iced-rs/iced), used by [Signex](https://github.com/alplabai/signex). The rules below apply to every change in this fork. The upstream iced guide follows them and applies only to contributions sent upstream.
+
+## Branches
+
+| Branch | Role | How it changes |
+|---|---|---|
+| `master` | Mirror of upstream `iced-rs/iced` `master`. Never edited by hand. | Fast-forwarded from upstream only. |
+| `dev` | Default branch and integration branch. All work starts here. | Pull requests only. |
+| `signex` | Release branch. Signex pins a commit or tag from this branch. | Pull requests from `dev` only. |
+
+- **Work:** branch off `dev` (`fix/<issue>-<topic>`, `feat/<issue>-<topic>`, `upstream/<pr>-<topic>`), open the pull request against `dev`, squash-merge.
+- **Release:** when `dev` is ready for Signex, open a pull request `dev` → `signex` and merge it with a merge commit (no squash, so the history stays shared). Then tag the merge commit `iced-signex-v<version>` (for example `iced-signex-v0.15.0-alpha.3`) and pin that tag's commit in Signex's `[patch.crates-io]`.
+- **Upstream:**
+  - From time to time, fast-forward `master` from `iced-rs/iced`, then open a pull request `master` → `dev` to bring the new upstream work in.
+  - An upstream pull request that Signex needs before upstream merges it is ported on its own `upstream/<pr>-<topic>` branch into `dev`, and recorded in `FORK.md` under "Merged upstream PRs".
+- **Hotfix:** branch off `signex`, open a pull request into `signex`, then bring the same fix into `dev` with a second pull request so the two branches do not diverge.
+
+Protection (repository rulesets):
+- `dev` and `signex` need a pull request with one approval and resolved review threads, and cannot be force-pushed or deleted.
+- `master` cannot be deleted.
+- `iced-signex-*` tags cannot be moved or deleted.
+- Organization admins can bypass these rules for emergencies only.
+
+## Pull requests
+
+- Every fork change has an issue. Title the pull request `Issue #N: <what changes> (fixes #N)`.
+- Add a line to `FORK.md` under "Fork fixes" (or "Merged upstream PRs" / "Skipped") in the same pull request.
+- Keep a fork fix small and generic: code that belongs in iced lives here, and Signex-specific policy stays in Signex.
+- Before asking for review, run `cargo check --workspace --all-targets` and the tests of every crate you touched with the features they need (for example `cargo test -p iced_graphics --features geometry`).
+- Say whether the change was checked on a real GPU or only on software rendering.
+- Commits and pull requests carry no AI attribution (no `Co-Authored-By` trailers for tools, no generated-by footers).
+
+---
+
 # Contributing
 
 Thank you for considering contributing to Iced! Take a look at [the roadmap] to get an idea of the current state of the library.

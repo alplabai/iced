@@ -1,5 +1,7 @@
 # Fork notes
 
+Branch workflow (`master` mirror, `dev` integration, `signex` release): see `CONTRIBUTING.md`.
+
 This branch carries upstream iced-rs/iced pull requests merged on top of the base.
 
 ## Merged upstream PRs
@@ -35,6 +37,7 @@ Numbers refer to the ranks in `TRIAGE.md`, which has the status of all 20.
 - #16: pane_grid title bar padded width sign bug.
 - #18: canvas `Frame` contents are split into ordered sections so shapes, images and text keep draw order, and pasted/clipped child frames keep their own clip in tiny_skia (graphics, wgpu, tiny_skia).
 - #20: progress bar fill radius clamp.
+- Issue #22: canvas text past the glyph atlas limit (`MAX_ATLAS_TEXT_SIZE`, `Text::fits_atlas`) is drawn as lyon-filled vector outlines through `Text::draw_with` instead of failing in the atlas, in wgpu and tiny_skia; the vector path now keeps the text's wrapping and ellipsis and skips huge outline-less bitmap glyphs (graphics, wgpu, tiny_skia).
 - #7 was not reproducible (a negative-sweep arc test was added); #13 was already handled in this tree. Other ranks were skipped.
 
 ## Verification

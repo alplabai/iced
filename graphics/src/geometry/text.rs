@@ -46,11 +46,51 @@ pub struct Text {
     pub ellipsis: Ellipsis,
 }
 
+/// The largest size, in logical pixels after the frame transform, that
+/// `fill_text` draws from the glyph atlas (wgpu) or the glyph cache
+/// (tiny_skia); bigger text is drawn as vector outlines through
+/// [`Text::draw_with`], filled by the geometry backend, and stays sharp at any
+/// size.
+///
+/// wgpu: one glyph bitmap this size takes a large share of an atlas texture.
+/// The value assumes a desktop device whose `max_texture_dimension_2d` is at
+/// least 4096 at a display scale factor of 2 or less (the frame does not know
+/// the scale factor, so this compares logical pixels); a WebGL2 or downlevel
+/// device (2048) needs a lower value.
+///
+/// tiny_skia has no atlas: the reason there is the memory of the CPU glyph
+/// cache, which holds a bitmap per glyph per size.
+///
+/// The outlines are lyon meshes. Like every canvas mesh they are smoothed only
+/// when the application enables multisampling (`antialiasing(true)`); atlas
+/// glyphs carry their own coverage, so without it text edges change at this
+/// size.
+pub const MAX_ATLAS_TEXT_SIZE: f32 = 1024.0;
+
+/// Largest glyph size, in pixels, whose outline-less bitmap (colour emoji,
+/// sbix or CBDT strikes) is still drawn pixel by pixel; the fallback is one
+/// path per pixel, so it costs size squared.
+// shortcut: bigger bitmap-only glyphs are not drawn, because keeping them on
+// the atlas needs the text routed per glyph; revisit with per-glyph routing.
+const MAX_BITMAP_FALLBACK_SIZE: f32 = 128.0;
+
+fn bitmap_fallback_allowed(glyph_size: f32) -> bool {
+    glyph_size <= MAX_BITMAP_FALLBACK_SIZE
+}
+
 impl Text {
-    /// Computes the [`Path`]s of the [`Text`] and draws them using
-    /// the given closure.
-    pub fn draw_with(&self, mut f: impl FnMut(Path, Color)) {
-        let paragraph = text::Paragraph::with_text(core::text::Text {
+    /// Whether this text, drawn through a transform with the positive uniform
+    /// scale `scale`, is small enough for the glyph atlas (see
+    /// [`MAX_ATLAS_TEXT_SIZE`]). A size or scale that is NaN or infinite does
+    /// not fit, so it takes the vector path rather than the atlas.
+    pub fn fits_atlas(&self, scale: f32) -> bool {
+        self.size.0 * scale <= MAX_ATLAS_TEXT_SIZE
+    }
+
+    /// The laid-out paragraph, as the atlas path lays it out: same wrapping,
+    /// ellipsis and bounds, so text does not reflow where the drawing changes.
+    fn paragraph(&self) -> text::Paragraph {
+        text::Paragraph::with_text(core::text::Text {
             content: &self.content,
             bounds: Size::new(self.max_width, f32::INFINITY),
             size: self.size,
@@ -59,10 +99,16 @@ impl Text {
             align_x: self.align_x,
             align_y: self.align_y,
             shaping: self.shaping,
-            wrapping: Wrapping::default(),
-            ellipsis: Ellipsis::default(),
+            wrapping: self.wrapping,
+            ellipsis: self.ellipsis,
             hint_factor: None,
-        });
+        })
+    }
+
+    /// Computes the [`Path`]s of the [`Text`] and draws them using
+    /// the given closure.
+    pub fn draw_with(&self, mut f: impl FnMut(Path, Color)) {
+        let paragraph = self.paragraph();
 
         let translation_x = match self.align_x {
             Alignment::Default | Alignment::Left | Alignment::Justified => self.position.x,
@@ -127,6 +173,11 @@ impl Text {
 
                     f(glyph, self.color);
                 } else {
+                    if !bitmap_fallback_allowed(f32::from_bits(
+                        physical_glyph.cache_key.font_size_bits,
+                    )) {
+                        continue;
+                    }
                     // TODO: Raster image support for `Canvas`
                     let [r, g, b, a] = self.color.into_rgba8();
 
@@ -186,5 +237,64 @@ impl From<String> for Text {
 impl From<&str> for Text {
     fn from(content: &str) -> Text {
         String::from(content).into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn text(size: f32) -> Text {
+        Text {
+            size: Pixels(size),
+            ..Text::default()
+        }
+    }
+
+    #[test]
+    fn ordinary_sizes_use_the_atlas_and_huge_ones_do_not() {
+        assert!(text(16.0).fits_atlas(1.0));
+        assert!(text(10.0).fits_atlas(100.0));
+        assert!(text(MAX_ATLAS_TEXT_SIZE).fits_atlas(1.0));
+        assert!(!text(16.0).fits_atlas(200.0));
+        assert!(!text(5000.0).fits_atlas(1.0));
+    }
+
+    #[test]
+    fn a_size_that_is_not_a_number_is_not_sent_to_the_atlas() {
+        assert!(!text(f32::NAN).fits_atlas(1.0));
+        assert!(!text(f32::INFINITY).fits_atlas(1.0));
+        assert!(!text(16.0).fits_atlas(f32::NAN));
+    }
+
+    /// `draw_with` lays text out with the text's own wrapping, so a text that
+    /// does not wrap is one line below and above the atlas threshold alike.
+    #[test]
+    fn the_vector_path_keeps_the_wrapping_of_the_atlas_path() {
+        let lines = |size: f32| {
+            let t = Text {
+                content: "alpha beta gamma delta epsilon zeta eta theta".into(),
+                max_width: 80.0,
+                wrapping: Wrapping::None,
+                ..text(size)
+            };
+            t.paragraph().buffer().layout_runs().count()
+        };
+        let (below, above) = (
+            lines(MAX_ATLAS_TEXT_SIZE - 1.0),
+            lines(MAX_ATLAS_TEXT_SIZE + 1.0),
+        );
+        assert_eq!(below, above);
+        assert!(below <= 1);
+    }
+
+    /// A bitmap-only glyph (colour emoji) costs one path per pixel, so past a
+    /// small size it is skipped instead of freezing the frame.
+    #[test]
+    fn a_big_bitmap_only_glyph_is_not_drawn_pixel_by_pixel() {
+        assert!(bitmap_fallback_allowed(16.0));
+        assert!(bitmap_fallback_allowed(MAX_BITMAP_FALLBACK_SIZE));
+        assert!(!bitmap_fallback_allowed(1500.0));
+        assert!(!bitmap_fallback_allowed(f32::NAN));
     }
 }
