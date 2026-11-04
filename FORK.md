@@ -30,7 +30,7 @@ Verification (this batch):
 
 - `cargo check --workspace --all-targets`: 0 errors, 0 warnings (after the #3494 fix).
 - Tests pass: `iced_core` (18 unit, 16 doc), `iced_widget` (all suites incl. new `checkbox`, `markdown` 43, `pane_grid`, `scrollable`, `sticky`), `iced_graphics` (geometry), `iced_tiny_skia` (geometry,image), `iced_wgpu` (image,svg,geometry; xvfb + lavapipe), `iced_runtime`.
-- `iced_winit` tests were not run in the original sandbox (missing wayland libs); fork CI runs them. #3139 (Windows blur) was only type-checked.
+- #3139 (Windows blur) was only type-checked.
 - Not verified: no real GPU, nothing seen rendered. SVG text (#3393), Windows blur backdrop (#3139), markdown `table_width` wrapping (no test beyond compiling), sensor, pane_grid and image viewer changes were not viewed.
 
 ## Merged upstream PRs
@@ -68,8 +68,8 @@ Numbers refer to the ranks in `TRIAGE.md`, which has the status of all 20.
 - #18: canvas `Frame` contents are split into ordered sections so shapes, images and text keep draw order, and pasted/clipped child frames keep their own clip in tiny_skia (graphics, wgpu, tiny_skia).
 - #20: progress bar fill radius clamp.
 - Issue #22: canvas text past the glyph atlas limit (`MAX_ATLAS_TEXT_SIZE`, `Text::fits_atlas`) is drawn as lyon-filled vector outlines through `Text::draw_with` instead of failing in the atlas, in wgpu and tiny_skia; the vector path now keeps the text's wrapping and ellipsis and skips huge outline-less bitmap glyphs (graphics, wgpu, tiny_skia).
-- #49: `MonitorData::size()` (and `Monitor::size()`) returned physical size multiplied by the scale factor; it now divides, so a 3840x2160 monitor at 2.0 reports 1920x1080. A non-positive or non-finite scale factor is treated as 1.0. Unit tests in `core/src/window/monitor.rs`. Callers that compensated for the bug (Signex's `monitor_logical_size`) must drop the correction when they re-pin to this fix.
-- #50: `winit::conversion::monitor_list` compared the primary monitor handle with itself, so every monitor was flagged primary; it now compares each handle with the primary one (`is_primary_monitor`). Unit tests in `winit/src/conversion.rs`.
+- #49: `MonitorData::size()` (and `Monitor::size()`) returned physical size multiplied by the scale factor; it now divides, so a 3840x2160 monitor at 2.0 reports 1920x1080. A non-positive or non-finite scale factor is treated as 1.0. Unit tests in `core/src/window/monitor.rs`. Signex reads `size()` as logical (trunk `handlers/window_controls.rs:22`; signex#2052 `window_geometry_events.rs`), so it needs no correction after this fix; any caller that compensated for the old bug must drop it.
+- #50: `winit::conversion::monitor_list` compared the primary monitor handle with itself, so every monitor was flagged primary; it now compares each handle with the primary one (`is_primary_monitor`). Unit tests in `winit/src/conversion.rs` go through the list-building function.
 - #7 was not reproducible (a negative-sweep arc test was added); #13 was already handled in this tree. Other ranks were skipped.
 
 ## Verification

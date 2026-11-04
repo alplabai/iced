@@ -21,12 +21,15 @@ No real GPU; nothing seen rendered (SVG text, Windows blur, table_width, sensor,
 ## Breaking
 - `markdown::Settings::table_width: Option<Length>` is a new public field (breaks struct-literal construction).
 - The `svg` feature now also pulls in resvg text and system fonts.
-- `Monitor::size()` values change on displays whose scale factor is not 1 (see #49).
-- `pane_grid` (3505): a left press that publishes `on_click`, or picks a pane for `on_drag`, is no longer captured, so widgets and handlers behind it now see that press.
+- `MonitorData::size()` (and `Monitor::size()`) values change on displays whose scale factor is not 1 (see #49). Signex reads `size()` as logical (trunk `handlers/window_controls.rs:22`; signex#2052 `window_geometry_events.rs`).
+- `pane_grid` (3505): a left press that publishes `on_click`, or picks a pane for `on_drag`, is no longer captured (the event stays `Ignored`), so widgets and handlers behind it now see that press.
 - `sensor` (3179, 3220): `on_show` now fires on every re-entry into view when `on_hide` is `None`.
 - Image viewer (3522, with the fork deviation above): Escape resets zoom/pan, and is captured only when hovered or changed.
 
 Otherwise as alpha.3.
+
+## Signex impact
+With the `svg` feature on, SVG text is now enabled, so Signex SVG icons containing `<text>` start drawing their labels: `assets/icons/{,alplab/}dropdown/{pwr_plus5,pwr_minus5,pwr_plus12,net_label}.svg`. This is a visible change for whichever Signex PR re-pins to this release.
 
 ## Known gaps
 - SVG text (3393) clones the font database once, on the first SVG load, and never refreshes it, so fonts loaded later are not seen. A poisoned lock yields an empty database silently. This is upstream's code, left as is.

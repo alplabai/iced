@@ -491,13 +491,20 @@ pub fn monitor_list(
     handles: impl Iterator<Item = winit::monitor::MonitorHandle>,
     primary_monitor: Option<winit::monitor::MonitorHandle>,
 ) -> window::MonitorList {
+    build_monitor_list(handles, primary_monitor.as_ref(), monitor)
+}
+
+/// Builds a [`window::MonitorList`], flagging the handle equal to `primary_monitor`.
+fn build_monitor_list<T: PartialEq>(
+    handles: impl Iterator<Item = T>,
+    primary_monitor: Option<&T>,
+    mut convert: impl FnMut(T) -> MonitorData,
+) -> window::MonitorList {
     let mut list = MonitorList::empty();
     for handle in handles {
-        let is_primary = is_primary_monitor(&handle, primary_monitor.as_ref());
+        let is_primary = is_primary_monitor(&handle, primary_monitor);
 
-        let monitor_data = monitor(handle);
-
-        list.add_monitor(is_primary, monitor_data);
+        list.add_monitor(is_primary, convert(handle));
     }
     list
 }
@@ -1234,7 +1241,32 @@ fn is_private_use(c: char) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::is_primary_monitor;
+    use super::{build_monitor_list, is_primary_monitor};
+    use crate::core::Size;
+    use crate::core::window::MonitorData;
+
+    fn named(id: u32) -> MonitorData {
+        MonitorData::new(Size::new(1, 1), 1.0, Some(id.to_string()), None)
+    }
+
+    #[test]
+    fn monitor_list_flags_only_the_primary_handle() {
+        let list = build_monitor_list([10, 20, 30].into_iter(), Some(&20), named);
+
+        let flags: Vec<bool> = list.iter().map(|monitor| monitor.is_primary()).collect();
+        assert_eq!(flags, [false, true, false]);
+        assert_eq!(
+            list.primary().and_then(|m| m.name().map(String::from)),
+            Some("20".into())
+        );
+    }
+
+    #[test]
+    fn monitor_list_has_no_primary_without_a_primary_handle() {
+        let list = build_monitor_list([10, 20].into_iter(), None, named);
+
+        assert!(list.primary().is_none());
+    }
 
     #[test]
     fn only_the_handle_equal_to_the_primary_one_is_primary() {
