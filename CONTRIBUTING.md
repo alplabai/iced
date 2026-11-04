@@ -19,6 +19,8 @@ This repository is Alp Lab's fork of [iced](https://github.com/iced-rs/iced), us
 
 CI: `.github/workflows/fork-ci.yml` runs fmt, clippy (`cargo lint`), `cargo nextest` with all features plus doc tests, and a wasm check, on Ubuntu, for pull requests into and pushes to `dev`/`signex`. Its summary check `fork-ci · required` must pass before merging. The upstream workflows are disabled in the Actions settings, so they don't use the org's shared runner budget; their files stay untouched to keep upstream syncs conflict-free.
 
+Formatting: upstream `master` is always `cargo fmt` and `cargo lint` clean, and the fork uses upstream's `rustfmt.toml` and lint alias unchanged. Never reformat or re-lint code the fork did not add. Format only your own changes, so upstream syncs stay conflict-free. Fork CI checks the whole tree, so a red fmt or clippy result always points at fork-added code.
+
 Protection (repository rulesets):
 - `dev` and `signex` need a pull request with one approval and resolved review threads, and cannot be force-pushed or deleted.
 - `master` cannot be deleted.
