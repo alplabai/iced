@@ -2,6 +2,31 @@
 
 This branch carries upstream iced-rs/iced pull requests merged on top of the base.
 
+## signex-v0.15.0-alpha.3 (unreleased, not tagged)
+
+Merged/ported/refreshed on top of alpha.2:
+
+- [#3513](https://github.com/iced-rs/iced/pull/3513): text editor clears the cached selection when highlighting re-shapes lines.
+- [#3521](https://github.com/iced-rs/iced/pull/3521): text selection offset in the checkbox label (adds `widget/tests/checkbox.rs`).
+- [#3505](https://github.com/iced-rs/iced/pull/3505): text selection inside `pane_grid` (only captures the press when a split resize starts).
+- [#3529](https://github.com/iced-rs/iced/pull/3529): `Rectangle::chord` endpoint distance for diagonal angles.
+- [#3393](https://github.com/iced-rs/iced/pull/3393): SVG text drawn with the iced fontdb (squashed; the `svg` feature now also enables `iced_renderer/svg-text`).
+- [#3179](https://github.com/iced-rs/iced/pull/3179), [#3220](https://github.com/iced-rs/iced/pull/3220): sensor distance is 0 when visible; `on_show` fires every time it enters view.
+- [#3139](https://github.com/iced-rs/iced/pull/3139): window blur (acrylic backdrop) on Windows 11.
+- [#3522](https://github.com/iced-rs/iced/pull/3522): Escape resets the image viewer.
+- [#3494](https://github.com/iced-rs/iced/pull/3494): `markdown::Settings::table_width` (new public field, default `None`).
+- #3514 and #3450 were re-checked against their current upstream heads: unchanged since merged.
+- [#3443](https://github.com/iced-rs/iced/pull/3443): skipped (see Skipped): 336-line winit refactor, 9 conflict hunks, unsafe without compiling.
+
+Also: hand-fixed `markdown::CappedTable` (#3494) for this fork's `Widget`/`Element` API (added `Meta` impl, boxed `Element`, `.boxed()` instead of a `From` impl).
+
+Verification (this batch):
+
+- `cargo check --workspace --all-targets`: 0 errors, 0 warnings (after the #3494 fix).
+- Tests pass: `iced_core` (18 unit, 16 doc), `iced_widget` (all suites incl. new `checkbox`, `markdown` 43, `pane_grid`, `scrollable`, `sticky`), `iced_graphics` (geometry), `iced_tiny_skia` (geometry,image), `iced_wgpu` (image,svg,geometry; xvfb + lavapipe), `iced_runtime`.
+- `iced_winit` tests NOT run: the `wayland-sys` build script fails here (missing system wayland libs). #3139 (Windows blur) was only type-checked.
+- Not verified: no real GPU, nothing seen rendered. SVG text (#3393), Windows blur backdrop (#3139), markdown `table_width` wrapping (no test beyond compiling), sensor, pane_grid and image viewer changes were not viewed.
+
 ## Merged upstream PRs
 
 - [#3391](https://github.com/iced-rs/iced/pull/3391): per-side border widths and colors (hand-merged with the gradient shadow work).
@@ -15,16 +40,6 @@ This branch carries upstream iced-rs/iced pull requests merged on top of the bas
 - [#3359](https://github.com/iced-rs/iced/pull/3359): fix culling of shadowed quads in tiny_skia (clean merge).
 - [#2770](https://github.com/iced-rs/iced/pull/2770): radio dot animation (hand-ported to the current `Widget` API; animated only with the `animations` feature).
 - [#2779](https://github.com/iced-rs/iced/pull/2779): toggler animation (hand-ported; `Status`/`Style` public API left unchanged, background colors are mixed and the knob position interpolated inside the widget; animated only with the `animations` feature; its `animations` example was not added). Also adds `Animation::force`/`force_mut` in core.
-- [#3513](https://github.com/iced-rs/iced/pull/3513): text editor clears the cached selection when highlighting re-shapes lines.
-- [#3521](https://github.com/iced-rs/iced/pull/3521): text selection offset in the checkbox label (adds `widget/tests/checkbox.rs`).
-- [#3505](https://github.com/iced-rs/iced/pull/3505): text selection inside `pane_grid` (only captures the press when a split resize starts).
-- [#3529](https://github.com/iced-rs/iced/pull/3529): `Rectangle::chord` endpoint distance for diagonal angles.
-- [#3393](https://github.com/iced-rs/iced/pull/3393): SVG text drawn with the iced fontdb (squashed; the `svg` feature now also enables `iced_renderer/svg-text`).
-- [#3179](https://github.com/iced-rs/iced/pull/3179), [#3220](https://github.com/iced-rs/iced/pull/3220): sensor distance is 0 when visible; `on_show` fires every time it enters view.
-- [#3139](https://github.com/iced-rs/iced/pull/3139): window blur (acrylic backdrop) on Windows 11.
-- [#3522](https://github.com/iced-rs/iced/pull/3522): Escape resets the image viewer.
-- [#3494](https://github.com/iced-rs/iced/pull/3494): `markdown::Settings::table_width` (new public field, default `None`).
-- #3514 and #3450 were re-checked against their current upstream heads: unchanged since merged.
 
 ## Skipped
 
@@ -62,4 +77,4 @@ Numbers refer to the ranks in `TRIAGE.md`, which has the status of all 20.
 - The wgpu side of #18 has no automated test.
 - #1, #2 and #15 have no automated tests.
 - The `animations` feature (radio and toggler) and per-side borders were never viewed rendered.
-- Not run: iced_winit tests.
+- Not run: iced_winit tests (wayland-sys libs missing in the sandbox).
