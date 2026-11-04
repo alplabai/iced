@@ -315,31 +315,59 @@ impl graphics::geometry::Renderer for Renderer {
     }
 
     fn draw_geometry(&mut self, geometry: Self::Geometry) {
-        let (layer, transformation) = self.layers.current_mut();
-
         match geometry {
-            Geometry::Live {
-                primitives,
-                images,
-                text,
-                clip_bounds,
-            } => {
-                layer.draw_primitive_group(primitives, clip_bounds, transformation);
+            Geometry::Live { sections } => {
+                for (i, section) in sections.into_iter().enumerate() {
+                    // Sections after the first one exist because their contents
+                    // must be drawn above the previous ones, which a single
+                    // layer cannot guarantee.
+                    if i > 0 {
+                        self.layers.split();
+                    }
 
-                for image in images {
-                    layer.draw_image(image, transformation);
+                    let (layer, transformation) = self.layers.current_mut();
+
+                    for group in section.primitives {
+                        layer.draw_primitive_group(group.items, group.clip_bounds, transformation);
+                    }
+
+                    for image in section.images {
+                        layer.draw_image(image, transformation);
+                    }
+
+                    for group in section.text {
+                        layer.draw_text_group(group.items, group.clip_bounds, transformation);
+                    }
                 }
-
-                layer.draw_text_group(text, clip_bounds, transformation);
             }
             Geometry::Cache(cache) => {
-                layer.draw_primitive_cache(cache.primitives, cache.clip_bounds, transformation);
+                for (i, section) in cache.sections.iter().enumerate() {
+                    if i > 0 {
+                        self.layers.split();
+                    }
 
-                for image in cache.images.iter() {
-                    layer.draw_image(image.clone(), transformation);
+                    let (layer, transformation) = self.layers.current_mut();
+
+                    for group in &section.primitives {
+                        layer.draw_primitive_cache(
+                            group.items.clone(),
+                            group.clip_bounds,
+                            transformation,
+                        );
+                    }
+
+                    for image in section.images.iter() {
+                        layer.draw_image(image.clone(), transformation);
+                    }
+
+                    for group in &section.text {
+                        layer.draw_text_cache(
+                            group.items.clone(),
+                            group.clip_bounds,
+                            transformation,
+                        );
+                    }
                 }
-
-                layer.draw_text_cache(cache.text, cache.clip_bounds, transformation);
             }
         }
     }
@@ -421,5 +449,251 @@ impl renderer::Headless for Renderer {
         );
 
         window::compositor::screenshot(self, &viewport, background_color)
+    }
+}
+
+#[cfg(all(test, feature = "geometry", feature = "image"))]
+mod tests {
+    use super::*;
+
+    use crate::core::Renderer as _;
+    use crate::core::image;
+    use crate::core::renderer::Scale;
+    use crate::graphics::cache::{self, Cached};
+    use crate::graphics::geometry::Renderer as _;
+    use crate::graphics::geometry::frame::Backend as _;
+
+    const SIZE: u32 = 40;
+    const BACKGROUND: Color = Color {
+        r: 0.5,
+        g: 0.5,
+        b: 0.5,
+        a: 1.0,
+    };
+
+    // Only colors that are symmetrical in their red and blue channels are used,
+    // since `tiny-skia` stores pixels as BGRA.
+    const GRAY: (u8, u8, u8) = (128, 128, 128);
+    const GREEN: (u8, u8, u8) = (0, 255, 0);
+    const WHITE: (u8, u8, u8) = (255, 255, 255);
+    const BLACK: (u8, u8, u8) = (0, 0, 0);
+
+    fn renderer() -> Renderer {
+        let mut renderer = Renderer::new(renderer::Settings::default());
+        renderer.reset(Rectangle::with_size(Size::new(SIZE as f32, SIZE as f32)));
+        renderer
+    }
+
+    fn frame(renderer: &Renderer) -> geometry::Frame {
+        renderer.new_frame(Rectangle::with_size(Size::new(SIZE as f32, SIZE as f32)))
+    }
+
+    fn rectangle(x: f32, y: f32, width: f32, height: f32) -> Rectangle {
+        Rectangle::new(Point::new(x, y), Size::new(width, height))
+    }
+
+    fn white_image(size: u32) -> core::Image {
+        core::Image::new(image::Handle::from_rgba(
+            size,
+            size,
+            vec![255u8; (size * size * 4) as usize],
+        ))
+        .filter_method(image::FilterMethod::Nearest)
+    }
+
+    fn render(renderer: &mut Renderer) -> tiny_skia::Pixmap {
+        let mut pixmap = tiny_skia::Pixmap::new(SIZE, SIZE).expect("Create pixmap");
+        let mut mask = tiny_skia::Mask::new(SIZE, SIZE).expect("Create mask");
+
+        let viewport = Viewport::with_physical_size(Size::new(SIZE, SIZE), Scale::default());
+
+        renderer.draw(
+            &mut pixmap.as_mut(),
+            &mut mask,
+            &viewport,
+            &[Rectangle::with_size(Size::new(SIZE as f32, SIZE as f32))],
+            BACKGROUND,
+        );
+
+        pixmap
+    }
+
+    fn pixel(pixmap: &tiny_skia::Pixmap, x: u32, y: u32) -> (u8, u8, u8) {
+        let pixel = pixmap.pixel(x, y).expect("Pixel in bounds");
+
+        (pixel.red(), pixel.green(), pixel.blue())
+    }
+
+    #[test]
+    fn shapes_only_use_a_single_layer() {
+        let mut renderer = renderer();
+        let mut frame = frame(&renderer);
+
+        frame.fill_rectangle(Point::new(0.0, 0.0), Size::new(20.0, 20.0), Color::BLACK);
+        frame.fill_rectangle(Point::new(10.0, 10.0), Size::new(20.0, 20.0), Color::WHITE);
+
+        renderer.draw_geometry(frame.into_geometry());
+
+        assert_eq!(renderer.layers().len(), 1);
+
+        let pixmap = render(&mut renderer);
+
+        assert_eq!(pixel(&pixmap, 5, 5), BLACK);
+        assert_eq!(pixel(&pixmap, 15, 15), WHITE);
+        assert_eq!(pixel(&pixmap, 35, 35), GRAY);
+    }
+
+    #[test]
+    fn shape_then_image_use_a_single_layer() {
+        let mut renderer = renderer();
+        let mut frame = frame(&renderer);
+
+        frame.fill_rectangle(Point::new(0.0, 0.0), Size::new(40.0, 40.0), Color::BLACK);
+        frame.draw_image(rectangle(10.0, 10.0, 20.0, 20.0), white_image(20));
+
+        renderer.draw_geometry(frame.into_geometry());
+
+        assert_eq!(renderer.layers().len(), 1);
+
+        let pixmap = render(&mut renderer);
+
+        assert_eq!(pixel(&pixmap, 5, 5), BLACK);
+        assert_eq!(pixel(&pixmap, 15, 15), WHITE);
+    }
+
+    #[test]
+    fn shapes_are_drawn_over_images_in_draw_order() {
+        let mut renderer = renderer();
+        let mut frame = frame(&renderer);
+
+        // shape, image, shape
+        frame.fill_rectangle(Point::new(0.0, 0.0), Size::new(40.0, 40.0), Color::BLACK);
+        frame.draw_image(rectangle(10.0, 10.0, 20.0, 20.0), white_image(20));
+        frame.fill_rectangle(
+            Point::new(20.0, 20.0),
+            Size::new(20.0, 20.0),
+            Color::from_rgb(0.0, 1.0, 0.0),
+        );
+
+        renderer.draw_geometry(frame.into_geometry());
+
+        assert_eq!(renderer.layers().len(), 2);
+
+        let pixmap = render(&mut renderer);
+
+        // Bottom shape
+        assert_eq!(pixel(&pixmap, 5, 5), BLACK);
+        // Image over the bottom shape
+        assert_eq!(pixel(&pixmap, 15, 15), WHITE);
+        // Top shape over both the image and the bottom shape
+        assert_eq!(pixel(&pixmap, 25, 25), GREEN);
+        assert_eq!(pixel(&pixmap, 35, 35), GREEN);
+    }
+
+    #[test]
+    fn image_then_shape_is_drawn_in_draw_order() {
+        let mut renderer = renderer();
+        let mut frame = frame(&renderer);
+
+        frame.draw_image(rectangle(0.0, 0.0, 20.0, 20.0), white_image(20));
+        frame.fill_rectangle(Point::new(10.0, 10.0), Size::new(20.0, 20.0), Color::BLACK);
+
+        renderer.draw_geometry(frame.into_geometry());
+
+        let pixmap = render(&mut renderer);
+
+        assert_eq!(pixel(&pixmap, 5, 5), WHITE);
+        assert_eq!(pixel(&pixmap, 15, 15), BLACK);
+        assert_eq!(pixel(&pixmap, 25, 25), BLACK);
+        assert_eq!(pixel(&pixmap, 35, 35), GRAY);
+    }
+
+    #[test]
+    fn cached_geometry_keeps_draw_order() {
+        let mut renderer = renderer();
+        let mut frame = frame(&renderer);
+
+        frame.fill_rectangle(Point::new(0.0, 0.0), Size::new(40.0, 40.0), Color::BLACK);
+        frame.draw_image(rectangle(10.0, 10.0, 20.0, 20.0), white_image(20));
+        frame.fill_rectangle(
+            Point::new(20.0, 20.0),
+            Size::new(20.0, 20.0),
+            Color::from_rgb(0.0, 1.0, 0.0),
+        );
+
+        let cache = frame.into_geometry().cache(cache::Group::unique(), None);
+
+        renderer.draw_geometry(Geometry::load(&cache));
+
+        assert_eq!(renderer.layers().len(), 2);
+
+        let pixmap = render(&mut renderer);
+
+        assert_eq!(pixel(&pixmap, 5, 5), BLACK);
+        assert_eq!(pixel(&pixmap, 15, 15), WHITE);
+        assert_eq!(pixel(&pixmap, 25, 25), GREEN);
+    }
+
+    #[test]
+    fn clipped_frames_clip_shapes() {
+        let mut renderer = renderer();
+        let mut frame = frame(&renderer);
+
+        let mut child = frame.draft(rectangle(10.0, 10.0, 20.0, 20.0));
+        child.fill_rectangle(Point::new(0.0, 0.0), Size::new(40.0, 40.0), Color::BLACK);
+        frame.paste(child);
+
+        renderer.draw_geometry(frame.into_geometry());
+
+        let pixmap = render(&mut renderer);
+
+        assert_eq!(pixel(&pixmap, 5, 5), GRAY);
+        assert_eq!(pixel(&pixmap, 15, 15), BLACK);
+        assert_eq!(pixel(&pixmap, 35, 35), GRAY);
+    }
+
+    #[test]
+    fn clipped_frames_clip_images() {
+        let mut renderer = renderer();
+        let mut frame = frame(&renderer);
+
+        let mut child = frame.draft(rectangle(10.0, 10.0, 20.0, 20.0));
+        child.draw_image(rectangle(0.0, 0.0, 40.0, 40.0), white_image(40));
+        frame.paste(child);
+
+        renderer.draw_geometry(frame.into_geometry());
+
+        let pixmap = render(&mut renderer);
+
+        assert_eq!(pixel(&pixmap, 5, 5), GRAY);
+        assert_eq!(pixel(&pixmap, 15, 15), WHITE);
+        assert_eq!(pixel(&pixmap, 35, 35), GRAY);
+    }
+
+    #[test]
+    fn pasted_frames_keep_draw_order() {
+        let mut renderer = renderer();
+        let mut frame = frame(&renderer);
+
+        frame.fill_rectangle(
+            Point::new(0.0, 0.0),
+            Size::new(40.0, 40.0),
+            Color::from_rgb(0.0, 1.0, 0.0),
+        );
+
+        let mut child = frame.draft(rectangle(10.0, 10.0, 20.0, 20.0));
+        child.fill_rectangle(Point::new(0.0, 0.0), Size::new(40.0, 40.0), Color::BLACK);
+        frame.paste(child);
+
+        frame.fill_rectangle(Point::new(15.0, 15.0), Size::new(10.0, 10.0), Color::WHITE);
+
+        renderer.draw_geometry(frame.into_geometry());
+
+        let pixmap = render(&mut renderer);
+
+        assert_eq!(pixel(&pixmap, 5, 5), GREEN);
+        assert_eq!(pixel(&pixmap, 12, 12), BLACK);
+        assert_eq!(pixel(&pixmap, 20, 20), WHITE);
+        assert_eq!(pixel(&pixmap, 35, 35), GREEN);
     }
 }

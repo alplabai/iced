@@ -81,9 +81,15 @@ where
     /// Draws the characters of the given [`Text`] on the [`Frame`], filling
     /// them with the given color.
     ///
-    /// __Warning:__ All text will be rendered on top of all the layers of
-    /// a `Canvas`. Therefore, it is currently only meant to be used for
-    /// overlays, which is the most common use case.
+    /// Text, images, and shapes drawn in the same [`Frame`] are rendered in
+    /// the order they were drawn.
+    ///
+    /// __Warning:__ Switching back and forth between shapes, images, and text
+    /// requires splitting the [`Frame`] into several layers. Therefore, you
+    /// should group the drawing operations of the same kind together whenever
+    /// the draw order does not matter. Separate geometries (e.g. the ones of
+    /// different `Canvas` layers) are not reordered against each other: text
+    /// may still be rendered on top of the shapes of other geometries.
     pub fn fill_text(&mut self, text: impl Into<Text>) {
         self.raw.fill_text(text);
     }

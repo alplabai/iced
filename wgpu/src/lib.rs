@@ -849,35 +849,52 @@ impl graphics::geometry::Renderer for Renderer {
     }
 
     fn draw_geometry(&mut self, geometry: Self::Geometry) {
-        let (layer, transformation) = self.layers.current_mut();
-
         match geometry {
-            Geometry::Live {
-                meshes,
-                images,
-                text,
-            } => {
-                layer.draw_mesh_group(meshes, transformation);
+            Geometry::Live { sections } => {
+                for (i, section) in sections.into_iter().enumerate() {
+                    // Sections after the first one exist because their contents
+                    // must be drawn above the previous ones, which a single
+                    // layer cannot guarantee.
+                    if i > 0 {
+                        self.layers.split();
+                    }
 
-                for image in images {
-                    layer.draw_image(image, transformation);
-                }
+                    let (layer, transformation) = self.layers.current_mut();
 
-                layer.draw_text_group(text, transformation);
-            }
-            Geometry::Cached(cache) => {
-                if let Some(meshes) = cache.meshes {
-                    layer.draw_mesh_cache(meshes, transformation);
-                }
+                    if !section.meshes.is_empty() {
+                        layer.draw_mesh_group(section.meshes, transformation);
+                    }
 
-                if let Some(images) = cache.images {
-                    for image in images.iter().cloned() {
+                    for image in section.images {
                         layer.draw_image(image, transformation);
                     }
-                }
 
-                if let Some(text) = cache.text {
-                    layer.draw_text_cache(text, transformation);
+                    if !section.text.is_empty() {
+                        layer.draw_text_group(section.text, transformation);
+                    }
+                }
+            }
+            Geometry::Cached(cache) => {
+                for (i, section) in cache.sections.iter().enumerate() {
+                    if i > 0 {
+                        self.layers.split();
+                    }
+
+                    let (layer, transformation) = self.layers.current_mut();
+
+                    if let Some(meshes) = &section.meshes {
+                        layer.draw_mesh_cache(meshes.clone(), transformation);
+                    }
+
+                    if let Some(images) = &section.images {
+                        for image in images.iter().cloned() {
+                            layer.draw_image(image, transformation);
+                        }
+                    }
+
+                    if let Some(text) = &section.text {
+                        layer.draw_text_cache(text.clone(), transformation);
+                    }
                 }
             }
         }

@@ -4,6 +4,7 @@ use crate::core::{self, Pixels, Point, Radians, Rectangle, Size, Svg, Transforma
 use crate::graphics::cache::{self, Cached};
 use crate::graphics::color;
 use crate::graphics::geometry::fill::{self, Fill};
+use crate::graphics::geometry::section::{Kind, Sections};
 use crate::graphics::geometry::{self, LineCap, LineDash, LineJoin, Path, Stroke, Style};
 use crate::graphics::gradient::{self, Gradient};
 use crate::graphics::mesh::{self, Mesh};
@@ -14,20 +15,37 @@ use lyon::geom::euclid;
 use lyon::tessellation;
 
 use std::borrow::Cow;
+use std::mem;
 use std::sync::Arc;
 
+/// A part of a [`Geometry`] that can be drawn in a single layer, because
+/// its contents are already in the order in which a layer draws them:
+/// meshes first, then images, and text last.
+#[derive(Debug, Default)]
+pub struct Section {
+    pub meshes: Vec<Mesh>,
+    pub images: Vec<Image>,
+    pub text: Vec<Text>,
+}
+
+/// The geometry of a [`Frame`].
+///
+/// Normally, a [`Geometry::Live`] contains a single [`Section`]. More than one
+/// section is only needed when the draw order of the [`Frame`] could not be
+/// preserved by a single layer (e.g. shapes drawn over an image).
 #[derive(Debug)]
 pub enum Geometry {
-    Live {
-        meshes: Vec<Mesh>,
-        images: Vec<Image>,
-        text: Vec<Text>,
-    },
+    Live { sections: Vec<Section> },
     Cached(Cache),
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct Cache {
+    pub sections: Arc<[CachedSection]>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CachedSection {
     pub meshes: Option<mesh::Cache>,
     pub images: Option<Arc<[Image]>>,
     pub text: Option<text::Cache>,
@@ -42,52 +60,76 @@ impl Cached for Geometry {
 
     fn cache(self, group: cache::Group, previous: Option<Self::Cache>) -> Self::Cache {
         match self {
-            Self::Live {
-                meshes,
-                images,
-                text,
-            } => {
-                let images = if images.is_empty() {
-                    None
-                } else {
-                    Some(Arc::from(images))
-                };
+            Self::Live { sections } => {
+                let previous = previous.map(|previous| previous.sections);
 
-                let meshes = Arc::from(meshes);
+                let sections: Vec<_> = sections
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, section)| {
+                        let previous = previous.as_ref().and_then(|sections| sections.get(i));
 
-                if let Some(mut previous) = previous {
-                    if let Some(cache) = &mut previous.meshes {
-                        cache.update(meshes);
-                    } else {
-                        previous.meshes = if meshes.is_empty() {
-                            None
-                        } else {
-                            Some(mesh::Cache::new(meshes))
-                        };
-                    }
+                        cache_section(section, group, previous.cloned())
+                    })
+                    .collect();
 
-                    if let Some(cache) = &mut previous.text {
-                        cache.update(text);
-                    } else {
-                        previous.text = text::Cache::new(group, text);
-                    }
-
-                    previous.images = images;
-
-                    previous
-                } else {
-                    Cache {
-                        meshes: if meshes.is_empty() {
-                            None
-                        } else {
-                            Some(mesh::Cache::new(meshes))
-                        },
-                        images,
-                        text: text::Cache::new(group, text),
-                    }
+                Cache {
+                    sections: Arc::from(sections),
                 }
             }
             Self::Cached(cache) => cache,
+        }
+    }
+}
+
+fn cache_section(
+    section: Section,
+    group: cache::Group,
+    previous: Option<CachedSection>,
+) -> CachedSection {
+    let Section {
+        meshes,
+        images,
+        text,
+    } = section;
+
+    let images = if images.is_empty() {
+        None
+    } else {
+        Some(Arc::from(images))
+    };
+
+    let meshes = Arc::from(meshes);
+
+    if let Some(mut previous) = previous {
+        if let Some(cache) = &mut previous.meshes {
+            cache.update(meshes);
+        } else {
+            previous.meshes = if meshes.is_empty() {
+                None
+            } else {
+                Some(mesh::Cache::new(meshes))
+            };
+        }
+
+        if let Some(cache) = &mut previous.text {
+            cache.update(text);
+        } else {
+            previous.text = text::Cache::new(group, text);
+        }
+
+        previous.images = images;
+
+        previous
+    } else {
+        CachedSection {
+            meshes: if meshes.is_empty() {
+                None
+            } else {
+                Some(mesh::Cache::new(meshes))
+            },
+            images,
+            text: text::Cache::new(group, text),
         }
     }
 }
@@ -96,9 +138,7 @@ impl Cached for Geometry {
 pub struct Frame {
     clip_bounds: Rectangle,
     buffers: BufferStack,
-    meshes: Vec<Mesh>,
-    images: Vec<Image>,
-    text: Vec<Text>,
+    sections: Sections<Section>,
     transforms: Transforms,
     fill_tessellator: tessellation::FillTessellator,
     stroke_tessellator: tessellation::StrokeTessellator,
@@ -110,9 +150,7 @@ impl Frame {
         Frame {
             clip_bounds: bounds,
             buffers: BufferStack::new(),
-            meshes: Vec::new(),
-            images: Vec::new(),
-            text: Vec::new(),
+            sections: Sections::new(),
             transforms: Transforms {
                 previous: Vec::new(),
                 current: Transform(lyon::math::Transform::identity()),
@@ -120,6 +158,47 @@ impl Frame {
             fill_tessellator: tessellation::FillTessellator::new(),
             stroke_tessellator: tessellation::StrokeTessellator::new(),
         }
+    }
+
+    /// Announces that something of the given [`Kind`] is about to be drawn.
+    ///
+    /// This makes sure that the draw order is preserved: if the current
+    /// [`Section`] cannot hold the new content after what has been drawn
+    /// already, a new one is started.
+    fn begin(&mut self, kind: Kind) {
+        let clip_bounds = self.clip_bounds;
+        let buffers = &mut self.buffers;
+
+        let _ = self.sections.begin_with(kind, |section| {
+            section
+                .meshes
+                .extend(mem::replace(buffers, BufferStack::new()).into_meshes(clip_bounds));
+        });
+    }
+
+    /// Turns any pending shape of the current [`Section`] into meshes.
+    fn seal(&mut self) {
+        let clip_bounds = self.clip_bounds;
+
+        if self.buffers.is_empty() {
+            return;
+        }
+
+        let meshes = mem::replace(&mut self.buffers, BufferStack::new()).into_meshes(clip_bounds);
+
+        self.sections.current_mut().meshes.extend(meshes);
+    }
+
+    /// Finishes the [`Frame`] returning its sections in draw order.
+    fn into_sections(mut self) -> Vec<Section> {
+        let clip_bounds = self.clip_bounds;
+        let buffers = &mut self.buffers;
+
+        self.sections.finish(|section| {
+            section
+                .meshes
+                .extend(mem::replace(buffers, BufferStack::new()).into_meshes(clip_bounds));
+        })
     }
 }
 
@@ -147,6 +226,8 @@ impl geometry::frame::Backend for Frame {
     }
 
     fn fill(&mut self, path: &Path, fill: impl Into<Fill>) {
+        self.begin(Kind::Shape);
+
         let Fill { style, rule } = fill.into();
 
         let mut buffer = self
@@ -168,6 +249,8 @@ impl geometry::frame::Backend for Frame {
     }
 
     fn fill_rectangle(&mut self, top_left: Point, size: Size, fill: impl Into<Fill>) {
+        self.begin(Kind::Shape);
+
         let Fill { style, rule } = fill.into();
 
         let mut buffer = self
@@ -198,6 +281,8 @@ impl geometry::frame::Backend for Frame {
     }
 
     fn stroke<'a>(&mut self, path: &Path, stroke: impl Into<Stroke<'a>>) {
+        self.begin(Kind::Shape);
+
         let stroke = stroke.into();
 
         let mut buffer = self
@@ -229,6 +314,8 @@ impl geometry::frame::Backend for Frame {
     }
 
     fn stroke_rectangle<'a>(&mut self, top_left: Point, size: Size, stroke: impl Into<Stroke<'a>>) {
+        self.begin(Kind::Shape);
+
         let stroke = stroke.into();
 
         let mut buffer = self
@@ -302,7 +389,9 @@ impl geometry::frame::Backend for Frame {
                 )
             };
 
-            self.text.push(Text::Cached {
+            self.begin(Kind::Text);
+
+            self.sections.current_mut().text.push(Text::Cached {
                 content: text.content,
                 bounds,
                 color: text.color,
@@ -364,22 +453,38 @@ impl geometry::frame::Backend for Frame {
     }
 
     fn paste(&mut self, frame: Frame) {
-        self.meshes.extend(frame.meshes);
-        self.meshes
-            .extend(frame.buffers.into_meshes(frame.clip_bounds));
+        for section in frame.into_sections() {
+            let Section {
+                meshes,
+                images,
+                text,
+            } = section;
 
-        self.images.extend(frame.images);
-        self.text.extend(frame.text);
+            if !meshes.is_empty() {
+                self.begin(Kind::Shape);
+
+                // Whatever has been drawn in this frame so far must stay
+                // below the pasted meshes.
+                self.seal();
+
+                self.sections.current_mut().meshes.extend(meshes);
+            }
+
+            if !images.is_empty() {
+                self.begin(Kind::Image);
+                self.sections.current_mut().images.extend(images);
+            }
+
+            if !text.is_empty() {
+                self.begin(Kind::Text);
+                self.sections.current_mut().text.extend(text);
+            }
+        }
     }
 
-    fn into_geometry(mut self) -> Self::Geometry {
-        self.meshes
-            .extend(self.buffers.into_meshes(self.clip_bounds));
-
+    fn into_geometry(self) -> Self::Geometry {
         Geometry::Live {
-            meshes: self.meshes,
-            images: self.images,
-            text: self.text,
+            sections: self.into_sections(),
         }
     }
 
@@ -391,10 +496,14 @@ impl geometry::frame::Backend for Frame {
         image.rotation += external_rotation;
         image.border_radius = image.border_radius * self.transforms.current.scale().0;
 
-        self.images.push(Image::Raster {
+        self.begin(Kind::Image);
+
+        let clip_bounds = self.clip_bounds;
+
+        self.sections.current_mut().images.push(Image::Raster {
             image,
             bounds,
-            clip_bounds: self.clip_bounds,
+            clip_bounds,
         });
     }
 
@@ -405,10 +514,14 @@ impl geometry::frame::Backend for Frame {
 
         svg.rotation += external_rotation;
 
-        self.images.push(Image::Vector {
+        self.begin(Kind::Image);
+
+        let clip_bounds = self.clip_bounds;
+
+        self.sections.current_mut().images.push(Image::Vector {
             svg,
             bounds,
-            clip_bounds: self.clip_bounds,
+            clip_bounds,
         });
     }
 }
@@ -425,6 +538,10 @@ struct BufferStack {
 impl BufferStack {
     fn new() -> Self {
         Self { stack: Vec::new() }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.stack.is_empty()
     }
 
     fn get_mut(&mut self, style: &Style) -> &mut Buffer {

@@ -2,6 +2,7 @@
 pub mod fill;
 pub mod frame;
 pub mod path;
+pub mod section;
 pub mod stroke;
 
 mod cache;

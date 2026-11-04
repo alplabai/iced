@@ -27,6 +27,7 @@ This branch carries upstream iced-rs/iced pull requests merged on top of the bas
 ## Fork fixes
 
 - #12: `window::Direction::at`/`at_with_corner` hit-testing and `Direction::interaction()` / `From<Direction> for mouse::Interaction` (core).
+- #18: canvas `Frame` contents are split into ordered sections so shapes, images and text keep draw order, and pasted/clipped child frames keep their own clip in tiny_skia (graphics, wgpu, tiny_skia).
 ## Verification
 
 - One `cargo check --workspace --all-targets` for the batch of #3359, #2770 and #2779 (second run after adding `Animation::force`): passes.

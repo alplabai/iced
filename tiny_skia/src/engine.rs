@@ -629,15 +629,30 @@ impl Engine {
                 );
             }
             #[cfg(feature = "svg")]
-            Image::Vector { svg, bounds, .. } => {
+            Image::Vector {
+                svg,
+                bounds,
+                clip_bounds: local_clip_bounds,
+            } => {
                 let physical_bounds = *bounds * _transformation;
 
-                if !_clip_bounds.intersects(&physical_bounds) {
+                let Some(clip_bounds) =
+                    (*local_clip_bounds * _transformation).intersection(&_clip_bounds)
+                else {
+                    return;
+                };
+
+                if !clip_bounds.intersects(&physical_bounds) {
                     return;
                 }
 
-                let clip_mask =
-                    (!physical_bounds.is_within(&_clip_bounds)).then_some(_clip_mask as &_);
+                let clip_mask = match physical_bounds.is_within(&clip_bounds) {
+                    true => None,
+                    false => {
+                        adjust_clip_mask(_clip_mask, clip_bounds);
+                        Some(_clip_mask as &_)
+                    }
+                };
 
                 let center = physical_bounds.center();
                 let radians = f32::from(svg.rotation);

@@ -97,6 +97,32 @@ impl<T: Layer> Stack<T> {
         }
     }
 
+    /// Starts a new [`Layer`] on top of the current one, with the same bounds,
+    /// and makes it current.
+    ///
+    /// Everything drawn afterwards will be rendered above everything that has
+    /// been drawn so far in the [`Stack`]. This is useful to preserve the draw
+    /// order of primitives that a single [`Layer`] would otherwise reorder.
+    ///
+    /// Unlike [`push_clip`](Self::push_clip), no clipping region is pushed:
+    /// a matching [`pop_clip`](Self::pop_clip) still restores the clipping
+    /// region that was active before the last [`push_clip`](Self::push_clip).
+    pub fn split(&mut self) {
+        // Settle any pending primitives of the layer we are leaving
+        self.flush();
+
+        let bounds = self.layers[self.current].bounds();
+
+        self.current = self.active_count;
+        self.active_count += 1;
+
+        if self.current == self.layers.len() {
+            self.layers.push(T::with_bounds(bounds));
+        } else {
+            self.layers[self.current].resize(bounds);
+        }
+    }
+
     /// Pops the current clipping region from the [`Stack`] and restores the previous one.
     ///
     /// The current layer will be recorded for drawing.
@@ -217,5 +243,114 @@ impl<T: Layer> Stack<T> {
 impl<T: Layer> Default for Stack<T> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug, Default)]
+    struct TestLayer {
+        bounds: Option<Rectangle>,
+        flushed: usize,
+    }
+
+    impl Layer for TestLayer {
+        fn with_bounds(bounds: Rectangle) -> Self {
+            Self {
+                bounds: Some(bounds),
+                flushed: 0,
+            }
+        }
+
+        fn bounds(&self) -> Rectangle {
+            self.bounds.unwrap_or(Rectangle::INFINITE)
+        }
+
+        fn flush(&mut self) {
+            self.flushed += 1;
+        }
+
+        fn resize(&mut self, bounds: Rectangle) {
+            self.bounds = Some(bounds);
+        }
+
+        fn reset(&mut self) {
+            self.bounds = None;
+            self.flushed = 0;
+        }
+
+        fn start(&self) -> usize {
+            usize::MAX
+        }
+
+        fn end(&self) -> usize {
+            0
+        }
+
+        fn merge(&mut self, _layer: &mut Self) {}
+    }
+
+    #[test]
+    fn split_starts_a_layer_with_the_same_bounds() {
+        let mut stack = Stack::<TestLayer>::new();
+        let clip = Rectangle::new(
+            crate::core::Point::new(10.0, 20.0),
+            crate::core::Size::new(30.0, 40.0),
+        );
+
+        stack.push_clip(clip);
+        stack.split();
+
+        assert_eq!(stack.as_slice().len(), 3);
+        assert_eq!(stack.as_slice()[1].bounds(), clip);
+        assert_eq!(stack.as_slice()[2].bounds(), clip);
+
+        // The layer we left is settled
+        assert_eq!(stack.as_slice()[1].flushed, 1);
+
+        // We are drawing in the new layer
+        let (layer, _) = stack.current_mut();
+        assert_eq!(layer.bounds(), clip);
+        assert_eq!(layer.flushed, 0);
+    }
+
+    #[test]
+    fn pop_clip_after_split_restores_the_previous_layer() {
+        let mut stack = Stack::<TestLayer>::new();
+        let clip = Rectangle::new(
+            crate::core::Point::new(1.0, 2.0),
+            crate::core::Size::new(3.0, 4.0),
+        );
+
+        stack.push_clip(clip);
+        stack.split();
+        stack.split();
+        stack.pop_clip();
+
+        let (layer, _) = stack.current_mut();
+        assert_eq!(layer.bounds(), Rectangle::INFINITE);
+        assert_eq!(stack.as_slice().len(), 4);
+    }
+
+    #[test]
+    fn split_reuses_layers_after_reset() {
+        let mut stack = Stack::<TestLayer>::new();
+        let bounds = Rectangle::new(
+            crate::core::Point::ORIGIN,
+            crate::core::Size::new(100.0, 100.0),
+        );
+
+        stack.split();
+        stack.split();
+        stack.reset(bounds);
+
+        assert_eq!(stack.as_slice().len(), 1);
+
+        stack.split();
+
+        assert_eq!(stack.as_slice().len(), 2);
+        assert_eq!(stack.as_slice()[1].bounds(), bounds);
     }
 }
