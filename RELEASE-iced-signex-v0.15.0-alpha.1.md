@@ -1,4 +1,4 @@
-# signex-v0.15.0-alpha.1
+# iced-signex-v0.15.0-alpha.1
 
 Tag target: `108a717b18c49c91d780d6e03fd0d2f2ec8b40ae`
 
