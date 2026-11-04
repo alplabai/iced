@@ -365,6 +365,7 @@ impl geometry::frame::Backend for Frame {
             && scale_x == scale_y
             && scale_x > 0.0
             && scale_y > 0.0
+            && text.fits_atlas(scale_y)
         {
             let (bounds, size, line_height) = if self.transforms.current.is_identity() {
                 (
@@ -808,4 +809,35 @@ pub(super) fn dashed(path: &Path, line_dash: LineDash<'_>) -> Path {
             },
         );
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graphics::geometry::frame::Backend as _;
+
+    /// (meshes, atlas text runs) a frame holds after drawing `"R1"` at `size`.
+    fn drawn(size: f32) -> (usize, usize) {
+        let mut frame = Frame::new(Rectangle::with_size(Size::new(8000.0, 8000.0)));
+        frame.fill_text(geometry::Text {
+            content: "R1".into(),
+            size: Pixels(size),
+            ..geometry::Text::default()
+        });
+        let Geometry::Live { sections } = frame.into_geometry() else {
+            unreachable!("a new frame is live");
+        };
+        (
+            sections.iter().map(|s| s.meshes.len()).sum(),
+            sections.iter().map(|s| s.text.len()).sum(),
+        )
+    }
+
+    #[test]
+    fn text_past_the_atlas_limit_is_meshes_and_ordinary_text_is_atlas_text() {
+        let (meshes, text) = drawn(2000.0);
+        assert!(meshes > 0 && text == 0, "{meshes} meshes, {text} text");
+        let (meshes, text) = drawn(16.0);
+        assert!(meshes == 0 && text > 0, "{meshes} meshes, {text} text");
+    }
 }
