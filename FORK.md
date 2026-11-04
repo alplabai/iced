@@ -20,13 +20,17 @@ Merged/ported/refreshed on top of alpha.3 (which has fork fix #22, listed under 
 - #3514 and #3450 were re-checked against their current upstream heads: unchanged since merged.
 - [#3443](https://github.com/iced-rs/iced/pull/3443): skipped (see Skipped): 336-line winit refactor, 9 conflict hunks, unsafe without compiling.
 
+Fork deviation from upstream #3522: the image viewer resets and captures Escape only when the cursor is over it or its zoom/pan differs from the default. Upstream captures every Escape release, which breaks app-level Escape handlers. Tests in `widget/tests/image_viewer.rs`.
+
+Behaviour change kept as upstream (#3505): a `pane_grid` left press that publishes `on_click`, or picks a pane for `on_drag`, is no longer captured. Likewise (#3179, #3220) `sensor` `on_show` fires on every re-entry when `on_hide` is `None`.
+
 Also: hand-fixed `markdown::CappedTable` (#3494) for this fork's `Widget`/`Element` API (added `Meta` impl, boxed `Element`, `.boxed()` instead of a `From` impl).
 
 Verification (this batch):
 
 - `cargo check --workspace --all-targets`: 0 errors, 0 warnings (after the #3494 fix).
 - Tests pass: `iced_core` (18 unit, 16 doc), `iced_widget` (all suites incl. new `checkbox`, `markdown` 43, `pane_grid`, `scrollable`, `sticky`), `iced_graphics` (geometry), `iced_tiny_skia` (geometry,image), `iced_wgpu` (image,svg,geometry; xvfb + lavapipe), `iced_runtime`.
-- `iced_winit` tests NOT run: the `wayland-sys` build script fails here (missing system wayland libs). #3139 (Windows blur) was only type-checked.
+- `iced_winit` tests were not run in the original sandbox (missing wayland libs); fork CI runs them. #3139 (Windows blur) was only type-checked.
 - Not verified: no real GPU, nothing seen rendered. SVG text (#3393), Windows blur backdrop (#3139), markdown `table_width` wrapping (no test beyond compiling), sensor, pane_grid and image viewer changes were not viewed.
 
 ## Merged upstream PRs
@@ -78,6 +82,7 @@ Numbers refer to the ranks in `TRIAGE.md`, which has the status of all 20.
 
 ## Known gaps
 
+- SVG text (#3393): the font database is cloned once on the first SVG load and never refreshed; a poisoned lock yields an empty database silently. Upstream's code, not fixed here.
 - Nothing was run or seen on a real GPU; only software Vulkan (lavapipe).
 - The wgpu side of #18 has no automated test.
 - #1, #2 and #15 have no automated tests.
