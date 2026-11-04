@@ -23,7 +23,7 @@ impl MonitorList {
 
     /// Returns the primary monitor, or the first monitor if no primary is available
     pub fn primary_or_first(&self) -> MonitorRef<'_> {
-        self.primary().unwrap_or_else(|| MonitorRef {
+        self.primary().unwrap_or(MonitorRef {
             list: self,
             index: MonitorIndex(0),
         })
@@ -81,7 +81,7 @@ impl<'a> MonitorRef<'a> {
 
     /// Returns the index of the monitor. You can use this when creating a new window.
     pub fn index(&self) -> MonitorIndex {
-        self.index.clone()
+        self.index
     }
 
     /// Returns the scale factor of the monitor.

@@ -279,11 +279,7 @@ impl geometry::frame::Backend for Frame {
                 clip_bounds: Rectangle::with_size(Size::INFINITE),
             };
 
-            push_clipped(
-                &mut self.sections.begin(Kind::Text).text,
-                clip_bounds,
-                text,
-            );
+            push_clipped(&mut self.sections.begin(Kind::Text).text, clip_bounds, text);
         } else {
             text.draw_with(|path, color| self.fill(&path, color));
         }
@@ -387,14 +383,11 @@ impl geometry::frame::Backend for Frame {
 
         let clip_bounds = self.clip_bounds;
 
-        self.sections
-            .begin(Kind::Image)
-            .images
-            .push(Image::Vector {
-                svg,
-                bounds,
-                clip_bounds,
-            });
+        self.sections.begin(Kind::Image).images.push(Image::Vector {
+            svg,
+            bounds,
+            clip_bounds,
+        });
     }
 }
 

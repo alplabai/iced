@@ -304,12 +304,11 @@ where
                                 let requested_monitor = match settings.position {
                                     core::window::Position::Default => None,
                                     core::window::Position::Centered => None,
-                                    core::window::Position::Specific(position) => position
-                                        .monitor_index
-                                        .map(|index| {
-                                            event_loop.available_monitors().skip(index.0).next()
+                                    core::window::Position::Specific(position) => {
+                                        position.monitor_index.and_then(|index| {
+                                            event_loop.available_monitors().nth(index.0)
                                         })
-                                        .flatten(),
+                                    }
                                 };
 
                                 let monitor = requested_monitor
@@ -1515,18 +1514,14 @@ fn run_action<'a, P, C>(
                         })
                         .ok();
 
-                    let monitor_index = window
-                        .raw
-                        .current_monitor()
-                        .map(|monitor| {
-                            window
-                                .raw
-                                .available_monitors()
-                                .enumerate()
-                                .find(|(_, handle)| handle == &monitor)
-                                .map(|(index, _)| MonitorIndex(index))
-                        })
-                        .flatten();
+                    let monitor_index = window.raw.current_monitor().and_then(|monitor| {
+                        window
+                            .raw
+                            .available_monitors()
+                            .enumerate()
+                            .find(|(_, handle)| handle == &monitor)
+                            .map(|(index, _)| MonitorIndex(index))
+                    });
 
                     let _ = channel.send(position.map(|position| PositionOnMonitor {
                         monitor_index,
@@ -1546,8 +1541,7 @@ fn run_action<'a, P, C>(
                     let monitor = position
                         .monitor_index
                         // Option 1: try to get given monitor from index
-                        .map(|index| window.raw.available_monitors().skip(index.0).next())
-                        .flatten()
+                        .and_then(|index| window.raw.available_monitors().nth(index.0))
                         // Option 2 try to get the current monitor
                         .or_else(|| window.raw.current_monitor());
                     let winit_position =

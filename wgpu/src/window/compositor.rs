@@ -314,22 +314,15 @@ impl graphics::Compositor for Compositor {
             .expect("Create surface")
     }
 
-    fn configure_surface(
-        &mut self,
-        surface: &mut Self::Surface,
-        width: u32,
-        height: u32,
-    ) {
+    fn configure_surface(&mut self, surface: &mut Self::Surface, width: u32, height: u32) {
         if width == 0 || height == 0 {
             return;
         }
 
         let capabilities = surface.get_capabilities(&self.adapter);
-        let has_copy_src =
-            capabilities.usages.contains(wgpu::TextureUsages::COPY_SRC);
+        let has_copy_src = capabilities.usages.contains(wgpu::TextureUsages::COPY_SRC);
         let usage = if has_copy_src {
-            wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::COPY_SRC
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC
         } else {
             wgpu::TextureUsages::RENDER_ATTACHMENT
         };
