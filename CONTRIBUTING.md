@@ -17,6 +17,8 @@ This repository is Alp Lab's fork of [iced](https://github.com/iced-rs/iced), us
   - An upstream pull request that Signex needs before upstream merges it is ported on its own `upstream/<pr>-<topic>` branch into `dev`, and recorded in `FORK.md` under "Merged upstream PRs".
 - **Hotfix:** branch off `signex`, open a pull request into `signex`, then bring the same fix into `dev` with a second pull request so the two branches do not diverge.
 
+CI: `.github/workflows/fork-ci.yml` runs fmt, clippy (`cargo lint`), `cargo nextest` with all features plus doc tests, and a wasm check, on Ubuntu, for pull requests into and pushes to `dev`/`signex`. Its summary check `fork-ci · required` must pass before merging. The upstream workflows are disabled in the Actions settings, so they don't use the org's shared runner budget; their files stay untouched to keep upstream syncs conflict-free.
+
 Protection (repository rulesets):
 - `dev` and `signex` need a pull request with one approval and resolved review threads, and cannot be force-pushed or deleted.
 - `master` cannot be deleted.
