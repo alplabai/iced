@@ -163,9 +163,17 @@ where
                 ..
             }) => {
                 let state = tree.state.downcast_mut::<State>();
-                *state = State::new();
-                shell.request_redraw();
-                shell.capture_event();
+                let is_default = state.scale == 1.0
+                    && state.starting_offset == Vector::default()
+                    && state.current_offset == Vector::default();
+
+                // Fork: upstream #3522 captures every Escape; leave it to
+                // the app unless this viewer is hovered or has changed.
+                if cursor.is_over(bounds) || !is_default {
+                    *state = State::new();
+                    shell.request_redraw();
+                    shell.capture_event();
+                }
             }
             Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
                 let Some(cursor_position) = cursor.position_over(bounds) else {
