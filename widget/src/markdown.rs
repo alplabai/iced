@@ -52,7 +52,7 @@ use crate::core::font::{self, Font};
 use crate::core::padding;
 use crate::core::text::LineHeight;
 use crate::core::theme;
-use crate::core::{Code, Color, Length, Padding, Pixels, Theme};
+use crate::core::{Code, Color, Element, Length, Padding, Pixels, Theme};
 use crate::{
     Widget, center_x, checkbox, column, container, rich_text, row, rule, scrollable, span, text,
 };
@@ -2096,8 +2096,8 @@ where
     .separator_x(0);
 
     let content: Element<'a, Message, Theme, Renderer> = match settings.table_width {
-        Some(width) => CappedTable::new(width, table).into(),
-        None => table.into(),
+        Some(width) => CappedTable::new(width, table.boxed()).boxed(),
+        None => table.boxed(),
     };
 
     center_x(
@@ -2128,13 +2128,15 @@ struct CappedTable<'a, Message, Theme = crate::Theme, Renderer = crate::Renderer
 }
 
 impl<'a, Message, Theme, Renderer> CappedTable<'a, Message, Theme, Renderer> {
-    fn new(width: Length, content: impl Into<Element<'a, Message, Theme, Renderer>>) -> Self {
+    fn new(width: Length, content: Element<'a, Message, Theme, Renderer>) -> Self {
         Self {
             width,
-            content: content.into(),
+            content,
         }
     }
 }
+
+impl<Message, Theme, Renderer> core::widget::Meta for CappedTable<'_, Message, Theme, Renderer> {}
 
 impl<Message, Theme, Renderer> core::Widget<Message, Theme, Renderer>
     for CappedTable<'_, Message, Theme, Renderer>
@@ -2142,7 +2144,7 @@ where
     Renderer: core::Renderer,
 {
     fn size(&self) -> core::Size<Length> {
-        self.content.as_widget().size()
+        self.content.size()
     }
 
     fn diff(&mut self, tree: &mut core::widget::Tree) {
@@ -2158,7 +2160,7 @@ where
         let cap = cap_width(self.width, limits.max.width);
         let limits = limits.width(Length::Fit.max(cap));
         self.content
-            .as_widget_mut()
+            
             .layout(&mut tree.children[0], renderer, &limits);
         tree.size = tree.children[0].size;
     }
@@ -2171,7 +2173,7 @@ where
         renderer: &Renderer,
         operation: &mut dyn core::widget::Operation,
     ) {
-        self.content.as_widget_mut().operate(
+        self.content.operate(
             &mut tree.children[0],
             layout,
             viewport,
@@ -2190,7 +2192,7 @@ where
         shell: &mut core::Shell<'_, Message>,
         viewport: &core::Rectangle,
     ) {
-        self.content.as_widget_mut().update(
+        self.content.update(
             &mut tree.children[0],
             event,
             layout,
@@ -2209,7 +2211,7 @@ where
         viewport: &core::Rectangle,
         renderer: &Renderer,
     ) -> core::mouse::Interaction {
-        self.content.as_widget().mouse_interaction(
+        self.content.mouse_interaction(
             &tree.children[0],
             layout,
             cursor,
@@ -2228,7 +2230,7 @@ where
         cursor: core::mouse::Cursor,
         viewport: &core::Rectangle,
     ) {
-        self.content.as_widget().draw(
+        self.content.draw(
             &tree.children[0],
             renderer,
             theme,
@@ -2248,7 +2250,7 @@ where
         translation: core::Vector,
         window: core::Size,
     ) -> Vec<core::overlay::Element<'b, Message, Theme, Renderer>> {
-        self.content.as_widget_mut().overlay(
+        self.content.overlay(
             &mut tree.children[0],
             layout,
             renderer,
@@ -2256,18 +2258,6 @@ where
             translation,
             window,
         )
-    }
-}
-
-impl<'a, Message, Theme, Renderer> From<CappedTable<'a, Message, Theme, Renderer>>
-    for Element<'a, Message, Theme, Renderer>
-where
-    Message: 'a,
-    Theme: 'a,
-    Renderer: 'a + core::Renderer,
-{
-    fn from(table: CappedTable<'a, Message, Theme, Renderer>) -> Self {
-        Self::new(table)
     }
 }
 
