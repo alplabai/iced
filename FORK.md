@@ -87,4 +87,3 @@ Numbers refer to the ranks in `TRIAGE.md`, which has the status of all 20.
 - The wgpu side of #18 has no automated test.
 - #1, #2 and #15 have no automated tests.
 - The `animations` feature (radio and toggler) and per-side borders were never viewed rendered.
-- Not run: iced_winit tests (wayland-sys libs missing in the sandbox).
