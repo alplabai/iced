@@ -24,6 +24,9 @@ This branch carries upstream iced-rs/iced pull requests merged on top of the bas
 - [#2483](https://github.com/iced-rs/iced/pull/2483): animations for default widgets; based on a 2024 tree, conflicts in about 40 files including files deleted since (winit program/system, text_input cursor), 139 files changed. Superseded in practice by the smaller #2770/#2779 ports.
 - [#3021](https://github.com/iced-rs/iced/pull/3021): architectural port (winit run/shell plumbing rewritten); about 39 conflict hunks.
 
+## Fork fixes
+
+- #12: `window::Direction::at`/`at_with_corner` hit-testing and `Direction::interaction()` / `From<Direction> for mouse::Interaction` (core).
 ## Verification
 
 - One `cargo check --workspace --all-targets` for the batch of #3359, #2770 and #2779 (second run after adding `Animation::force`): passes.
