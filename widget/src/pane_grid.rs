@@ -508,8 +508,7 @@ where
             | Event::Touch(touch::Event::FingerPressed { .. }) => {
                 let bounds = layout.bounds();
 
-                if let Some(cursor_position) = cursor.position_over(bounds) {               
-
+                if let Some(cursor_position) = cursor.position_over(bounds) {
                     match &self.on_resize {
                         Some((leeway, _)) => {
                             let relative_cursor = Point::new(

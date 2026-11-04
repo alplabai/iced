@@ -1250,15 +1250,19 @@ mod tests {
 
     #[test]
     fn no_handle_is_primary_when_there_is_no_primary_monitor() {
-        assert!(![10, 20, 30]
-            .iter()
-            .any(|handle| is_primary_monitor(handle, None)));
+        assert!(
+            ![10, 20, 30]
+                .iter()
+                .any(|handle| is_primary_monitor(handle, None))
+        );
     }
 
     #[test]
     fn a_primary_monitor_that_is_not_in_the_list_flags_nothing() {
-        assert!(![10, 20, 30]
-            .iter()
-            .any(|handle| is_primary_monitor(handle, Some(&99))));
+        assert!(
+            ![10, 20, 30]
+                .iter()
+                .any(|handle| is_primary_monitor(handle, Some(&99)))
+        );
     }
 }

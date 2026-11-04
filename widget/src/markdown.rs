@@ -2129,10 +2129,7 @@ struct CappedTable<'a, Message, Theme = crate::Theme, Renderer = crate::Renderer
 
 impl<'a, Message, Theme, Renderer> CappedTable<'a, Message, Theme, Renderer> {
     fn new(width: Length, content: Element<'a, Message, Theme, Renderer>) -> Self {
-        Self {
-            width,
-            content,
-        }
+        Self { width, content }
     }
 }
 
@@ -2160,7 +2157,6 @@ where
         let cap = cap_width(self.width, limits.max.width);
         let limits = limits.width(Length::Fit.max(cap));
         self.content
-            
             .layout(&mut tree.children[0], renderer, &limits);
         tree.size = tree.children[0].size;
     }
@@ -2173,13 +2169,8 @@ where
         renderer: &Renderer,
         operation: &mut dyn core::widget::Operation,
     ) {
-        self.content.operate(
-            &mut tree.children[0],
-            layout,
-            viewport,
-            renderer,
-            operation,
-        );
+        self.content
+            .operate(&mut tree.children[0], layout, viewport, renderer, operation);
     }
 
     fn update(
@@ -2211,13 +2202,8 @@ where
         viewport: &core::Rectangle,
         renderer: &Renderer,
     ) -> core::mouse::Interaction {
-        self.content.mouse_interaction(
-            &tree.children[0],
-            layout,
-            cursor,
-            viewport,
-            renderer,
-        )
+        self.content
+            .mouse_interaction(&tree.children[0], layout, cursor, viewport, renderer)
     }
 
     fn draw(
