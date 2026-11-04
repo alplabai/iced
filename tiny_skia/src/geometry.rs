@@ -222,7 +222,12 @@ impl geometry::frame::Backend for Frame {
 
         let (scale_x, scale_y) = self.transform.get_scale();
 
-        if !self.transform.has_skew() && scale_x == scale_y && scale_x > 0.0 && scale_y > 0.0 {
+        if !self.transform.has_skew()
+            && scale_x == scale_y
+            && scale_x > 0.0
+            && scale_y > 0.0
+            && text.fits_atlas(scale_y)
+        {
             let (bounds, size, line_height) = if self.transform.is_identity() {
                 (
                     Rectangle::new(text.position, Size::new(text.max_width, f32::INFINITY)),
@@ -568,5 +573,50 @@ pub fn into_stroke(stroke: &Stroke<'_>) -> tiny_skia::Stroke {
             )
         },
         ..Default::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graphics::geometry::frame::Backend as _;
+
+    /// (primitives, text runs) a frame holds after drawing `"R1"` at `size`.
+    fn drawn(size: f32) -> (usize, usize) {
+        let mut frame = Frame::new(Rectangle::with_size(Size::new(8000.0, 8000.0)));
+        frame.fill_text(geometry::Text {
+            content: "R1".into(),
+            size: Pixels(size),
+            ..geometry::Text::default()
+        });
+        let Geometry::Live { sections } = frame.into_geometry() else {
+            unreachable!("a new frame is live");
+        };
+        (
+            sections
+                .iter()
+                .flat_map(|s| &s.primitives)
+                .map(|p| p.items.len())
+                .sum(),
+            sections
+                .iter()
+                .flat_map(|s| &s.text)
+                .map(|t| t.items.len())
+                .sum(),
+        )
+    }
+
+    #[test]
+    fn text_past_the_glyph_cache_limit_is_primitives_and_ordinary_text_is_text() {
+        let (primitives, text) = drawn(2000.0);
+        assert!(
+            primitives > 0 && text == 0,
+            "{primitives} primitives, {text} text"
+        );
+        let (primitives, text) = drawn(16.0);
+        assert!(
+            primitives == 0 && text > 0,
+            "{primitives} primitives, {text} text"
+        );
     }
 }
