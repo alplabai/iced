@@ -23,6 +23,14 @@ Protection (repository rulesets):
 - `iced-signex-*` tags cannot be moved or deleted.
 - Organization admins can bypass these rules for emergencies only.
 
+## Upstreaming
+
+When we fix or build something here first, we offer it upstream, so the fork stays small and upstream gains the fix.
+- Write fork changes in upstream style: one concern per commit, no Signex-specific code, tests included, and no dependency on other fork-only changes where possible.
+- After a change is merged into `dev` and proven in Signex, rebase it onto upstream `master` on an `upstream-offer/<topic>` branch, and open the pull request against `iced-rs/iced`. Follow upstream's CONTRIBUTING (below), including discussing the idea with the core team first.
+- Every upstream pull request is posted publicly, so it needs a maintainer's OK (Hakan or Caner) before it is opened.
+- Track the state in `TRIAGE.md` under "Upstream watch". When upstream merges an equivalent change, drop ours at the next `master` → `dev` sync.
+
 ## Pull requests
 
 - Every fork change has an issue. Title the pull request `Issue #N: <what changes> (fixes #N)`.

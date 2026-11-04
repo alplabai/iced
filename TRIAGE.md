@@ -71,3 +71,22 @@ Statuses: fixed, already-fixed (code in this tree already handles it), not-repro
 - Widgets/layout: 3201, 1983, 1906, 2935, 2088, 1727, 1397, 1632, 1488, 2398, 2546
 - Rendering/memory: 3512, 3040, 2246, 2254, 2212, 2079, 2064, 786, 549, 2166, 897, 439, 1720 (virtualize long lists in Signex, no upstream fix), 3233, 2687, 2314
 - Examples only: 2336, 2323, 2042, 1442
+
+## Upstream watch (milestones 0.15 / 1.0 and open PRs, checked 2026-11-04)
+
+Items upstream has not shipped that matter to Signex. "Port" means bring the upstream PR into `dev` on an `upstream/<pr>-<topic>` branch. "Lead" means we build it here first, in upstream style, and offer it upstream.
+
+| Upstream | What | Why it matters to Signex | Plan |
+|---|---|---|---|
+| PR [3507](https://github.com/iced-rs/iced/pull/3507) | `Frame::with_clip` contents stay above earlier drawing in `iced_wgpu` | Same area as fork fix #18 (canvas draw order) | Compare with #18; port or keep ours, and drop the duplicate |
+| PR [3529](https://github.com/iced-rs/iced/pull/3529) | `Rectangle::chord` endpoint distance for diagonal angles | Arc and circle geometry on the canvas | Port |
+| PR [3513](https://github.com/iced-rs/iced/pull/3513) | Clear cached selection when highlighting re-shapes lines | Text editor correctness | Port when Signex uses highlighting in an editor |
+| [2546](https://github.com/iced-rs/iced/issues/2546) (1.0) | Widgets disagree on pixel-grid alignment | Signex snaps hairlines and the grid to device pixels itself (signex #1887/#1902) | Lead: a shared pixel-snap helper in `graphics` |
+| [2254](https://github.com/iced-rs/iced/issues/2254) (1.0) | Dark text on light background hard to read on non-HiDPI | Schematic sheets are light paper with dark text | Lead after measuring; gamma/contrast in the text pipeline |
+| [478](https://github.com/iced-rs/iced/issues/478) (1.0) | Calculating canvas text size | Signex measures every text for boxes and hit tests (signex #2023/#2029) | Lead: expose a canvas `Text` measure API |
+| [367](https://github.com/iced-rs/iced/issues/367) (1.0) | Damage tracking / partial present | Large-schematic redraw cost | Decide after signex #2040 measurements |
+| [1666](https://github.com/iced-rs/iced/issues/1666) (0.15) | Rounding bug in `text::Renderer::measure()` | Affects text box measurement | Reproduce first |
+| [489](https://github.com/iced-rs/iced/issues/489), [282](https://github.com/iced-rs/iced/issues/282) (1.0) | Keyboard focus/navigation, accessibility | Keyboard-driven EDA workflows | Watch |
+| [114](https://github.com/iced-rs/iced/issues/114) (1.0) | Menu bars | Signex ships its own menu bar | Watch; re-evaluate if upstream lands one |
+| [36](https://github.com/iced-rs/iced/issues/36), [156](https://github.com/iced-rs/iced/issues/156), [2139](https://github.com/iced-rs/iced/issues/2139) (1.0) | Text selection, rich text, ligatures | Text-heavy panels | Watch |
+| fork #22 | Canvas text past the atlas limit drawn as vector outlines | Done in this fork (alpha.3) | Offer upstream |
