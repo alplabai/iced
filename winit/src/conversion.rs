@@ -204,11 +204,9 @@ pub fn window_event(
                 }))
             }
         },
-        WindowEvent::PinchGesture { delta, .. } => {
-            Some(Event::Mouse(mouse::Event::PinchGesture {
-                delta: delta as f32,
-            }))
-        }
+        WindowEvent::PinchGesture { delta, .. } => Some(Event::Mouse(mouse::Event::PinchGesture {
+            delta: delta as f32,
+        })),
         WindowEvent::PanGesture {
             delta: physical_delta,
             phase: touch_phase,

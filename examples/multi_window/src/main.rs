@@ -71,7 +71,7 @@ impl Example {
                 window::position(*last_window)
                     .then(move |last_position| {
                         let mut position = last_position.unwrap_or_default();
-                        position.position = position.position + Vector::new(20.0, 20.0);
+                        position.position += Vector::new(20.0, 20.0);
                         position.monitor_index = monitor.or(position.monitor_index);
 
                         let (_, open) = window::open(window::Settings {

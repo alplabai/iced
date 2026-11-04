@@ -458,8 +458,12 @@ where
             });
 
             match (
-                theme.style(&self.class, status.with_toggled(false)).background,
-                theme.style(&self.class, status.with_toggled(true)).background,
+                theme
+                    .style(&self.class, status.with_toggled(false))
+                    .background,
+                theme
+                    .style(&self.class, status.with_toggled(true))
+                    .background,
             ) {
                 (Background::Color(off), Background::Color(on)) => {
                     Background::Color(off.mix(on, progress))
@@ -496,9 +500,7 @@ where
             let padding = (style.padding_ratio * bounds.height).round();
 
             Rectangle {
-                x: bounds.x
-                    + padding
-                    + progress * (bounds.width - bounds.height),
+                x: bounds.x + padding + progress * (bounds.width - bounds.height),
                 y: bounds.y + padding,
                 width: bounds.height - (2.0 * padding),
                 height: bounds.height - (2.0 * padding),
