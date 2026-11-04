@@ -1,7 +1,7 @@
 # Upstream iced issue triage for the Signex fork
 
 Target: large-scene wgpu canvas EDA app (Signex). Priority order: crashes, CPU/memory, rendering correctness, text/input, window management.
-Based on issue titles and prior notes only; most issue bodies were not readable. Verify each in-tree before changing code. No cargo was run.
+The ranking below is from issue titles and prior notes only (most issue bodies were not readable). See the Status section for what was done in this fork.
 
 ## Top 20 (ranked)
 
@@ -27,6 +27,33 @@ Based on issue titles and prior notes only; most issue bodies were not readable.
 | 18 | [3017](https://github.com/iced-rs/iced/issues/3017) / [1947](https://github.com/iced-rs/iced/issues/1947) | wgpu/geometry.rs, tiny_skia geometry | medium | Images always above shapes; with_clip ignores text/images | Split layers on image/mesh transitions; clip text/images in paste | E |
 | 19 | [3173](https://github.com/iced-rs/iced/issues/3173) | graphics/cache.rs, wgpu/geometry.rs | medium | Canvas cache perf regression (cause unconfirmed) | Profile Cache clear/draw for per-frame rebuilds | E |
 | 20 | [3526](https://github.com/iced-rs/iced/issues/3526) / [3440](https://github.com/iced-rs/iced/issues/3440) | widget/progress_bar.rs; Cargo.lock | small | Cosmetic fill overflow; lru security advisory | Clamp radius to min(radius, fill_w/2); cargo update -p lru | F |
+
+## Status (this fork, ranks 1-20)
+
+Statuses: fixed, already-fixed (code in this tree already handles it), not-reproducible, skipped (not attempted or deliberately left).
+
+| # | Status | Notes |
+|---|--------|-------|
+| 1 | fixed | Zero-size image guard in `wgpu/src/image/atlas.rs` and `wgpu/src/lib.rs` (Batch B). No automated test. |
+| 2 | fixed | Zero-size surface guard in `wgpu/src/window/compositor.rs` (Batch B). No automated test. |
+| 3 | skipped | No minimized/zero-size redraw skip added in winit; memory growth while minimized not investigated. |
+| 4 | skipped | Idle redraw scheduling not audited. |
+| 5 | skipped | Per-mouse-move CPU cost not profiled. |
+| 6 | skipped | Font scanning startup cost not changed. |
+| 7 | not-reproducible | Negative-sweep arc test added in `graphics/src/geometry/path/builder.rs`; it passes on the unmodified conversion. |
+| 8 | fixed | `keyed::Column::diff` reconciles children by key. Regression tests in `widget/tests/keyed_column.rs`. |
+| 9 | fixed | `keyed::Column::from_vecs` asserts equal lengths. Covered by a `#[should_panic]` test. |
+| 10 | skipped | Scrollable performance not investigated. |
+| 11 | skipped | Multi-window redraw after update not investigated. |
+| 12 | fixed | `window::Direction` hit-testing and resize cursor mapping in core, with unit tests (the winit drag-resize call is left to the application). |
+| 13 | already-fixed | Compositor already falls back to `CompositeAlphaMode::Auto` when `PreMultiplied` is unavailable at surface selection. Only read, not run. |
+| 14 | skipped | text_editor key capture not changed. |
+| 15 | fixed | Pending events (including the final `Closed`) are flushed to subscriptions before exit (Batch A). No automated test. |
+| 16 | fixed | pane_grid title bar padded width sign bug (Batch D). Covered by existing pane_grid tests only as non-regression. |
+| 17 | skipped | Thin/degenerate line geometry not changed. |
+| 18 | fixed | Canvas frame sections keep draw order and child clips across shapes, images and text in graphics, wgpu and tiny_skia. tiny_skia and graphics have unit tests; the wgpu path has no automated test and was not seen on a real GPU. |
+| 19 | skipped | Canvas cache regression not profiled. |
+| 20 | fixed | Progress bar fill radius clamped (Batch F, #3526). The lru advisory (#3440) is not addressed. |
 
 ## Batches (implement together, build once)
 

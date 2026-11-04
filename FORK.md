@@ -26,10 +26,29 @@ This branch carries upstream iced-rs/iced pull requests merged on top of the bas
 
 ## Fork fixes
 
+Numbers refer to the ranks in `TRIAGE.md`, which has the status of all 20.
+
+- #1, #2: zero-size image and surface guards (wgpu).
+- #8, #9: `keyed::Column` reconciles children by key; `from_vecs` asserts one key per child. Regression tests in `widget/tests/keyed_column.rs`.
 - #12: `window::Direction::at`/`at_with_corner` hit-testing and `Direction::interaction()` / `From<Direction> for mouse::Interaction` (core).
+- #15: pending events, including the final `Closed`, are flushed to subscriptions before exit (winit).
+- #16: pane_grid title bar padded width sign bug.
 - #18: canvas `Frame` contents are split into ordered sections so shapes, images and text keep draw order, and pasted/clipped child frames keep their own clip in tiny_skia (graphics, wgpu, tiny_skia).
+- #20: progress bar fill radius clamp.
+- #7 was not reproducible (a negative-sweep arc test was added); #13 was already handled in this tree. Other ranks were skipped.
+
 ## Verification
 
-- One `cargo check --workspace --all-targets` for the batch of #3359, #2770 and #2779 (second run after adding `Animation::force`): passes.
-- `cargo test -p iced_core`: passed (9 + 14 tests).
-- Not run: iced_widget/iced_winit tests, any GPU rendering, and the animations were never executed visually (the `animations` feature was not built or exercised).
+- `cargo check --workspace --all-targets`: passes with no warnings in the iced crates.
+- `cargo test -p iced_widget`: passes, including 4 new `keyed_column` tests (reorder keeps state by key, insert/remove, unchanged keys, `from_vecs` length-mismatch panic). By reasoning, the reorder test fails on the old positional diff, because key `c` would keep the tree created for `a`.
+- `cargo test -p iced_core`, `-p iced_graphics --features geometry`, `-p iced_tiny_skia --features geometry,image`: pass.
+- `cargo test -p iced_wgpu --features image,svg,geometry` (under xvfb with lavapipe): passes (3 nudge tests).
+- Signex builds, passes its tests and launches against alpha.1 using software Vulkan only.
+
+## Known gaps
+
+- Nothing was run or seen on a real GPU; only software Vulkan (lavapipe).
+- The wgpu side of #18 has no automated test.
+- #1, #2 and #15 have no automated tests.
+- The `animations` feature (radio and toggler) and per-side borders were never viewed rendered.
+- Not run: iced_winit tests.
