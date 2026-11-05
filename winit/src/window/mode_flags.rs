@@ -7,13 +7,13 @@ use crate::core::window;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ModeFlags {
     maximized: bool,
-    minimized: bool,
+    minimized: Option<bool>,
     fullscreen: bool,
 }
 
 impl ModeFlags {
     /// Creates [`ModeFlags`] from the given flags.
-    pub fn new(maximized: bool, minimized: bool, fullscreen: bool) -> Self {
+    pub fn new(maximized: bool, minimized: Option<bool>, fullscreen: bool) -> Self {
         Self {
             maximized,
             minimized,
@@ -22,12 +22,25 @@ impl ModeFlags {
     }
 
     /// Reads the current [`ModeFlags`] of a [`winit::window::Window`].
-    pub fn read(window: &winit::window::Window) -> Self {
+    ///
+    /// `maximized_hint` is used instead of asking the window for undecorated
+    /// windows on macOS, where `is_maximized` temporarily changes the window's
+    /// style mask and can feed back into new `Resized` events.
+    pub fn read(window: &winit::window::Window, maximized_hint: bool) -> Self {
         Self::new(
-            window.is_maximized(),
-            window.is_minimized().unwrap_or(false),
+            if Self::reads_maximized(window) {
+                window.is_maximized()
+            } else {
+                maximized_hint
+            },
+            window.is_minimized(),
             window.fullscreen().is_some(),
         )
+    }
+
+    /// Whether `is_maximized` can be called on the window without side effects.
+    pub fn reads_maximized(window: &winit::window::Window) -> bool {
+        !cfg!(target_os = "macos") || window.is_decorated()
     }
 
     /// Stores the `current` flags and returns a [`window::Event::ModeChanged`]
@@ -51,7 +64,11 @@ impl ModeFlags {
 mod tests {
     use super::*;
 
-    fn changed(maximized: bool, minimized: bool, fullscreen: bool) -> Option<window::Event> {
+    fn changed(
+        maximized: bool,
+        minimized: Option<bool>,
+        fullscreen: bool,
+    ) -> Option<window::Event> {
         Some(window::Event::ModeChanged {
             maximized,
             minimized,
@@ -65,8 +82,8 @@ mod tests {
 
         assert_eq!(flags.update(ModeFlags::default()), None);
 
-        let mut flags = ModeFlags::new(true, false, false);
-        assert_eq!(flags.update(ModeFlags::new(true, false, false)), None);
+        let mut flags = ModeFlags::new(true, Some(false), false);
+        assert_eq!(flags.update(ModeFlags::new(true, Some(false), false)), None);
     }
 
     #[test]
@@ -74,26 +91,26 @@ mod tests {
         let mut flags = ModeFlags::default();
 
         assert_eq!(
-            flags.update(ModeFlags::new(true, false, false)),
-            changed(true, false, false)
+            flags.update(ModeFlags::new(true, Some(false), false)),
+            changed(true, Some(false), false)
         );
         assert_eq!(
-            flags.update(ModeFlags::new(false, false, false)),
-            changed(false, false, false)
+            flags.update(ModeFlags::new(false, Some(false), false)),
+            changed(false, Some(false), false)
         );
     }
 
     #[test]
     fn minimize_and_restore() {
-        let mut flags = ModeFlags::new(true, false, false);
+        let mut flags = ModeFlags::new(true, Some(false), false);
 
         assert_eq!(
-            flags.update(ModeFlags::new(true, true, false)),
-            changed(true, true, false)
+            flags.update(ModeFlags::new(true, Some(true), false)),
+            changed(true, Some(true), false)
         );
         assert_eq!(
-            flags.update(ModeFlags::new(true, false, false)),
-            changed(true, false, false)
+            flags.update(ModeFlags::new(true, Some(false), false)),
+            changed(true, Some(false), false)
         );
     }
 
@@ -102,22 +119,37 @@ mod tests {
         let mut flags = ModeFlags::default();
 
         assert_eq!(
-            flags.update(ModeFlags::new(false, false, true)),
-            changed(false, false, true)
+            flags.update(ModeFlags::new(false, Some(false), true)),
+            changed(false, Some(false), true)
         );
         assert_eq!(
-            flags.update(ModeFlags::new(false, false, false)),
-            changed(false, false, false)
+            flags.update(ModeFlags::new(false, Some(false), false)),
+            changed(false, Some(false), false)
         );
     }
 
     #[test]
     fn repeated_reads_emit_once() {
         let mut flags = ModeFlags::default();
-        let maximized = ModeFlags::new(true, false, false);
+        let maximized = ModeFlags::new(true, Some(false), false);
 
         assert!(flags.update(maximized).is_some());
         assert_eq!(flags.update(maximized), None);
         assert_eq!(flags.update(maximized), None);
+    }
+
+    #[test]
+    fn unknown_minimized_is_not_not_minimized() {
+        let mut flags = ModeFlags::new(false, None, false);
+
+        assert_eq!(flags.update(ModeFlags::new(false, None, false)), None);
+        assert_eq!(
+            flags.update(ModeFlags::new(false, Some(false), false)),
+            changed(false, Some(false), false)
+        );
+        assert_eq!(
+            flags.update(ModeFlags::new(false, None, false)),
+            changed(false, None, false)
+        );
     }
 }

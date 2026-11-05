@@ -37,17 +37,30 @@ pub enum Event {
     ///
     /// It is emitted once per change, whether the change was requested by the
     /// application, by the user or by the window manager, and carries the
-    /// state after the change. Plain resizes and moves do not emit it.
+    /// state after the change. Plain resizes and moves do not emit it. The
+    /// flags are read at most once per event loop pass, after the window was
+    /// resized, occluded or its focus changed, or after a maximize, minimize,
+    /// toggle-maximize or mode action.
     ///
     /// ## Platform-specific
     ///
-    /// - **macOS:** `fullscreen` changes once the transition animation ends.
-    /// - **Wayland:** `maximized` changes once the compositor acknowledges it.
+    /// - **macOS / X11:** `fullscreen` reports the requested state, so it
+    ///   flips when the transition starts, not when it ends.
+    /// - **macOS:** for undecorated windows `maximized` follows only the
+    ///   maximize actions, not changes made by the user or window manager.
+    /// - **X11:** minimizing may not produce a window event of its own, so
+    ///   it is detected through the focus change that usually accompanies it.
+    /// - **Wayland:** `minimized` is always `None`, and `maximized` changes
+    ///   once the compositor acknowledges it.
+    /// - **Windows:** maximize requests are applied asynchronously, so
+    ///   `maximized` changes with the `Resized` that follows the request.
+    /// - **Web:** `minimized` is `None`.
     ModeChanged {
         /// Whether the window is maximized.
         maximized: bool,
-        /// Whether the window is minimized.
-        minimized: bool,
+        /// Whether the window is minimized, or `None` if the platform
+        /// cannot tell.
+        minimized: Option<bool>,
         /// Whether the window is fullscreen.
         fullscreen: bool,
     },

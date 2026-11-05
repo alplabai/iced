@@ -26,6 +26,8 @@ where
     default_theme: P::Theme,
     style: theme::Style,
     mode_flags: ModeFlags,
+    maximized_hint: bool,
+    mode_dirty: bool,
 }
 
 impl<P: Program> Debug for State<P>
@@ -82,14 +84,49 @@ where
             theme_mode,
             default_theme,
             style,
-            mode_flags: ModeFlags::read(window),
+            mode_flags: ModeFlags::read(window, false),
+            maximized_hint: ModeFlags::reads_maximized(window) && window.is_maximized(),
+            mode_dirty: false,
         }
     }
 
-    /// Reads the mode flags of the `window` and returns a
-    /// [`window::Event::ModeChanged`] if they changed since the last call.
+    /// Marks the mode flags as possibly changed, so that the next
+    /// [`State::poll_mode_change`] reads them.
+    pub fn mark_mode_dirty(&mut self) {
+        self.mode_dirty = true;
+    }
+
+    /// Whether the mode flags have to be read.
+    pub fn is_mode_dirty(&self) -> bool {
+        self.mode_dirty
+    }
+
+    /// Records the maximized state requested by the application, for the
+    /// windows whose flag cannot be read safely (see [`ModeFlags::read`]).
+    pub fn set_maximized_hint(&mut self, maximized: bool) {
+        self.maximized_hint = maximized;
+        self.mode_dirty = true;
+    }
+
+    /// Returns whether the `window` is maximized without the side effects
+    /// of reading it on undecorated macOS windows.
+    pub fn is_maximized(&self, window: &Window) -> bool {
+        if ModeFlags::reads_maximized(window) {
+            window.is_maximized()
+        } else {
+            self.maximized_hint
+        }
+    }
+
+    /// If the mode flags were marked dirty, reads them and returns a
+    /// [`window::Event::ModeChanged`] if they changed since the last read.
     pub fn poll_mode_change(&mut self, window: &Window) -> Option<window::Event> {
-        self.mode_flags.update(ModeFlags::read(window))
+        if !std::mem::take(&mut self.mode_dirty) {
+            return None;
+        }
+
+        self.mode_flags
+            .update(ModeFlags::read(window, self.maximized_hint))
     }
 
     pub fn viewport(&self) -> &Viewport {
