@@ -15,6 +15,31 @@ use crate::core::touch;
 use crate::core::window;
 use crate::core::{Event, Point, Size};
 
+/// Makes `parent` the owner of the window described by `attributes`.
+///
+/// Does nothing when there is no parent, when the parent has no usable
+/// native handle, or on platforms without an owner relation.
+pub fn with_parent(
+    attributes: winit::window::WindowAttributes,
+    parent: Option<&winit::window::Window>,
+) -> winit::window::WindowAttributes {
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(parent) = parent {
+        use winit::raw_window_handle::HasWindowHandle;
+
+        if let Ok(handle) = parent.window_handle() {
+            // SAFETY: the handle comes from a live `winit` window that the
+            // caller keeps alive (it holds an `Arc`) until the child exists.
+            #[allow(unsafe_code)]
+            return unsafe { attributes.with_parent_window(Some(handle.as_raw())) };
+        }
+    }
+
+    let _ = parent;
+
+    attributes
+}
+
 /// Converts some [`window::Settings`] into some `WindowAttributes` from `winit`.
 pub fn window_attributes(
     settings: window::Settings,

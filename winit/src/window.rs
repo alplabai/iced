@@ -33,6 +33,38 @@ where
 {
     aliases: BTreeMap<winit::window::WindowId, Id>,
     entries: BTreeMap<Id, Window<P, C>>,
+    family: Family,
+}
+
+/// The owner relation between windows.
+#[derive(Debug, Default)]
+struct Family {
+    parents: BTreeMap<Id, Id>,
+}
+
+impl Family {
+    fn set_parent(&mut self, id: Id, parent: Id) {
+        let _ = self.parents.insert(id, parent);
+    }
+
+    fn forget(&mut self, id: Id) {
+        let _ = self.parents.remove(&id);
+    }
+
+    /// Returns every window owned by `id`, directly or not, children
+    /// before their own parents.
+    fn descendants(&self, id: Id) -> Vec<Id> {
+        let mut result = Vec::new();
+
+        for (&child, &parent) in &self.parents {
+            if parent == id {
+                result.extend(self.descendants(child));
+                result.push(child);
+            }
+        }
+
+        result
+    }
 }
 
 impl<P, C> Manager<P, C>
@@ -45,7 +77,18 @@ where
         Self {
             aliases: BTreeMap::new(),
             entries: BTreeMap::new(),
+            family: Family::default(),
         }
+    }
+
+    /// Records that `parent` owns the window `id`.
+    pub fn set_parent(&mut self, id: Id, parent: Id) {
+        self.family.set_parent(id, parent);
+    }
+
+    /// Returns the windows owned by `id`, directly or not, children first.
+    pub fn descendants(&self, id: Id) -> Vec<Id> {
+        self.family.descendants(id)
     }
 
     pub fn insert(
@@ -153,6 +196,8 @@ where
     }
 
     pub fn remove(&mut self, id: Id) -> Option<Window<P, C>> {
+        self.family.forget(id);
+
         let window = self.entries.remove(&id)?;
         let _ = self.aliases.remove(&window.raw.id());
 
@@ -537,5 +582,35 @@ where
                 );
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Family, Id};
+
+    #[test]
+    fn descendants_are_children_first_and_exclude_unrelated_windows() {
+        let (root, child, grandchild, other) =
+            (Id::unique(), Id::unique(), Id::unique(), Id::unique());
+
+        let mut family = Family::default();
+        family.set_parent(child, root);
+        family.set_parent(grandchild, child);
+
+        assert_eq!(family.descendants(root), [grandchild, child]);
+        assert_eq!(family.descendants(child), [grandchild]);
+        assert!(family.descendants(other).is_empty());
+    }
+
+    #[test]
+    fn forgotten_windows_are_no_longer_descendants() {
+        let (root, child) = (Id::unique(), Id::unique());
+
+        let mut family = Family::default();
+        family.set_parent(child, root);
+        family.forget(child);
+
+        assert!(family.descendants(root).is_empty());
     }
 }
