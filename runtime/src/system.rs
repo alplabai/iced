@@ -159,3 +159,23 @@ impl subscription::Recipe for QuitRequests {
 pub fn cancel_quit<T>() -> Task<T> {
     task::effect(crate::Action::System(Action::CancelQuit))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quit_listener_counts_only_while_alive() {
+        // The counter is process-wide; other tests do not create listeners.
+        let before = QUIT_LISTENERS.load(atomic::Ordering::SeqCst);
+
+        let first = QuitListener::new();
+        let second = QuitListener::new();
+        assert!(has_quit_listener());
+        assert_eq!(QUIT_LISTENERS.load(atomic::Ordering::SeqCst), before + 2);
+
+        drop(first);
+        drop(second);
+        assert_eq!(QUIT_LISTENERS.load(atomic::Ordering::SeqCst), before);
+    }
+}

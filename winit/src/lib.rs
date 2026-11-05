@@ -476,6 +476,9 @@ where
                                 self.answer_quit(event_loop, answer);
                             }
                             Control::Crash(error) => {
+                                // With a quit request pending, AppKit may end the process
+                                // before `run` returns the error, so log it here too.
+                                log::error!("{error}");
                                 self.error = Some(error);
                                 self.exit(event_loop);
                             }
