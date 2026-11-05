@@ -49,6 +49,7 @@ iced_highlighter.optional = true
 
 [dev-dependencies]
 iced_test.workspace = true
+png.workspace = true
 
 iced_renderer.workspace = true
 iced_renderer.features = ["tiny-skia", "x11", "wayland"]

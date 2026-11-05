@@ -209,10 +209,9 @@ where
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 struct State {
     is_pressed: bool,
+    /// Whether the button has keyboard (or operation) focus. A pointer press
+    /// never focuses a button.
     is_focused: bool,
-    /// Whether the focus came from the keyboard (or an operation) rather than
-    /// a pointer press. Only then is the focus ring drawn.
-    focus_visible: bool,
 }
 
 impl Focusable for State {
@@ -222,12 +221,10 @@ impl Focusable for State {
 
     fn focus(&mut self) {
         self.is_focused = true;
-        self.focus_visible = true;
     }
 
     fn unfocus(&mut self) {
         self.is_focused = false;
-        self.focus_visible = false;
     }
 }
 
@@ -325,6 +322,21 @@ where
             viewport,
         );
 
+        // A press anywhere else removes the focus. This runs before the
+        // captured-event return so that a press captured by an earlier sibling
+        // still unfocuses the button.
+        if let Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
+        | Event::Touch(touch::Event::FingerPressed { .. }) = event
+            && !cursor.is_over(layout.bounds())
+        {
+            let state = tree.state.downcast_mut::<State>();
+
+            if state.is_focused {
+                state.unfocus();
+                shell.request_redraw();
+            }
+        }
+
         if shell.is_event_captured() {
             return;
         }
@@ -336,17 +348,12 @@ where
             {
                 let bounds = layout.bounds();
 
-                let state = tree.state.downcast_mut::<State>();
-
                 if cursor.is_over(bounds) {
+                    let state = tree.state.downcast_mut::<State>();
+
                     state.is_pressed = true;
-                    state.is_focused = true;
-                    // Pointer focus does not show the focus ring.
-                    state.focus_visible = false;
 
                     shell.capture_event();
-                } else {
-                    state.unfocus();
                 }
             }
             Event::Keyboard(keyboard::Event::KeyPressed {
@@ -357,8 +364,6 @@ where
                 let state = tree.state.downcast_mut::<State>();
 
                 if state.is_focused {
-                    state.focus_visible = true;
-
                     if let Some(on_press) = &self.on_press {
                         shell.publish(on_press.get());
                     }
@@ -391,7 +396,12 @@ where
         }
 
         if self.on_press.is_none() {
-            tree.state.downcast_mut::<State>().unfocus();
+            let state = tree.state.downcast_mut::<State>();
+
+            if state.is_focused {
+                state.unfocus();
+                shell.request_redraw();
+            }
         }
 
         let current_status = if self.on_press.is_none() {
@@ -426,11 +436,7 @@ where
         viewport: &Rectangle,
     ) {
         let bounds = layout.bounds();
-        let focus_visible = {
-            let state = tree.state.downcast_ref::<State>();
-
-            state.is_focused && state.focus_visible
-        };
+        let is_focused = tree.state.downcast_ref::<State>().is_focused;
         let (layout, tree) = layout.iter(&tree.children).next().unwrap();
         let style = theme.style(&self.class, self.status.unwrap_or(Status::Disabled));
 
@@ -445,21 +451,6 @@ where
                 style
                     .background
                     .unwrap_or(Background::Color(Color::TRANSPARENT)),
-            );
-        }
-
-        if focus_visible && let Some(ring) = style.focus_ring {
-            renderer.fill_quad(
-                renderer::Quad {
-                    bounds: bounds.expand(ring.width),
-                    border: Border {
-                        radius: ring.radius,
-                        ..ring
-                    },
-                    shadow: Shadow::default(),
-                    snap: style.snap,
-                },
-                Background::Color(Color::TRANSPARENT),
             );
         }
 
@@ -480,6 +471,20 @@ where
             cursor,
             &viewport,
         );
+
+        // The ring is drawn inside the bounds, over the content, so that it
+        // never depends on space outside the layout (parent clips, siblings).
+        if is_focused && let Some(ring) = style.focus_ring {
+            renderer.fill_quad(
+                renderer::Quad {
+                    bounds,
+                    border: ring,
+                    shadow: Shadow::default(),
+                    snap: style.snap,
+                },
+                Background::Color(Color::TRANSPARENT),
+            );
+        }
     }
 
     fn mouse_interaction(
@@ -552,10 +557,11 @@ pub struct Style {
     pub shadow: Shadow,
     /// Whether the button should be snapped to the pixel grid.
     pub snap: bool,
-    /// The [`Border`] drawn just outside the button while it has keyboard
-    /// focus, if any.
+    /// The [`Border`] drawn inside the button bounds, over its content, while
+    /// it has keyboard (or operation) focus, if any.
     ///
-    /// It is not shown after the button was focused with the pointer.
+    /// Its color should contrast with the button background. A pointer press
+    /// never focuses a button.
     pub focus_ring: Option<Border>,
 }
 
@@ -736,6 +742,11 @@ pub fn text(theme: &Theme, status: Status) -> Style {
 
     let base = Style {
         text_color: palette.background.base.text,
+        focus_ring: Some(
+            border::rounded(2)
+                .color(palette.background.base.text)
+                .width(2),
+        ),
         ..Style::default()
     };
 
@@ -792,7 +803,7 @@ fn styled(pair: palette::Pair) -> Style {
         background: Some(Background::Color(pair.color)),
         text_color: pair.text,
         border: border::rounded(2),
-        focus_ring: Some(border::rounded(4).color(pair.text).width(2)),
+        focus_ring: Some(border::rounded(2).color(pair.text).width(2)),
         ..Style::default()
     }
 }

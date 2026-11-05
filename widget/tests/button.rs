@@ -4,13 +4,14 @@ use iced_widget::core::keyboard::{self, key::Named};
 use iced_widget::core::widget::Operation;
 use iced_widget::core::widget::operation::{self, focusable};
 use iced_widget::core::{Event, Point, mouse};
-use iced_widget::{Theme, button, column, text};
+use iced_widget::{Theme, button, column, text, text_input};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Message {
     First,
     Disabled,
     Last,
+    Typed,
 }
 
 fn dialog<'a>() -> Simulator<'a, Message> {
@@ -118,43 +119,113 @@ fn pressing_outside_unfocuses() {
     assert_eq!(focused(&mut simulator).focused, None);
 }
 
-/// The focus ring is drawn after keyboard focus, but not after a click.
+/// A press captured by an earlier sibling still unfocuses the button.
 #[test]
-fn focus_ring_is_shown_for_keyboard_focus_only() {
-    let reference = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("button_focus_ring.png");
-    let _ = std::fs::remove_file(&reference);
+fn press_captured_by_a_sibling_unfocuses() {
+    let mut simulator = Simulator::new(column![
+        text_input("", "").on_input(|_| Message::Typed),
+        button(text("only")).on_press(Message::First),
+    ]);
+
+    run(&mut simulator, focusable::focus_next::<()>());
+    run(&mut simulator, focusable::focus_next::<()>());
+    assert_eq!(focused(&mut simulator).total, 2);
+    // Focus the button (second focusable), then click the text input.
+    assert_eq!(focused(&mut simulator).focused, Some(1));
+
+    simulator.point_at(Point::new(5.0, 5.0));
+    let statuses = simulator.simulate([Event::Mouse(mouse::Event::ButtonPressed(
+        mouse::Button::Left,
+    ))]);
+    assert_eq!(statuses, [iced_widget::core::event::Status::Captured]);
+
+    assert_ne!(focused(&mut simulator).focused, Some(1));
+    let _ = simulator.simulate([key(Named::Enter)]);
+    assert!(!simulator.drain().any(|message| message == Message::First));
+}
+
+/// A click does not arm Enter and Space for the button.
+#[test]
+fn click_does_not_focus_the_button() {
+    let mut simulator = dialog();
+
+    simulator.point_at(Point::new(5.0, 5.0));
+    let _ = simulator.simulate([
+        Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+        Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+    ]);
+    assert_eq!(simulator.drain().collect::<Vec<_>>(), [Message::First]);
+    assert_eq!(focused(&mut simulator).focused, None);
+
+    let statuses = simulator.simulate([key(Named::Space), key(Named::Enter)]);
+    assert_eq!(statuses, [iced_widget::core::event::Status::Ignored; 2]);
+    assert_eq!(simulator.drain().count(), 0);
+}
+
+/// The focus ring is drawn inside the button, with a color that contrasts
+/// with the button background, and only after keyboard focus.
+#[test]
+fn focus_ring_is_drawn_inside_the_button() {
+    let directory = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"));
     let theme = Theme::Light;
 
+    let render = |simulator: &mut Simulator<'_, Message>, name: &str| {
+        let path = directory.join(format!("{name}.png"));
+        let _ = std::fs::remove_file(directory.join(format!("{name}-tiny-skia.png")));
+
+        let _ = simulator.snapshot(&theme).unwrap().matches_image(&path).unwrap();
+
+        let file = std::fs::File::open(directory.join(format!("{name}-tiny-skia.png"))).unwrap();
+        let mut reader = png::Decoder::new(std::io::BufReader::new(file))
+            .read_info()
+            .unwrap();
+        let mut bytes = vec![0; reader.output_buffer_size().unwrap()];
+        let info = reader.next_frame(&mut bytes).unwrap();
+
+        (info.width as usize, bytes)
+    };
+
+    // Snapshots are rendered at 2x: the 2px ring covers the outer 4 pixels.
+    let pixel = |(width, bytes): &(usize, Vec<u8>), x: usize, y: usize| {
+        let i = (y * width + x) * 4;
+        [bytes[i], bytes[i + 1], bytes[i + 2]]
+    };
+    let brightness = |p: [u8; 3]| p.iter().map(|c| i32::from(*c)).sum::<i32>();
+
+    let mut plain = dialog();
+    let plain = render(&mut plain, "button_ring_plain");
+
     let mut keyboard = dialog();
-    let _ = keyboard.snapshot(&theme).unwrap().matches_image(&reference);
     next(&mut keyboard);
-    assert!(
-        !keyboard
-            .snapshot(&theme)
-            .unwrap()
-            .matches_image(&reference)
-            .unwrap(),
-        "keyboard focus should draw a ring"
-    );
+    let keyboard = render(&mut keyboard, "button_ring_keyboard");
 
     let mut pointer = dialog();
     pointer.point_at(Point::new(5.0, 5.0));
-    let _ = pointer.simulate([Event::Mouse(mouse::Event::ButtonPressed(
-        mouse::Button::Left,
-    ))]);
-    let _ = pointer.simulate([Event::Mouse(mouse::Event::ButtonReleased(
-        mouse::Button::Left,
-    ))]);
+    let _ = pointer.simulate([
+        Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+        Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+    ]);
     pointer.point_at(Point::new(-100.0, -100.0));
-    assert_eq!(focused(&mut pointer).focused, Some(0));
+    let pointer = render(&mut pointer, "button_ring_pointer");
+
+    // The middle of the top edge of the first button.
+    let x = 30;
+    let fill = pixel(&plain, x, 1);
+
+    assert_ne!(fill, [255, 255, 255], "the button is filled");
+    assert_eq!(pixel(&pointer, x, 1), fill, "no ring after a click");
     assert!(
-        pointer
-            .snapshot(&theme)
-            .unwrap()
-            .matches_image(&reference)
-            .unwrap(),
-        "pointer focus should not draw a ring"
+        (brightness(pixel(&keyboard, x, 1)) - brightness(fill)).abs() > 150,
+        "the ring contrasts with the button fill: {:?} vs {fill:?}",
+        pixel(&keyboard, x, 1)
+    );
+    assert_eq!(
+        pixel(&keyboard, x, 8),
+        pixel(&plain, x, 8),
+        "the ring does not reach past its width"
     );
 
-    let _ = std::fs::remove_file(&reference);
+    for name in ["plain", "keyboard", "pointer"] {
+        let _ = std::fs::remove_file(directory.join(format!("button_ring_{name}-tiny-skia.png")));
+    }
 }
