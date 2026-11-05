@@ -10,7 +10,9 @@ use muda::accelerator::Accelerator;
 use muda::{CheckMenuItem, MenuItem, PredefinedMenuItem, Submenu};
 use rustc_hash::FxHashMap;
 
-use std::sync::{Arc, Mutex};
+// A poisoned lock still holds a usable map; panicking inside an AppKit
+// callback would abort the process instead.
+use std::sync::{Arc, Mutex, PoisonError};
 
 /// The messages of the live rows plus the proxy that delivers them; shared
 /// with the `muda` event handler.
@@ -58,7 +60,11 @@ impl<Message: Send + 'static> Native<Message> {
                 installed.menu.remove_for_nsapp();
             }
             if let Some(router) = &self.router {
-                router.lock().expect("menu router poisoned").actions.clear();
+                router
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .actions
+                    .clear();
             }
             return;
         };
@@ -71,7 +77,7 @@ impl<Message: Send + 'static> Native<Message> {
 
         self.router(proxy)
             .lock()
-            .expect("menu router poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .actions = actions;
 
         let is_same = self
@@ -111,7 +117,7 @@ impl<Message: Send + 'static> Native<Message> {
 
             let handler = router.clone();
             muda::MenuEvent::set_event_handler(Some(move |event: muda::MenuEvent| {
-                let mut router = handler.lock().expect("menu router poisoned");
+                let mut router = handler.lock().unwrap_or_else(PoisonError::into_inner);
 
                 // Taken, not cloned: a second click before the next update
                 // (which refreshes the map) cannot send a stale message.

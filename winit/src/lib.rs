@@ -268,6 +268,13 @@ where
         fn terminate_requested(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
             self.is_quit_pending = true;
 
+            // Already shutting down: nobody would see the request, and macOS waits for an
+            // answer, so let it terminate.
+            if event_loop.exiting() {
+                self.reply_to_quit(event_loop, true);
+                return;
+            }
+
             self.process_event(
                 event_loop,
                 Event::EventLoopAwakened(winit::event::Event::PlatformSpecific(
@@ -448,13 +455,13 @@ where
                             }
                             Control::Exit => {
                                 self.process_event(event_loop, Event::Exit);
+                                event_loop.exit();
 
+                                // macOS is also waiting on a quit request: answer yes, or a
+                                // logout would stay blocked. Whichever ends the process first,
+                                // the stopped loop or AppKit's terminate, the app quits.
                                 if self.is_quit_pending {
-                                    // macOS is waiting to terminate; let it, so a logout
-                                    // goes on instead of being cancelled.
                                     self.reply_to_quit(event_loop, true);
-                                } else {
-                                    event_loop.exit();
                                 }
                                 break;
                             }

@@ -250,7 +250,7 @@ web-sys = "0.3.104"
 web-time = "1.1"
 wgpu = { version = "30", default-features = false, features = ["std", "wgsl"] }
 # alplabai/winit `iced-signex`: iced-rs/winit 48116469 + cancellable macOS terminate requests (#37).
-winit = { git = "https://github.com/alplabai/winit.git", rev = "346d8f09746d16422542f43f8bd3b517ea7f65c6", default-features = false, features = ["rwh_06"] }
+winit = { git = "https://github.com/alplabai/winit.git", rev = "d18f63827e52bb23ebdce17ea94b8d31307a6f3b", default-features = false, features = ["rwh_06"] }
 
 [workspace.lints.rust]
 rust_2018_idioms = { level = "deny", priority = -1 }

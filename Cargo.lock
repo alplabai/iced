@@ -1336,7 +1336,7 @@ dependencies = [
 [[package]]
 name = "dpi"
 version = "0.1.1"
-source = "git+https://github.com/alplabai/winit.git?rev=346d8f09746d16422542f43f8bd3b517ea7f65c6#346d8f09746d16422542f43f8bd3b517ea7f65c6"
+source = "git+https://github.com/alplabai/winit.git?rev=d18f63827e52bb23ebdce17ea94b8d31307a6f3b#d18f63827e52bb23ebdce17ea94b8d31307a6f3b"
 
 [[package]]
 name = "dpi"
@@ -6970,7 +6970,7 @@ checksum = "d6bbff5f0aada427a1e5a6da5f1f98158182f26556f345ac9e04d36d0ebed650"
 [[package]]
 name = "winit"
 version = "0.30.13"
-source = "git+https://github.com/alplabai/winit.git?rev=346d8f09746d16422542f43f8bd3b517ea7f65c6#346d8f09746d16422542f43f8bd3b517ea7f65c6"
+source = "git+https://github.com/alplabai/winit.git?rev=d18f63827e52bb23ebdce17ea94b8d31307a6f3b#d18f63827e52bb23ebdce17ea94b8d31307a6f3b"
 dependencies = [
  "ahash",
  "android-activity",
