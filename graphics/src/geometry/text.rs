@@ -74,10 +74,16 @@ pub const MAX_ATLAS_TEXT_SIZE: f32 = 1024.0;
 // the atlas needs the text routed per glyph; revisit with per-glyph routing.
 const MAX_BITMAP_FALLBACK_SIZE: f32 = 128.0;
 
-/// The most entries either map of the shared swash cache may hold before it is
-/// emptied; both maps would otherwise grow with every glyph and size ever
-/// drawn as outlines.
+/// The most entries the outline map of the shared swash cache may hold before
+/// it is emptied; it would otherwise grow with every glyph and size ever drawn
+/// as outlines.
 const MAX_SWASH_CACHE_ENTRIES: usize = 16 * 1024;
+
+/// The most entries the image map of the shared swash cache may hold before it
+/// is emptied. Only outline-less (bitmap) glyphs reach it, and each entry can
+/// take up to `MAX_BITMAP_FALLBACK_SIZE`² × 4 bytes, so it gets a much lower
+/// limit than the outline map.
+const MAX_SWASH_IMAGE_ENTRIES: usize = 256;
 
 thread_local! {
     static SWASH_CACHE: std::cell::Cell<Option<cosmic_text::SwashCache>> =
@@ -96,12 +102,14 @@ impl SharedSwashCache {
             .with(std::cell::Cell::take)
             .unwrap_or_else(cosmic_text::SwashCache::new);
 
+        // Replace the maps rather than `clear` them, so the memory of their
+        // hash tables is released too.
         if cache.outline_command_cache.len() > MAX_SWASH_CACHE_ENTRIES {
-            cache.outline_command_cache.clear();
+            cache.outline_command_cache = std::collections::HashMap::default();
         }
 
-        if cache.image_cache.len() > MAX_SWASH_CACHE_ENTRIES {
-            cache.image_cache.clear();
+        if cache.image_cache.len() > MAX_SWASH_IMAGE_ENTRIES {
+            cache.image_cache = std::collections::HashMap::default();
         }
 
         Self(Some(cache))
@@ -192,8 +200,15 @@ impl Text {
                 let start_y = translation_y + glyph.y_offset + run.line_y;
                 let offset = Vector::new(start_x, start_y);
 
+                // Outlines do not depend on the subpixel position (it is
+                // applied through `offset`), so they are cached without it.
+                // The raster fallback below needs the bins and keeps them.
+                let mut outline_key = physical_glyph.cache_key;
+                outline_key.x_bin = cosmic_text::SubpixelBin::Zero;
+                outline_key.y_bin = cosmic_text::SubpixelBin::Zero;
+
                 if let Some(commands) =
-                    swash_cache.get_outline_commands(font_system.raw(), physical_glyph.cache_key)
+                    swash_cache.get_outline_commands(font_system.raw(), outline_key)
                 {
                     let glyph = Path::new(|path| {
                         use cosmic_text::Command;
@@ -377,6 +392,23 @@ mod tests {
         assert_eq!(outline_entries(), after_first);
     }
 
+    /// The same glyph at different subpixel positions shares one outline.
+    ///
+    /// The bins come from the glyph's position inside the layout, so a label
+    /// repeating one glyph at fractional advances would otherwise store it once
+    /// per bin.
+    #[test]
+    fn outlines_are_shared_across_subpixel_positions() {
+        let label = Text {
+            content: "lllllllllllllllllllllllllllllllllllllllllll".into(),
+            ..text(13.3)
+        };
+
+        label.draw_with(|_, _| ());
+
+        assert_eq!(outline_entries(), 1);
+    }
+
     /// The shared cache is emptied once it passes its entry limit.
     #[test]
     fn the_swash_cache_is_bounded() {
@@ -400,5 +432,29 @@ mod tests {
         drop(cache);
 
         assert_eq!(outline_entries(), 0);
+    }
+
+    /// The image map has its own, much smaller limit.
+    #[test]
+    fn the_swash_image_cache_is_bounded() {
+        let mut cache = SharedSwashCache::take();
+        let key = cosmic_text::CacheKey::new(
+            cosmic_text::fontdb::ID::dummy(),
+            0,
+            16.0,
+            (0.0, 0.0),
+            cosmic_text::Weight::NORMAL,
+            cosmic_text::CacheKeyFlags::empty(),
+        )
+        .0;
+
+        for i in 0..=MAX_SWASH_IMAGE_ENTRIES {
+            let mut key = key;
+            key.glyph_id = i as u16;
+            let _ = cache.image_cache.insert(key, None);
+        }
+        drop(cache);
+
+        assert_eq!(SharedSwashCache::take().image_cache.len(), 0);
     }
 }
