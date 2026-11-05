@@ -17,12 +17,14 @@
 //! }
 //! ```
 use crate::core::border::{self, Border};
+use crate::core::keyboard;
 use crate::core::layout;
 use crate::core::mouse;
 use crate::core::overlay;
 use crate::core::renderer;
 use crate::core::theme::palette;
 use crate::core::touch;
+use crate::core::widget::operation::Focusable;
 use crate::core::widget::tree::{self, Tree};
 use crate::core::widget::{Meta, Operation};
 use crate::core::window;
@@ -207,6 +209,26 @@ where
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 struct State {
     is_pressed: bool,
+    is_focused: bool,
+    /// Whether the focus came from the keyboard (or an operation) rather than
+    /// a pointer press. Only then is the focus ring drawn.
+    focus_visible: bool,
+}
+
+impl Focusable for State {
+    fn is_focused(&self) -> bool {
+        self.is_focused
+    }
+
+    fn focus(&mut self) {
+        self.is_focused = true;
+        self.focus_visible = true;
+    }
+
+    fn unfocus(&mut self) {
+        self.is_focused = false;
+        self.focus_visible = false;
+    }
 }
 
 impl<'a, Message, W, Theme> Meta for Button<'a, Message, W, Theme> where Theme: Catalog {}
@@ -265,6 +287,13 @@ where
         renderer: &Renderer,
         operation: &mut dyn Operation,
     ) {
+        // A button without a press handler is disabled and cannot be focused.
+        if self.on_press.is_some() {
+            let state = tree.state.downcast_mut::<State>();
+
+            operation.focusable(None, layout.bounds(), state);
+        }
+
         operation.container(None, layout.bounds(), viewport);
         operation.traverse(&mut |operation| {
             let (layout, tree) = layout.iter_mut(&mut tree.children).next().unwrap();
@@ -307,10 +336,32 @@ where
             {
                 let bounds = layout.bounds();
 
-                if cursor.is_over(bounds) {
-                    let state = tree.state.downcast_mut::<State>();
+                let state = tree.state.downcast_mut::<State>();
 
+                if cursor.is_over(bounds) {
                     state.is_pressed = true;
+                    state.is_focused = true;
+                    // Pointer focus does not show the focus ring.
+                    state.focus_visible = false;
+
+                    shell.capture_event();
+                } else {
+                    state.unfocus();
+                }
+            }
+            Event::Keyboard(keyboard::Event::KeyPressed {
+                key: keyboard::Key::Named(keyboard::key::Named::Enter | keyboard::key::Named::Space),
+                repeat: false,
+                ..
+            }) if self.on_press.is_some() => {
+                let state = tree.state.downcast_mut::<State>();
+
+                if state.is_focused {
+                    state.focus_visible = true;
+
+                    if let Some(on_press) = &self.on_press {
+                        shell.publish(on_press.get());
+                    }
 
                     shell.capture_event();
                 }
@@ -337,6 +388,10 @@ where
                 state.is_pressed = false;
             }
             _ => {}
+        }
+
+        if self.on_press.is_none() {
+            tree.state.downcast_mut::<State>().unfocus();
         }
 
         let current_status = if self.on_press.is_none() {
@@ -371,6 +426,11 @@ where
         viewport: &Rectangle,
     ) {
         let bounds = layout.bounds();
+        let focus_visible = {
+            let state = tree.state.downcast_ref::<State>();
+
+            state.is_focused && state.focus_visible
+        };
         let (layout, tree) = layout.iter(&tree.children).next().unwrap();
         let style = theme.style(&self.class, self.status.unwrap_or(Status::Disabled));
 
@@ -385,6 +445,21 @@ where
                 style
                     .background
                     .unwrap_or(Background::Color(Color::TRANSPARENT)),
+            );
+        }
+
+        if focus_visible && let Some(ring) = style.focus_ring {
+            renderer.fill_quad(
+                renderer::Quad {
+                    bounds: bounds.expand(ring.width),
+                    border: Border {
+                        radius: ring.radius,
+                        ..ring
+                    },
+                    shadow: Shadow::default(),
+                    snap: style.snap,
+                },
+                Background::Color(Color::TRANSPARENT),
             );
         }
 
@@ -477,6 +552,11 @@ pub struct Style {
     pub shadow: Shadow,
     /// Whether the button should be snapped to the pixel grid.
     pub snap: bool,
+    /// The [`Border`] drawn just outside the button while it has keyboard
+    /// focus, if any.
+    ///
+    /// It is not shown after the button was focused with the pointer.
+    pub focus_ring: Option<Border>,
 }
 
 impl Style {
@@ -497,6 +577,7 @@ impl Default for Style {
             border: Border::default(),
             shadow: Shadow::default(),
             snap: renderer::CRISP,
+            focus_ring: None,
         }
     }
 }
@@ -711,6 +792,7 @@ fn styled(pair: palette::Pair) -> Style {
         background: Some(Background::Color(pair.color)),
         text_color: pair.text,
         border: border::rounded(2),
+        focus_ring: Some(border::rounded(4).color(pair.text).width(2)),
         ..Style::default()
     }
 }
