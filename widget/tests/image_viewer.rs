@@ -86,3 +86,33 @@ fn escape_resets_a_panned_viewer_with_cursor_away() {
     // The pan was reset, so a second Escape is left to the application.
     assert_eq!(simulator.simulate([escape()]), [event::Status::Ignored]);
 }
+
+/// Panning away and dragging back leaves the view at its default, even though
+/// the drag start offset is stale: Escape is left to the application.
+#[test]
+fn escape_is_ignored_after_panning_back_to_default() {
+    let mut simulator: Simulator<'_, ()> = Simulator::new(
+        Viewer::new(Handle::from_rgba(100, 100, vec![0; 100 * 100 * 4]))
+            .content_fit(ContentFit::None)
+            .width(10)
+            .height(10),
+    );
+
+    simulator.point_at(Point::new(5.0, 5.0));
+
+    let drag = |to: Point| {
+        [
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+            Event::Mouse(mouse::Event::CursorMoved { position: to }),
+            Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+        ]
+    };
+
+    let _ = simulator.simulate(drag(Point::new(1.0, 1.0)));
+
+    simulator.point_at(Point::new(1.0, 1.0));
+    let _ = simulator.simulate(drag(Point::new(5.0, 5.0)));
+
+    simulator.point_at(Point::new(-100.0, -100.0));
+    assert_eq!(simulator.simulate([escape()]), [event::Status::Ignored]);
+}

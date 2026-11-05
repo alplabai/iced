@@ -163,8 +163,9 @@ where
                 ..
             }) => {
                 let state = tree.state.downcast_mut::<State>();
-                let is_default = state.scale == 1.0
-                    && state.starting_offset == Vector::default()
+                // `starting_offset` is drag scratch state, not view state, and
+                // repeated zoom steps can leave `scale` a hair off 1.0.
+                let is_default = (state.scale - 1.0).abs() <= f32::EPSILON
                     && state.current_offset == Vector::default();
 
                 // Fork: upstream #3522 captures every Escape; leave it to
