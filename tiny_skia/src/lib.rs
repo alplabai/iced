@@ -69,6 +69,10 @@ impl Renderer {
         let scale_factor = viewport.scale_factor();
         self.layers.flush();
 
+        // The mask may hold anything from the last frame: start from a full clear.
+        clip_mask.clear();
+        let mut mask_bounds = Rectangle::new(Point::ORIGIN, Size::ZERO);
+
         for &damage_bounds in damage {
             let damage_bounds = damage_bounds * scale_factor;
 
@@ -101,7 +105,7 @@ impl Renderer {
                     continue;
                 };
 
-                engine::adjust_clip_mask(clip_mask, layer_bounds);
+                engine::adjust_clip_mask(clip_mask, &mut mask_bounds, layer_bounds);
 
                 if !layer.quads.is_empty() {
                     let render_span = debug::render(debug::Primitive::Quad);
@@ -128,7 +132,7 @@ impl Renderer {
                             continue;
                         };
 
-                        engine::adjust_clip_mask(clip_mask, group_bounds);
+                        engine::adjust_clip_mask(clip_mask, &mut mask_bounds, group_bounds);
 
                         for primitive in group.as_slice() {
                             self.engine.draw_primitive(
@@ -140,7 +144,7 @@ impl Renderer {
                             );
                         }
 
-                        engine::adjust_clip_mask(clip_mask, layer_bounds);
+                        engine::adjust_clip_mask(clip_mask, &mut mask_bounds, layer_bounds);
                     }
 
                     render_span.finish();
@@ -155,6 +159,7 @@ impl Renderer {
                             Transformation::scale(scale_factor),
                             pixels,
                             clip_mask,
+                            &mut mask_bounds,
                             layer_bounds,
                         );
                     }
@@ -172,7 +177,7 @@ impl Renderer {
                             continue;
                         };
 
-                        engine::adjust_clip_mask(clip_mask, group_bounds);
+                        engine::adjust_clip_mask(clip_mask, &mut mask_bounds, group_bounds);
 
                         for text in group.as_slice() {
                             self.engine.draw_text(
@@ -180,11 +185,12 @@ impl Renderer {
                                 Transformation::scale(scale_factor) * group.transformation(),
                                 pixels,
                                 clip_mask,
+                                &mut mask_bounds,
                                 group_bounds,
                             );
                         }
 
-                        engine::adjust_clip_mask(clip_mask, layer_bounds);
+                        engine::adjust_clip_mask(clip_mask, &mut mask_bounds, layer_bounds);
                     }
 
                     render_span.finish();

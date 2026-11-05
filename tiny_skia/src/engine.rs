@@ -365,6 +365,7 @@ impl Engine {
         transformation: Transformation,
         pixels: &mut tiny_skia::PixmapMut<'_>,
         clip_mask: &mut tiny_skia::Mask,
+        mask_bounds: &mut Rectangle,
         clip_bounds: Rectangle,
     ) {
         match text {
@@ -392,7 +393,7 @@ impl Engine {
                 let clip_mask = match physical_bounds.is_within(&clip_bounds) {
                     true => None,
                     false => {
-                        adjust_clip_mask(clip_mask, clip_bounds);
+                        adjust_clip_mask(clip_mask, mask_bounds, clip_bounds);
                         Some(clip_mask as &_)
                     }
                 };
@@ -421,7 +422,7 @@ impl Engine {
                     return;
                 };
 
-                adjust_clip_mask(clip_mask, clip_bounds);
+                adjust_clip_mask(clip_mask, mask_bounds, clip_bounds);
 
                 self.text_pipeline.draw_editor(
                     editor,
@@ -455,7 +456,7 @@ impl Engine {
                 let clip_mask = match physical_bounds.is_within(&clip_bounds) {
                     true => None,
                     false => {
-                        adjust_clip_mask(clip_mask, clip_bounds);
+                        adjust_clip_mask(clip_mask, mask_bounds, clip_bounds);
                         Some(clip_mask as &_)
                     }
                 };
@@ -591,6 +592,7 @@ impl Engine {
         _transformation: Transformation,
         _pixels: &mut tiny_skia::PixmapMut<'_>,
         _clip_mask: &mut tiny_skia::Mask,
+        _mask_bounds: &mut Rectangle,
         _clip_bounds: Rectangle,
     ) {
         match image {
@@ -607,7 +609,7 @@ impl Engine {
                 };
 
                 // TODO: Border radius
-                adjust_clip_mask(_clip_mask, clip_bounds);
+                adjust_clip_mask(_clip_mask, _mask_bounds, clip_bounds);
 
                 let center = bounds.center();
                 let radians = f32::from(image.rotation);
@@ -649,7 +651,7 @@ impl Engine {
                 let clip_mask = match physical_bounds.is_within(&clip_bounds) {
                     true => None,
                     false => {
-                        adjust_clip_mask(_clip_mask, clip_bounds);
+                        adjust_clip_mask(_clip_mask, _mask_bounds, clip_bounds);
                         Some(_clip_mask as &_)
                     }
                 };
@@ -1164,8 +1166,21 @@ fn rounded_box_sdf(to_center: Vector, size: tiny_skia::Size, radii: &[f32]) -> f
     (x.powf(2.0) + y.powf(2.0)).sqrt() - radius
 }
 
-pub fn adjust_clip_mask(clip_mask: &mut tiny_skia::Mask, bounds: Rectangle) {
-    clip_mask.clear();
+/// Sets `clip_mask` to `bounds`, given that it currently holds `previous`.
+///
+/// Only `previous` is cleared: a full clear is a window-sized memset per
+/// layer and per group, which dominates large windows with many layers.
+pub fn adjust_clip_mask(
+    clip_mask: &mut tiny_skia::Mask,
+    previous: &mut Rectangle,
+    bounds: Rectangle,
+) {
+    if *previous == bounds {
+        return;
+    }
+
+    clear_region(clip_mask, *previous);
+    *previous = bounds;
 
     let path = tiny_skia::PathBuilder::from_rect(
         tiny_skia::Rect::from_xywh(bounds.x, bounds.y, bounds.width, bounds.height)
@@ -1180,11 +1195,49 @@ pub fn adjust_clip_mask(clip_mask: &mut tiny_skia::Mask, bounds: Rectangle) {
     );
 }
 
+/// Zeroes the pixels of `clip_mask` covered by `region`, rounded outwards.
+fn clear_region(clip_mask: &mut tiny_skia::Mask, region: Rectangle) {
+    let width = clip_mask.width() as usize;
+    let height = clip_mask.height() as usize;
+
+    let x0 = (region.x.floor().max(0.0) as usize).min(width);
+    let x1 = ((region.x + region.width).ceil().max(0.0) as usize).min(width);
+    let y0 = (region.y.floor().max(0.0) as usize).min(height);
+    let y1 = ((region.y + region.height).ceil().max(0.0) as usize).min(height);
+
+    let data = clip_mask.data_mut();
+
+    for row in y0..y1 {
+        data[row * width + x0..row * width + x1].fill(0);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::border::Side;
-    use crate::core::{Border, Shadow};
+    use crate::core::{Border, Point, Shadow, Size};
+
+    #[test]
+    fn adjust_clip_mask_matches_a_fresh_mask() {
+        let fresh = |bounds: Rectangle| {
+            let mut mask = tiny_skia::Mask::new(16, 16).expect("Create mask");
+            let mut previous = Rectangle::new(Point::ORIGIN, Size::ZERO);
+            adjust_clip_mask(&mut mask, &mut previous, bounds);
+            mask
+        };
+
+        let big = Rectangle::new(Point::new(0.5, 1.5), Size::new(14.0, 12.25));
+        let small = Rectangle::new(Point::new(3.0, 4.0), Size::new(2.5, 3.0));
+
+        let mut mask = tiny_skia::Mask::new(16, 16).expect("Create mask");
+        let mut previous = Rectangle::new(Point::ORIGIN, Size::ZERO);
+
+        for bounds in [big, small, small, big, small] {
+            adjust_clip_mask(&mut mask, &mut previous, bounds);
+            assert_eq!(mask.data(), fresh(bounds).data());
+        }
+    }
 
     fn draw_border(border: Border) -> tiny_skia::Pixmap {
         let mut engine = Engine::new();
