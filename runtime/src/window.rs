@@ -1,7 +1,7 @@
 //! Build window-based GUI applications.
 use crate::core::time::Instant;
 use crate::core::window::{
-    Direction, Event, Icon, Id, Level, Mode, Screenshot, Settings, UserAttention,
+    CursorGrab, Direction, Event, Icon, Id, Level, Mode, Screenshot, Settings, UserAttention,
 };
 use crate::core::{Size, Window};
 use crate::futures::Subscription;
@@ -122,6 +122,20 @@ pub enum Action {
     /// ## Platform-specific
     /// Android / iOS / macOS / Orbital / Web / X11: Unsupported.
     ShowSystemMenu(Id),
+
+    /// Grab (confine or lock) or release the mouse cursor of the window.
+    ///
+    /// [`CursorGrab::Locked`] also hides the cursor. Where a mode is not
+    /// supported, the next weaker one is tried (`Locked`, `Confined`,
+    /// `None`). The runtime releases the grab when the window loses focus
+    /// and when Escape is pressed.
+    ///
+    /// ## Platform-specific
+    ///
+    /// - **Windows / X11:** `Locked` is unsupported and falls back to `Confined`.
+    /// - **macOS:** `Confined` is unsupported and falls back to `None`.
+    /// - **Web / iOS / Android:** Mostly unsupported.
+    SetCursorGrab(Id, CursorGrab),
 
     /// Get the raw identifier unique to the window.
     GetRawId(Id, oneshot::Sender<u64>),
@@ -289,6 +303,13 @@ pub fn oldest() -> Task<Option<Id>> {
 /// Gets the window [`Id`] of the latest window.
 pub fn latest() -> Task<Option<Id>> {
     task::oneshot(|channel| crate::Action::Window(Action::GetLatest(channel)))
+}
+
+/// Grabs or releases the mouse cursor of the window.
+///
+/// See [`Action::SetCursorGrab`] for the fallback and release rules.
+pub fn set_cursor_grab<T>(id: Id, grab: CursorGrab) -> Task<T> {
+    task::effect(crate::Action::Window(Action::SetCursorGrab(id, grab)))
 }
 
 /// Begins dragging the window while the left mouse button is held.

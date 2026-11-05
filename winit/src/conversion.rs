@@ -365,6 +365,17 @@ pub fn window_level(level: window::Level) -> winit::window::WindowLevel {
     }
 }
 
+/// Converts a [`window::CursorGrab`] into its [`winit`] equivalent.
+///
+/// [`winit`]: https://github.com/rust-windowing/winit
+pub fn cursor_grab(grab: window::CursorGrab) -> winit::window::CursorGrabMode {
+    match grab {
+        window::CursorGrab::None => winit::window::CursorGrabMode::None,
+        window::CursorGrab::Confined => winit::window::CursorGrabMode::Confined,
+        window::CursorGrab::Locked => winit::window::CursorGrabMode::Locked,
+    }
+}
+
 /// Converts an [`iced::Point`] into a [`winit`] logical position for a given monitor.
 ///
 /// [`winit`]: https://github.com/rust-windowing/winit

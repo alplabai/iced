@@ -2,7 +2,7 @@ mod state;
 
 use state::State;
 
-pub use crate::core::window::{Event, Id, RedrawRequest, Settings};
+pub use crate::core::window::{CursorGrab, Event, Id, RedrawRequest, Settings};
 
 use crate::Proxy;
 use crate::conversion;
@@ -89,6 +89,7 @@ where
                 surface_error_at: None,
                 renderer,
                 mouse_interaction: mouse::Interaction::None,
+                cursor_grab: CursorGrab::None,
                 redraw_at: None,
                 frame_clock: FrameClock {
                     anchor: Instant::now(),
@@ -189,6 +190,7 @@ where
     pub state: State<P>,
     pub exit_on_close_request: bool,
     pub mouse_interaction: mouse::Interaction,
+    cursor_grab: CursorGrab,
     pub surface: C::Surface,
     pub surface_version: u64,
     pub surface_error_at: Option<Instant>,
@@ -344,12 +346,49 @@ where
         }
     }
 
+    /// Returns the cursor grab currently in effect.
+    pub fn cursor_grab(&self) -> CursorGrab {
+        self.cursor_grab
+    }
+
+    /// Requests a cursor grab, falling back to weaker modes the platform
+    /// accepts. A locked cursor is hidden; releasing it restores visibility
+    /// unless the current interaction hides it.
+    pub fn set_cursor_grab(&mut self, grab: CursorGrab) {
+        let mut mode = Some(grab);
+        let mut applied = CursorGrab::None;
+
+        while let Some(candidate) = mode {
+            if self
+                .raw
+                .set_cursor_grab(conversion::cursor_grab(candidate))
+                .is_ok()
+            {
+                applied = candidate;
+                break;
+            }
+
+            mode = candidate.fallback();
+        }
+
+        let was_locked = self.cursor_grab == CursorGrab::Locked;
+        self.cursor_grab = applied;
+
+        if applied == CursorGrab::Locked {
+            self.raw.set_cursor_visible(false);
+        } else if was_locked && self.mouse_interaction != mouse::Interaction::Hidden {
+            self.raw.set_cursor_visible(true);
+        }
+    }
+
     pub fn update_mouse(&mut self, interaction: mouse::Interaction) {
         if interaction != self.mouse_interaction {
             if let Some(icon) = conversion::mouse_interaction(interaction) {
                 self.raw.set_cursor(icon);
 
-                if self.mouse_interaction == mouse::Interaction::Hidden {
+                if self.mouse_interaction == mouse::Interaction::Hidden
+                    && self.cursor_grab != CursorGrab::Locked
+                {
                     self.raw.set_cursor_visible(true);
                 }
             } else {

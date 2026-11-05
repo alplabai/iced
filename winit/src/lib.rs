@@ -1088,6 +1088,22 @@ async fn run_instance<P>(
                                 &mut renderer_settings,
                             );
                         } else {
+                            if window.cursor_grab().is_grabbed()
+                                && match &window_event {
+                                    winit::event::WindowEvent::Focused(false) => true,
+                                    winit::event::WindowEvent::KeyboardInput { event, .. } => {
+                                        event.state.is_pressed()
+                                            && event.logical_key
+                                                == winit::keyboard::Key::Named(
+                                                    winit::keyboard::NamedKey::Escape,
+                                                )
+                                    }
+                                    _ => false,
+                                }
+                            {
+                                window.set_cursor_grab(crate::core::window::CursorGrab::None);
+                            }
+
                             window.state.update(&program, &window.raw, &window_event);
 
                             if let Some(event) = conversion::window_event(
@@ -1608,6 +1624,11 @@ fn run_action<'a, P, C>(
                         x: point.x,
                         y: point.y,
                     });
+                }
+            }
+            window::Action::SetCursorGrab(id, grab) => {
+                if let Some(window) = window_manager.get_mut(id) {
+                    window.set_cursor_grab(grab);
                 }
             }
             window::Action::GetRawId(id, channel) => {
