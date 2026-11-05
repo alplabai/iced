@@ -187,6 +187,11 @@ where
     /// gains focus, whether by clicking it or through a focus operation.
     ///
     /// It is produced once per transition, never while the focus does not change.
+    /// A [`TextInput`] without an `on_input` message is disabled and never
+    /// reports focus.
+    ///
+    /// If several inputs change focus in the same event, the order of their
+    /// messages is not specified.
     pub fn on_focus(mut self, message: Message) -> Self {
         self.on_focus = Some(message);
         self
@@ -204,6 +209,12 @@ where
     /// through a focus operation.
     ///
     /// It is produced once per transition, never while the focus does not change.
+    ///
+    /// Disabling a focused [`TextInput`] (by removing its `on_input` message)
+    /// counts as a blur. The message is not produced when the [`TextInput`] is
+    /// removed from the view, nor when the window loses focus (for example when
+    /// switching applications). If several inputs change focus in the same
+    /// event, the order of their messages is not specified.
     pub fn on_blur(mut self, message: Message) -> Self {
         self.on_blur = Some(message);
         self
@@ -404,6 +415,12 @@ where
     ) {
         let state = state::<Renderer>(tree);
         let is_disabled = self.on_input.is_none();
+
+        // A disabled input cannot be focused, so disabling a focused one
+        // counts as a blur.
+        if is_disabled && state.input.is_focused() {
+            state.input.unfocus();
+        }
 
         if let Some(on_input) = &self.on_input {
             let edit = state
