@@ -401,9 +401,11 @@ where
             if let Some(icon) = conversion::mouse_interaction(interaction) {
                 self.raw.set_cursor(icon);
 
-                if self.mouse_interaction == mouse::Interaction::Hidden
-                    && self.cursor_grab != CursorGrab::Locked
-                {
+                if shows_cursor_on_interaction_change(
+                    self.mouse_interaction == mouse::Interaction::Hidden,
+                    self.cursor_grab,
+                    HIDE_CURSOR_ON_LOCK,
+                ) {
                     self.raw.set_cursor_visible(true);
                 }
             } else {
@@ -606,6 +608,23 @@ const RELEASE_GRAB_ON_BLUR: bool = cfg!(target_os = "macos");
 /// web the browser hides it during pointer lock, and the lock may be refused.
 const HIDE_CURSOR_ON_LOCK: bool = !cfg!(target_arch = "wasm32");
 
+/// Whether a change away from `Hidden` makes the cursor visible again. While
+/// the runtime itself keeps the cursor hidden for a lock it must stay hidden;
+/// where it does not hide on lock (web) nothing else keeps it hidden.
+fn shows_cursor_on_interaction_change(
+    was_hidden: bool,
+    grab: CursorGrab,
+    hide_on_lock: bool,
+) -> bool {
+    was_hidden && !(hide_on_lock && grab == CursorGrab::Locked)
+}
+
+/// Whether raw device motion is forwarded to a window. The cheap grab check
+/// comes first so windows without a grab never query focus.
+pub fn forwards_raw_motion(grab: CursorGrab, has_focus: impl FnOnce() -> bool) -> bool {
+    grab.is_grabbed() && has_focus()
+}
+
 /// Which window events make the runtime release a cursor grab.
 #[derive(Debug, Clone, Copy)]
 struct ReleasePolicy {
@@ -679,6 +698,43 @@ mod tests {
 
     fn policy(on_blur: bool, on_escape: bool) -> ReleasePolicy {
         ReleasePolicy { on_blur, on_escape }
+    }
+
+    #[test]
+    fn raw_motion_needs_a_grab_and_skips_focus_query_without_one() {
+        let none = forwards_raw_motion(CursorGrab::None, || {
+            panic!("focus must not be queried without a grab")
+        });
+        assert!(!none);
+        assert!(forwards_raw_motion(CursorGrab::Locked, || true));
+        assert!(forwards_raw_motion(CursorGrab::Confined, || true));
+        assert!(!forwards_raw_motion(CursorGrab::Locked, || false));
+    }
+
+    #[test]
+    fn interaction_change_shows_cursor_unless_lock_hides_it() {
+        // Native: the lock hides the cursor, keep it hidden.
+        assert!(!shows_cursor_on_interaction_change(
+            true,
+            CursorGrab::Locked,
+            true
+        ));
+        assert!(shows_cursor_on_interaction_change(
+            true,
+            CursorGrab::Confined,
+            true
+        ));
+        // Web: the runtime did not hide it, so it must be shown again.
+        assert!(shows_cursor_on_interaction_change(
+            true,
+            CursorGrab::Locked,
+            false
+        ));
+        assert!(!shows_cursor_on_interaction_change(
+            false,
+            CursorGrab::None,
+            true
+        ));
     }
 
     #[test]

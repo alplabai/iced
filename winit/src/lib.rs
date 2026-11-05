@@ -835,7 +835,9 @@ async fn run_instance<P>(
                     event::Event::DeviceEvent { event, .. } => {
                         if let Some(event) = conversion::device_event(&event) {
                             for (id, window) in window_manager.iter_mut() {
-                                if window.raw.has_focus() {
+                                if window::forwards_raw_motion(window.cursor_grab(), || {
+                                    window.raw.has_focus()
+                                }) {
                                     events.push((id, event.clone()));
                                 }
                             }

@@ -30,9 +30,11 @@ pub enum Event {
     /// device-defined, not logical pixels.
     ///
     /// Only emitted on platforms where the system reports raw device motion,
-    /// and only to the focused window.
+    /// and only to the focused window while it holds a cursor grab
+    /// ([`window::CursorGrab::Confined`] or [`window::CursorGrab::Locked`]).
     ///
     /// [`window::CursorGrab::Locked`]: crate::window::CursorGrab::Locked
+    /// [`window::CursorGrab::Confined`]: crate::window::CursorGrab::Confined
     /// [`CursorMoved`]: Self::CursorMoved
     RawMotion {
         /// The change in position since the previous raw motion event.
