@@ -22,7 +22,7 @@ use crate::program::{self, Program};
 use winit::dpi::{LogicalPosition, LogicalSize};
 use winit::monitor::MonitorHandle;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 pub struct Manager<P, C>
@@ -40,11 +40,24 @@ where
 #[derive(Debug, Default)]
 struct Family {
     parents: BTreeMap<Id, Id>,
+    /// Windows whose creation was requested but whose owner closed before
+    /// they were created.
+    cancelled: BTreeSet<Id>,
 }
 
 impl Family {
     fn set_parent(&mut self, id: Id, parent: Id) {
         let _ = self.parents.insert(id, parent);
+    }
+
+    fn cancel(&mut self, id: Id) {
+        let _ = self.cancelled.insert(id);
+        self.forget(id);
+    }
+
+    /// Returns whether the creation of `id` was cancelled, and clears it.
+    fn take_cancelled(&mut self, id: Id) -> bool {
+        self.cancelled.remove(&id)
     }
 
     fn forget(&mut self, id: Id) {
@@ -89,6 +102,21 @@ where
     /// Returns the windows owned by `id`, directly or not, children first.
     pub fn descendants(&self, id: Id) -> Vec<Id> {
         self.family.descendants(id)
+    }
+
+    /// Cancels the creation of every window in `ids` that is not open yet.
+    pub fn cancel_pending(&mut self, ids: &[Id]) {
+        for &id in ids {
+            if !self.entries.contains_key(&id) {
+                self.family.cancel(id);
+            }
+        }
+    }
+
+    /// Returns whether the creation of `id` was cancelled by
+    /// [`Manager::cancel_pending`]. A cancelled id is reported once.
+    pub fn take_cancelled(&mut self, id: Id) -> bool {
+        self.family.take_cancelled(id)
     }
 
     pub fn insert(
@@ -601,6 +629,20 @@ mod tests {
         assert_eq!(family.descendants(root), [grandchild, child]);
         assert_eq!(family.descendants(child), [grandchild]);
         assert!(family.descendants(other).is_empty());
+    }
+
+    #[test]
+    fn cancelled_windows_are_reported_once_and_forgotten() {
+        let (root, child) = (Id::unique(), Id::unique());
+
+        let mut family = Family::default();
+        family.set_parent(child, root);
+        family.cancel(child);
+
+        assert!(family.descendants(root).is_empty());
+        assert!(family.take_cancelled(child));
+        assert!(!family.take_cancelled(child));
+        assert!(!family.take_cancelled(root));
     }
 
     #[test]

@@ -580,6 +580,15 @@ async fn run_instance<P>(
                 make_visible,
                 on_open,
             } => {
+                if window_manager.take_cancelled(id) {
+                    log::warn!(
+                        "Dropping window `{id:?}`: its parent was closed \
+                         before it was created"
+                    );
+
+                    continue;
+                }
+
                 if compositor.is_none() {
                     let (compositor_sender, compositor_receiver) = oneshot::channel();
 
@@ -1413,6 +1422,10 @@ fn run_action<'a, P, C>(
                 // Windows owned by this one close with it, children first.
                 let mut closing = window_manager.descendants(id);
                 closing.push(id);
+
+                // A child that is still being created is not open yet:
+                // drop it when it arrives instead of leaving it orphaned.
+                window_manager.cancel_pending(&closing);
 
                 for id in closing {
                     let _ = ui_caches.remove(&id);

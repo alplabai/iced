@@ -94,14 +94,21 @@ pub struct Settings {
     /// The [`Id`] of the window that owns this one, if any.
     ///
     /// An owned window (e.g. a modal dialog) stays above its owner. The
-    /// runtime maps this to the native owner relation of the platform: an
-    /// owner window on Windows, `transient_for` on X11 and Wayland, and a
-    /// child window on macOS. Where the platform has no such relation the
-    /// setting has no effect.
+    /// runtime maps this to the native relation of the platform:
     ///
-    /// If no open window has the given [`Id`], the setting is ignored and a
-    /// warning is logged. Closing the owner also closes every window that
-    /// names it as its parent, recursively.
+    /// - Windows: an owner window (`WS_POPUP` with an owner). The window stays
+    ///   above its owner and has no taskbar entry.
+    /// - macOS: a child window of the parent.
+    /// - X11 and Wayland: unsupported. The window opens without a parent and
+    ///   a warning is logged once.
+    ///
+    /// The parent must have finished opening when this window is opened (for
+    /// example, chain on the task that opens the parent). If no open window
+    /// has the given [`Id`], the setting is ignored and a warning is logged.
+    ///
+    /// On every platform, closing the owner also closes every window that
+    /// names it as its parent, recursively. A window whose parent is closed
+    /// before the window has been created is never created.
     ///
     /// By default there is no parent.
     pub parent: Option<Id>,

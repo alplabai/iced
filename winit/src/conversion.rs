@@ -17,14 +17,37 @@ use crate::core::{Event, Point, Size};
 
 /// Makes `parent` the owner of the window described by `attributes`.
 ///
-/// Does nothing when there is no parent, when the parent has no usable
-/// native handle, or on platforms without an owner relation.
+/// - Windows: an owner window (`WS_POPUP` with an owner), so the window
+///   stays above its owner and has no taskbar entry of its own.
+/// - macOS: a child window of the parent.
+/// - X11 and Wayland: unsupported. No parent is passed (winit would embed
+///   the window on X11), and a warning is logged once.
+/// - Other platforms: no effect.
+///
+/// Does nothing when there is no parent or it has no usable native handle.
 pub fn with_parent(
     attributes: winit::window::WindowAttributes,
     parent: Option<&winit::window::Window>,
 ) -> winit::window::WindowAttributes {
-    #[cfg(not(target_arch = "wasm32"))]
-    if let Some(parent) = parent {
+    let Some(parent) = parent else {
+        return attributes;
+    };
+
+    #[cfg(windows)]
+    {
+        use winit::platform::windows::WindowAttributesExtWindows;
+        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+        if let Ok(handle) = parent.window_handle()
+            && let RawWindowHandle::Win32(handle) = handle.as_raw()
+        {
+            return attributes
+                .with_owner_window(handle.hwnd.get() as winit::platform::windows::HWND);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
         use winit::raw_window_handle::HasWindowHandle;
 
         if let Ok(handle) = parent.window_handle() {
@@ -33,6 +56,26 @@ pub fn with_parent(
             #[allow(unsafe_code)]
             return unsafe { attributes.with_parent_window(Some(handle.as_raw())) };
         }
+    }
+
+    #[cfg(all(
+        unix,
+        not(target_os = "macos"),
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    {
+        use std::sync::Once;
+
+        static WARN: Once = Once::new();
+
+        WARN.call_once(|| {
+            log::warn!(
+                "`window::Settings::parent` is not supported on X11 and \
+                 Wayland; the window is opened without a parent"
+            );
+        });
     }
 
     let _ = parent;
