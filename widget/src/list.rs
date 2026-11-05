@@ -19,6 +19,20 @@
 //! A [`VirtualList`] does not draw a scrollbar. If you need to know its
 //! size, wrap it in a [`Sensor`](crate::Sensor).
 //!
+//! # Sizing
+//! A [`VirtualList`] needs a bounded height. Do not put it inside a vertical
+//! [`scrollable`](crate::scrollable) (or in a column that is): the viewport
+//! would be unbounded and every row would have to be built. If it is laid
+//! out with an unbounded height anyway, it falls back to a viewport of
+//! 4096 logical pixels instead of building all of its rows.
+//!
+//! # Precision
+//! The scroll offset is an `f32`, like in [`scrollable`](crate::scrollable).
+//! Beyond roughly 2^23 pixels of content (about 350 thousand rows of 24
+//! pixels) it cannot represent sub-pixel offsets, so slow scrolling deep in
+//! such a list may stall. Row positions are computed in `f64` and snapped to
+//! the pixel grid of the renderer.
+//!
 //! # Example
 //! ```no_run
 //! # mod iced { pub mod widget { pub use iced_widget::*; } pub use iced_widget::Renderer; pub use iced_widget::core::*; }
@@ -48,6 +62,10 @@ use std::ops::Range;
 /// The number of extra rows built on each side of the viewport by default.
 const DEFAULT_OVERSCAN: usize = 2;
 
+/// The viewport height used when the list is laid out with an unbounded
+/// height, so that it never builds all of its rows.
+const FALLBACK_HEIGHT: f32 = 4096.0;
+
 /// Creates a new [`VirtualList`] of `len` rows of height `row_height`, built
 /// with the given closure.
 pub fn virtual_list<'a, W>(
@@ -61,12 +79,12 @@ pub fn virtual_list<'a, W>(
 /// Produces an [`Operation`] that scrolls the [`VirtualList`] with the given
 /// [`Id`] by the minimum amount needed to bring the row at `index` into view.
 pub fn reveal_row<T>(id: Id, index: usize, row_height: f32) -> impl Operation<T> {
-    scrollable::reveal(
+    // Only the vertical axis is revealed, so that the horizontal scroll of
+    // any other scrollable with the same `Id` is left untouched.
+    scrollable::reveal_vertical(
         id,
-        Rectangle::new(
-            core::Point::new(0.0, index as f32 * row_height),
-            Size::new(0.0, row_height),
-        ),
+        (index as f64 * row_height as f64) as f32,
+        row_height,
         Animation::Instant,
     )
 }
@@ -180,6 +198,14 @@ fn visible_range(
     start..end
 }
 
+/// Returns the translation of the row at `index` relative to the list,
+/// snapped to the pixel grid given by the `hint` factor.
+fn row_translation(index: usize, row_height: f32, offset: f32, hint: f32) -> Vector {
+    let y = (index as f64 * row_height as f64 - offset as f64) as f32;
+
+    Vector::new(0.0, y).hint(hint)
+}
+
 #[derive(Debug, Default)]
 struct State {
     /// The requested scroll offset.
@@ -190,6 +216,38 @@ struct State {
     keys: Vec<u64>,
     /// The maximum scroll offset at the last layout.
     max_offset: f32,
+    /// The range of rows the children of the tree were built for.
+    range: Range<usize>,
+}
+
+impl State {
+    /// Moves the already built rows to the requested offset without a
+    /// relayout. Returns `false` if the offset needs rows that are not built,
+    /// in which case nothing changes and the layout must be invalidated.
+    #[allow(clippy::too_many_arguments)]
+    fn shift_rows(
+        &mut self,
+        children: &mut [Tree],
+        viewport: f32,
+        row_height: f32,
+        len: usize,
+        overscan: usize,
+        hint: f32,
+    ) -> bool {
+        let range = visible_range(self.offset, viewport, row_height, len, overscan);
+
+        if range != self.range || range.len() != children.len() {
+            return false;
+        }
+
+        for (index, child) in range.zip(children) {
+            child.translation = row_translation(index, row_height, self.offset, hint);
+        }
+
+        self.laid_out = self.offset;
+
+        true
+    }
 }
 
 impl operation::Scrollable for State {
@@ -258,7 +316,8 @@ where
         let mut size = limits.resolve(self.width, self.height, Size::new(0.0, total));
 
         if !size.height.is_finite() {
-            size.height = total;
+            // An unbounded height would build every row.
+            size.height = total.min(FALLBACK_HEIGHT);
         }
 
         let Tree {
@@ -304,6 +363,9 @@ where
             .collect();
 
         state.keys = keys;
+        state.range = range.clone();
+
+        let hint = renderer.hint_factor().unwrap_or(1.0);
 
         let row_limits = layout::Limits::new(
             Size::new(size.width, self.row_height),
@@ -315,7 +377,7 @@ where
 
             row.layout(child, renderer, &row_limits);
 
-            child.translation = Vector::new(0.0, index as f32 * self.row_height - state.offset);
+            child.translation = row_translation(index, self.row_height, state.offset, hint);
         }
 
         *tree_size = size;
@@ -362,11 +424,30 @@ where
         let bounds = layout.bounds();
         let is_over = cursor.is_over(bounds);
 
-        let state = tree.state.downcast_mut::<State>();
+        let hint = renderer.hint_factor().unwrap_or(1.0);
 
-        if (state.offset - state.laid_out).abs() > f32::EPSILON {
-            // The offset was changed by an operation: build the new rows.
-            shell.invalidate_layout();
+        {
+            let Tree {
+                state, children, ..
+            } = &mut *tree;
+            let state = state.downcast_mut::<State>();
+
+            if (state.offset - state.laid_out).abs() > f32::EPSILON {
+                // The offset was changed by an operation. Only a change of
+                // the visible rows needs a relayout.
+                if !state.shift_rows(
+                    children,
+                    bounds.height,
+                    self.row_height,
+                    self.len,
+                    self.overscan,
+                    hint,
+                ) {
+                    shell.invalidate_layout();
+                }
+
+                shell.request_redraw();
+            }
         }
 
         let cursor = if is_over {
@@ -390,7 +471,10 @@ where
         }
 
         if let Event::Mouse(mouse::Event::WheelScrolled { delta }) = event {
-            let state = tree.state.downcast_mut::<State>();
+            let Tree {
+                state, children, ..
+            } = &mut *tree;
+            let state = state.downcast_mut::<State>();
 
             let dy = match *delta {
                 mouse::ScrollDelta::Lines { y, .. } => y * self.row_height,
@@ -402,7 +486,19 @@ where
             if (offset - state.offset).abs() > f32::EPSILON {
                 state.offset = offset;
 
-                shell.invalidate_layout();
+                // The rows are positioned by their translation, so a layout
+                // is only needed when a new row becomes visible.
+                if !state.shift_rows(
+                    children,
+                    bounds.height,
+                    self.row_height,
+                    self.len,
+                    self.overscan,
+                    hint,
+                ) {
+                    shell.invalidate_layout();
+                }
+
                 shell.request_redraw();
                 shell.capture_event();
             }
@@ -457,7 +553,9 @@ where
             mouse::Cursor::Unavailable
         };
 
-        renderer.with_layer(bounds, |renderer| {
+        // Clip to the visible part of the list, not to its full bounds, so that
+        // rows never paint over what clips the list.
+        renderer.with_layer(viewport, |renderer| {
             for (row, (layout, tree)) in self.rows.iter().zip(layout.iter(&tree.children)) {
                 if layout.bounds().intersects(&viewport) {
                     row.draw(tree, renderer, theme, style, layout, cursor, &viewport);
@@ -475,15 +573,18 @@ where
         translation: Vector,
         window: Size,
     ) -> Vec<overlay::Element<'b, Message, Theme, Renderer>> {
-        overlay::from_children(
-            &mut self.rows,
-            tree,
-            layout,
-            renderer,
-            viewport,
-            translation,
-            window,
-        )
+        let bounds = layout.bounds();
+
+        // Rows that were built as overscan are off screen: their overlays
+        // must not outlive them.
+        self.rows
+            .iter_mut()
+            .zip(layout.iter_mut(&mut tree.children))
+            .filter(|(_, (layout, _))| layout.bounds().intersects(&bounds))
+            .flat_map(|(row, (layout, state))| {
+                row.overlay(state, layout, renderer, viewport, translation, window)
+            })
+            .collect()
     }
 }
 

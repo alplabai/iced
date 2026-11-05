@@ -155,53 +155,68 @@ pub fn scroll_by<T>(target: Id, offset: AbsoluteOffset, animation: Animation) ->
 /// are left untouched. If `target` is larger than the viewport along an axis,
 /// its start is aligned with the start of the viewport.
 pub fn reveal<T>(target: Id, rectangle: Rectangle, animation: Animation) -> impl Operation<T> {
-    struct Reveal {
-        target: Id,
-        rectangle: Rectangle,
-        animation: Animation,
-    }
-
-    impl<T> Operation<T> for Reveal {
-        fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation<T>)) {
-            operate(self);
-        }
-
-        fn scrollable(
-            &mut self,
-            id: Option<&Id>,
-            bounds: Rectangle,
-            content: Size,
-            translation: Vector,
-            state: &mut dyn Scrollable,
-        ) {
-            if Some(&self.target) != id {
-                return;
-            }
-
-            let x = reveal_offset(
-                translation.x,
-                bounds.width,
-                self.rectangle.x,
-                self.rectangle.x + self.rectangle.width,
-            );
-
-            let y = reveal_offset(
-                translation.y,
-                bounds.height,
-                self.rectangle.y,
-                self.rectangle.y + self.rectangle.height,
-            );
-
-            if x.is_some() || y.is_some() {
-                state.scroll_to(AbsoluteOffset { x, y }, self.animation, bounds, content);
-            }
-        }
-    }
-
     Reveal {
         target,
-        rectangle,
+        x: Some((rectangle.x, rectangle.x + rectangle.width)),
+        y: Some((rectangle.y, rectangle.y + rectangle.height)),
         animation,
+    }
+}
+
+/// Produces an [`Operation`] that scrolls the widget with the given [`Id`]
+/// vertically by the minimum amount needed to bring the span of `height`
+/// starting at `y` into view, leaving the horizontal scroll untouched.
+///
+/// Like in [`reveal`], `y` is relative to the top of the scrollable content.
+pub fn reveal_vertical<T>(
+    target: Id,
+    y: f32,
+    height: f32,
+    animation: Animation,
+) -> impl Operation<T> {
+    Reveal {
+        target,
+        x: None,
+        y: Some((y, y + height)),
+        animation,
+    }
+}
+
+struct Reveal {
+    target: Id,
+    x: Option<(f32, f32)>,
+    y: Option<(f32, f32)>,
+    animation: Animation,
+}
+
+impl<T> Operation<T> for Reveal {
+    fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation<T>)) {
+        operate(self);
+    }
+
+    fn scrollable(
+        &mut self,
+        id: Option<&Id>,
+        bounds: Rectangle,
+        content: Size,
+        translation: Vector,
+        state: &mut dyn Scrollable,
+    ) {
+        if Some(&self.target) != id {
+            return;
+        }
+
+        let x = self
+            .x
+            .and_then(|(start, end)| reveal_offset(translation.x, bounds.width, start, end));
+
+        let y = self
+            .y
+            .and_then(|(start, end)| reveal_offset(translation.y, bounds.height, start, end));
+
+        if x.is_some() || y.is_some() {
+            state.scroll_to(AbsoluteOffset { x, y }, self.animation, bounds, content);
+        }
     }
 }
 
@@ -346,6 +361,29 @@ mod tests {
         );
 
         probe
+    }
+
+    #[test]
+    fn reveal_vertical_never_touches_the_horizontal_axis() {
+        let mut operation = reveal_vertical::<()>(Id::new("list"), 200.0, 20.0, Animation::Instant);
+        let mut probe = Probe::default();
+
+        Operation::<()>::scrollable(
+            &mut operation,
+            Some(&Id::new("list")),
+            Rectangle::new(crate::Point::ORIGIN, Size::new(10.0, 100.0)),
+            Size::new(500.0, 1000.0),
+            Vector::new(300.0, 0.0),
+            &mut probe,
+        );
+
+        assert_eq!(
+            probe.scrolled_to,
+            Some(AbsoluteOffset {
+                x: None,
+                y: Some(120.0)
+            })
+        );
     }
 
     #[test]
