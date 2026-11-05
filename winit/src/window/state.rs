@@ -4,6 +4,7 @@ use crate::core::{Color, Size};
 use crate::core::{mouse, theme, window};
 use crate::graphics::Viewport;
 use crate::program::{self, Program};
+use crate::window::ModeFlags;
 
 use winit::event::{Touch, WindowEvent};
 use winit::window::Window;
@@ -24,6 +25,7 @@ where
     theme_mode: theme::Mode,
     default_theme: P::Theme,
     style: theme::Style,
+    mode_flags: ModeFlags,
 }
 
 impl<P: Program> Debug for State<P>
@@ -80,7 +82,14 @@ where
             theme_mode,
             default_theme,
             style,
+            mode_flags: ModeFlags::read(window),
         }
+    }
+
+    /// Reads the mode flags of the `window` and returns a
+    /// [`window::Event::ModeChanged`] if they changed since the last call.
+    pub fn poll_mode_change(&mut self, window: &Window) -> Option<window::Event> {
+        self.mode_flags.update(ModeFlags::read(window))
     }
 
     pub fn viewport(&self) -> &Viewport {

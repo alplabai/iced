@@ -1,5 +1,7 @@
+mod mode_flags;
 mod state;
 
+use mode_flags::ModeFlags;
 use state::State;
 
 pub use crate::core::window::{Event, Id, RedrawRequest, Settings};

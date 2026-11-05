@@ -33,6 +33,25 @@ pub enum Event {
     /// A window changed its scale factor.
     Rescaled(f32),
 
+    /// A window changed its maximized, minimized or fullscreen state.
+    ///
+    /// It is emitted once per change, whether the change was requested by the
+    /// application, by the user or by the window manager, and carries the
+    /// state after the change. Plain resizes and moves do not emit it.
+    ///
+    /// ## Platform-specific
+    ///
+    /// - **macOS:** `fullscreen` changes once the transition animation ends.
+    /// - **Wayland:** `maximized` changes once the compositor acknowledges it.
+    ModeChanged {
+        /// Whether the window is maximized.
+        maximized: bool,
+        /// Whether the window is minimized.
+        minimized: bool,
+        /// Whether the window is fullscreen.
+        fullscreen: bool,
+    },
+
     /// A window redraw was requested.
     ///
     /// The [`Instant`] contains the current time.

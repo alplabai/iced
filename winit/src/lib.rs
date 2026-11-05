@@ -1090,12 +1090,25 @@ async fn run_instance<P>(
                         } else {
                             window.state.update(&program, &window.raw, &window_event);
 
+                            let may_change_mode = matches!(
+                                window_event,
+                                winit::event::WindowEvent::Resized(_)
+                                    | winit::event::WindowEvent::Moved(_)
+                                    | winit::event::WindowEvent::Occluded(_)
+                            );
+
                             if let Some(event) = conversion::window_event(
                                 window_event,
                                 window.state.scale_factor(),
                                 window.state.modifiers(),
                             ) {
                                 events.push((id, event));
+                            }
+
+                            if may_change_mode
+                                && let Some(event) = window.state.poll_mode_change(&window.raw)
+                            {
+                                events.push((id, core::Event::Window(event)));
                             }
                         }
                     }
@@ -1483,6 +1496,9 @@ fn run_action<'a, P, C>(
             window::Action::Maximize(id, maximized) => {
                 if let Some(window) = window_manager.get_mut(id) {
                     window.raw.set_maximized(maximized);
+                    if let Some(event) = window.state.poll_mode_change(&window.raw) {
+                        events.push((id, core::Event::Window(event)));
+                    }
                 }
             }
             window::Action::GetMinimized(id, channel) => {
@@ -1493,6 +1509,9 @@ fn run_action<'a, P, C>(
             window::Action::Minimize(id, minimized) => {
                 if let Some(window) = window_manager.get_mut(id) {
                     window.raw.set_minimized(minimized);
+                    if let Some(event) = window.state.poll_mode_change(&window.raw) {
+                        events.push((id, core::Event::Window(event)));
+                    }
                 }
             }
             window::Action::GetPosition(id, channel) => {
@@ -1555,6 +1574,10 @@ fn run_action<'a, P, C>(
                     window
                         .raw
                         .set_fullscreen(conversion::fullscreen(window.raw.current_monitor(), mode));
+
+                    if let Some(event) = window.state.poll_mode_change(&window.raw) {
+                        events.push((id, core::Event::Window(event)));
+                    }
                 }
             }
             window::Action::SetIcon(id, icon) => {
@@ -1576,6 +1599,9 @@ fn run_action<'a, P, C>(
             window::Action::ToggleMaximize(id) => {
                 if let Some(window) = window_manager.get_mut(id) {
                     window.raw.set_maximized(!window.raw.is_maximized());
+                    if let Some(event) = window.state.poll_mode_change(&window.raw) {
+                        events.push((id, core::Event::Window(event)));
+                    }
                 }
             }
             window::Action::ToggleDecorations(id) => {
