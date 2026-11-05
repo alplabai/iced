@@ -127,15 +127,38 @@ pub enum Action {
     ///
     /// [`CursorGrab::Locked`] also hides the cursor. Where a mode is not
     /// supported, the next weaker one is tried (`Locked`, `Confined`,
-    /// `None`). The runtime releases the grab when the window loses focus
-    /// and when Escape is pressed.
+    /// `None`), and the mode that was actually applied is sent back.
+    ///
+    /// The runtime releases the grab on its own, and emits
+    /// [`Event::CursorGrabReleased`], when the window loses focus on macOS and
+    /// when Escape is pressed after [`Action::SetCursorGrabReleaseOnEscape`]
+    /// opted in.
     ///
     /// ## Platform-specific
     ///
-    /// - **Windows / X11:** `Locked` is unsupported and falls back to `Confined`.
+    /// - **Windows:** `Locked` and `Confined` are supported. The grab is
+    ///   only in effect while the window is focused and is re-applied on
+    ///   focus.
+    /// - **X11:** `Locked` is unsupported and falls back to `Confined`.
+    /// - **Wayland:** `Locked` and `Confined` both need the compositor to
+    ///   support `zwp_pointer_constraints`, otherwise they fall back to
+    ///   `None`. The grab is re-applied when the pointer re-enters.
     /// - **macOS:** `Confined` is unsupported and falls back to `None`.
-    /// - **Web / iOS / Android:** Mostly unsupported.
-    SetCursorGrab(Id, CursorGrab),
+    ///   `Locked` is global to the system, so it is released on focus loss.
+    /// - **Web:** `Confined` is unsupported. `Locked` requests the browser
+    ///   pointer lock, which the browser may refuse or end later (for
+    ///   example when the user presses Escape) without the application
+    ///   being told, because the runtime does not listen to
+    ///   `pointerlockchange`. The runtime leaves the cursor to the browser
+    ///   there instead of hiding it itself.
+    /// - **iOS / Android:** Unsupported.
+    SetCursorGrab(Id, CursorGrab, oneshot::Sender<CursorGrab>),
+
+    /// Choose whether pressing Escape releases the cursor grab of the window.
+    ///
+    /// Off by default, since Escape often has another meaning in an
+    /// application. Synthetic key events sent on focus changes are ignored.
+    SetCursorGrabReleaseOnEscape(Id, bool),
 
     /// Get the raw identifier unique to the window.
     GetRawId(Id, oneshot::Sender<u64>),
@@ -307,9 +330,21 @@ pub fn latest() -> Task<Option<Id>> {
 
 /// Grabs or releases the mouse cursor of the window.
 ///
+/// The [`Task`] resolves with the [`CursorGrab`] mode that was actually
+/// applied, which can be weaker than the requested one.
+///
 /// See [`Action::SetCursorGrab`] for the fallback and release rules.
-pub fn set_cursor_grab<T>(id: Id, grab: CursorGrab) -> Task<T> {
-    task::effect(crate::Action::Window(Action::SetCursorGrab(id, grab)))
+pub fn set_cursor_grab(id: Id, grab: CursorGrab) -> Task<CursorGrab> {
+    task::oneshot(move |channel| crate::Action::Window(Action::SetCursorGrab(id, grab, channel)))
+}
+
+/// Chooses whether pressing Escape releases the cursor grab of the window.
+///
+/// Off by default. See [`Action::SetCursorGrabReleaseOnEscape`].
+pub fn release_cursor_grab_on_escape<T>(id: Id, enabled: bool) -> Task<T> {
+    task::effect(crate::Action::Window(Action::SetCursorGrabReleaseOnEscape(
+        id, enabled,
+    )))
 }
 
 /// Begins dragging the window while the left mouse button is held.

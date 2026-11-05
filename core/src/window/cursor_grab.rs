@@ -13,6 +13,12 @@ pub enum CursorGrab {
     Confined,
     /// The cursor is locked in place and hidden, so it cannot reach the edge
     /// of the screen.
+    ///
+    /// While locked, [`mouse::Event::CursorMoved`] does not report movement.
+    /// Read [`mouse::Event::RawMotion`] instead.
+    ///
+    /// [`mouse::Event::CursorMoved`]: crate::mouse::Event::CursorMoved
+    /// [`mouse::Event::RawMotion`]: crate::mouse::Event::RawMotion
     Locked,
 }
 

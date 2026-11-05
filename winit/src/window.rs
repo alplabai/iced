@@ -90,6 +90,7 @@ where
                 renderer,
                 mouse_interaction: mouse::Interaction::None,
                 cursor_grab: CursorGrab::None,
+                release_grab_on_escape: false,
                 redraw_at: None,
                 frame_clock: FrameClock {
                     anchor: Instant::now(),
@@ -191,6 +192,7 @@ where
     pub exit_on_close_request: bool,
     pub mouse_interaction: mouse::Interaction,
     cursor_grab: CursorGrab,
+    release_grab_on_escape: bool,
     pub surface: C::Surface,
     pub surface_version: u64,
     pub surface_error_at: Option<Instant>,
@@ -351,34 +353,47 @@ where
         self.cursor_grab
     }
 
+    /// Chooses whether Escape releases the cursor grab. Off by default.
+    pub fn set_release_grab_on_escape(&mut self, enabled: bool) {
+        self.release_grab_on_escape = enabled;
+    }
+
+    /// Returns `true` if the runtime should release the cursor grab because
+    /// of the given window event.
+    pub fn releases_grab(&self, event: &winit::event::WindowEvent) -> bool {
+        self.cursor_grab.is_grabbed()
+            && releases_grab(
+                event,
+                ReleasePolicy {
+                    on_blur: RELEASE_GRAB_ON_BLUR,
+                    on_escape: self.release_grab_on_escape,
+                },
+            )
+    }
+
     /// Requests a cursor grab, falling back to weaker modes the platform
-    /// accepts. A locked cursor is hidden; releasing it restores visibility
-    /// unless the current interaction hides it.
-    pub fn set_cursor_grab(&mut self, grab: CursorGrab) {
-        let mut mode = Some(grab);
-        let mut applied = CursorGrab::None;
-
-        while let Some(candidate) = mode {
-            if self
-                .raw
-                .set_cursor_grab(conversion::cursor_grab(candidate))
-                .is_ok()
-            {
-                applied = candidate;
-                break;
-            }
-
-            mode = candidate.fallback();
-        }
+    /// accepts, and returns the mode that was actually applied. A locked
+    /// cursor is hidden (except on the web, where the browser hides it);
+    /// releasing it restores visibility unless the current interaction hides
+    /// it.
+    pub fn set_cursor_grab(&mut self, grab: CursorGrab) -> CursorGrab {
+        let applied = apply_cursor_grab(grab, |candidate| {
+            self.raw.set_cursor_grab(conversion::cursor_grab(candidate))
+        });
 
         let was_locked = self.cursor_grab == CursorGrab::Locked;
         self.cursor_grab = applied;
 
-        if applied == CursorGrab::Locked {
-            self.raw.set_cursor_visible(false);
-        } else if was_locked && self.mouse_interaction != mouse::Interaction::Hidden {
-            self.raw.set_cursor_visible(true);
+        if let Some(visible) = cursor_visibility_after_grab(
+            was_locked,
+            applied,
+            self.mouse_interaction == mouse::Interaction::Hidden,
+            HIDE_CURSOR_ON_LOCK,
+        ) {
+            self.raw.set_cursor_visible(visible);
         }
+
+        applied
     }
 
     pub fn update_mouse(&mut self, interaction: mouse::Interaction) {
@@ -576,5 +591,223 @@ where
                 );
             }
         });
+    }
+}
+
+/// Whether the runtime releases the grab when the window loses focus.
+///
+/// Only macOS: there the lock is global to the system
+/// (`CGAssociateMouseAndMouseCursorPosition`) and would outlive the focus.
+/// Windows and Wayland re-apply the grab when focus returns, so winit's own
+/// handling is left alone.
+const RELEASE_GRAB_ON_BLUR: bool = cfg!(target_os = "macos");
+
+/// Whether the runtime hides the cursor itself while it is locked. On the
+/// web the browser hides it during pointer lock, and the lock may be refused.
+const HIDE_CURSOR_ON_LOCK: bool = !cfg!(target_arch = "wasm32");
+
+/// Which window events make the runtime release a cursor grab.
+#[derive(Debug, Clone, Copy)]
+struct ReleasePolicy {
+    on_blur: bool,
+    on_escape: bool,
+}
+
+fn releases_grab(event: &winit::event::WindowEvent, policy: ReleasePolicy) -> bool {
+    use winit::event::WindowEvent;
+
+    match event {
+        WindowEvent::Focused(false) => policy.on_blur,
+        WindowEvent::KeyboardInput {
+            event,
+            is_synthetic,
+            ..
+        } => {
+            policy.on_escape
+                && is_escape_press(event.state.is_pressed(), &event.logical_key, *is_synthetic)
+        }
+        _ => false,
+    }
+}
+
+fn is_escape_press(pressed: bool, key: &winit::keyboard::Key, is_synthetic: bool) -> bool {
+    pressed
+        && !is_synthetic
+        && *key == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape)
+}
+
+/// Tries `requested` and then each weaker mode until `set` accepts one, and
+/// returns the mode that was applied. If even [`CursorGrab::None`] is
+/// refused, nothing was applied and [`CursorGrab::None`] is returned.
+fn apply_cursor_grab<E>(
+    requested: CursorGrab,
+    mut set: impl FnMut(CursorGrab) -> Result<(), E>,
+) -> CursorGrab {
+    let mut mode = Some(requested);
+
+    while let Some(candidate) = mode {
+        if set(candidate).is_ok() {
+            return candidate;
+        }
+
+        mode = candidate.fallback();
+    }
+
+    CursorGrab::None
+}
+
+/// Returns the cursor visibility to set after a grab change, if any.
+fn cursor_visibility_after_grab(
+    was_locked: bool,
+    applied: CursorGrab,
+    interaction_hidden: bool,
+    hide_on_lock: bool,
+) -> Option<bool> {
+    if applied == CursorGrab::Locked {
+        hide_on_lock.then_some(false)
+    } else if was_locked && !interaction_hidden {
+        Some(true)
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use winit::keyboard::{Key, NamedKey};
+
+    fn policy(on_blur: bool, on_escape: bool) -> ReleasePolicy {
+        ReleasePolicy { on_blur, on_escape }
+    }
+
+    #[test]
+    fn blur_releases_only_when_enabled() {
+        let blur = winit::event::WindowEvent::Focused(false);
+        let focus = winit::event::WindowEvent::Focused(true);
+
+        assert!(releases_grab(&blur, policy(true, false)));
+        assert!(!releases_grab(&blur, policy(false, true)));
+        assert!(!releases_grab(&focus, policy(true, true)));
+        assert!(!releases_grab(
+            &winit::event::WindowEvent::CursorEntered {
+                device_id: winit::event::DeviceId::dummy()
+            },
+            policy(true, true)
+        ));
+    }
+
+    #[test]
+    fn escape_press_is_a_release_unless_synthetic_or_a_release_event() {
+        let escape = Key::Named(NamedKey::Escape);
+
+        assert!(is_escape_press(true, &escape, false));
+        assert!(!is_escape_press(true, &escape, true));
+        assert!(!is_escape_press(false, &escape, false));
+        assert!(!is_escape_press(true, &Key::Named(NamedKey::Enter), false));
+    }
+
+    #[test]
+    fn fallback_loop_applies_first_accepted_mode() {
+        let mut tried = Vec::new();
+
+        let applied = apply_cursor_grab(CursorGrab::Locked, |mode| {
+            tried.push(mode);
+
+            if mode == CursorGrab::Locked {
+                Err(())
+            } else {
+                Ok(())
+            }
+        });
+
+        assert_eq!(applied, CursorGrab::Confined);
+        assert_eq!(tried, [CursorGrab::Locked, CursorGrab::Confined]);
+    }
+
+    #[test]
+    fn fallback_loop_chain_ends_at_none() {
+        let mut tried = Vec::new();
+
+        let applied = apply_cursor_grab(CursorGrab::Locked, |mode| {
+            tried.push(mode);
+
+            if mode == CursorGrab::None {
+                Ok(())
+            } else {
+                Err(())
+            }
+        });
+
+        assert_eq!(applied, CursorGrab::None);
+        assert_eq!(
+            tried,
+            [CursorGrab::Locked, CursorGrab::Confined, CursorGrab::None]
+        );
+    }
+
+    #[test]
+    fn fallback_loop_reports_none_when_nothing_applies() {
+        let mut calls = 0;
+
+        let applied = apply_cursor_grab(CursorGrab::Confined, |_| {
+            calls += 1;
+            Err::<(), _>(())
+        });
+
+        assert_eq!(applied, CursorGrab::None);
+        assert_eq!(calls, 2);
+    }
+
+    #[test]
+    fn fallback_loop_stops_at_requested_mode_when_accepted() {
+        let mut calls = 0;
+
+        let applied = apply_cursor_grab(CursorGrab::Confined, |_| {
+            calls += 1;
+            Ok::<(), ()>(())
+        });
+
+        assert_eq!(applied, CursorGrab::Confined);
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn locking_hides_the_cursor_unless_the_platform_does() {
+        assert_eq!(
+            cursor_visibility_after_grab(false, CursorGrab::Locked, false, true),
+            Some(false)
+        );
+        assert_eq!(
+            cursor_visibility_after_grab(false, CursorGrab::Locked, false, false),
+            None
+        );
+    }
+
+    #[test]
+    fn leaving_a_lock_shows_the_cursor_unless_the_interaction_hides_it() {
+        // Locked then degraded to Confined, or released.
+        for applied in [CursorGrab::Confined, CursorGrab::None] {
+            assert_eq!(
+                cursor_visibility_after_grab(true, applied, false, true),
+                Some(true)
+            );
+            assert_eq!(
+                cursor_visibility_after_grab(true, applied, true, true),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn grab_changes_that_never_locked_leave_visibility_alone() {
+        assert_eq!(
+            cursor_visibility_after_grab(false, CursorGrab::Confined, false, true),
+            None
+        );
+        assert_eq!(
+            cursor_visibility_after_grab(false, CursorGrab::None, false, true),
+            None
+        );
     }
 }

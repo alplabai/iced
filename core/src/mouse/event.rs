@@ -1,4 +1,4 @@
-use crate::Point;
+use crate::{Point, Vector};
 
 use super::Button;
 
@@ -20,6 +20,23 @@ pub enum Event {
     CursorMoved {
         /// The new position of the mouse cursor
         position: Point,
+    },
+
+    /// The mouse moved by a raw, unaccelerated-by-the-cursor amount.
+    ///
+    /// This is relative motion straight from the device, and keeps arriving
+    /// while the cursor is held in place by [`window::CursorGrab::Locked`],
+    /// when [`CursorMoved`] stops reporting movement. The unit of `delta` is
+    /// device-defined, not logical pixels.
+    ///
+    /// Only emitted on platforms where the system reports raw device motion,
+    /// and only to the focused window.
+    ///
+    /// [`window::CursorGrab::Locked`]: crate::window::CursorGrab::Locked
+    /// [`CursorMoved`]: Self::CursorMoved
+    RawMotion {
+        /// The change in position since the previous raw motion event.
+        delta: Vector,
     },
 
     /// A mouse button was pressed.
