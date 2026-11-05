@@ -249,7 +249,8 @@ wasmtimer = "0.4.2"
 web-sys = "0.3.104"
 web-time = "1.1"
 wgpu = { version = "30", default-features = false, features = ["std", "wgsl"] }
-winit = { git = "https://github.com/iced-rs/winit.git", rev = "48116469f15d3bc52b5e56bb516694be8882870d", default-features = false, features = ["rwh_06"] }
+# alplabai/winit `iced-signex`: iced-rs/winit 48116469 + cancellable macOS terminate requests (#37).
+winit = { git = "https://github.com/alplabai/winit.git", rev = "346d8f09746d16422542f43f8bd3b517ea7f65c6", default-features = false, features = ["rwh_06"] }
 
 [workspace.lints.rust]
 rust_2018_idioms = { level = "deny", priority = -1 }
@@ -278,7 +279,3 @@ useless_conversion = "deny"
 
 [workspace.lints.rustdoc]
 broken_intra_doc_links = "forbid"
-
-# shortcut: local winit fork checkout for #37 until alplabai/winit is published; replace with the git rev before merging.
-[patch."https://github.com/iced-rs/winit.git"]
-winit = { path = "../winit-alplab" }
