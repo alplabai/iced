@@ -1648,9 +1648,17 @@ fn run_action<'a, P, C>(
                         window.state.background_color(),
                     );
 
+                    // Empty bytes mean there is nothing to show (for example
+                    // a lost device), so do not claim a size for them.
+                    let size = if bytes.is_empty() {
+                        Size::new(0, 0)
+                    } else {
+                        window.state.physical_size()
+                    };
+
                     let _ = channel.send(core::window::Screenshot::new(
                         bytes,
-                        window.state.physical_size(),
+                        size,
                         window.state.scale_factor(),
                     ));
                 }

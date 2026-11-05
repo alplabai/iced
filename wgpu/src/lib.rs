@@ -175,7 +175,8 @@ impl Renderer {
 
     /// Renders the current surface to an offscreen buffer.
     ///
-    /// Returns RGBA bytes of the texture data.
+    /// Returns RGBA bytes of the texture data. The `Vec` is empty if the
+    /// viewport has no area or the device was lost.
     pub fn screenshot(&mut self, viewport: &Viewport, background_color: Color) -> Vec<u8> {
         #[derive(Clone, Copy, Debug)]
         struct BufferDimensions {

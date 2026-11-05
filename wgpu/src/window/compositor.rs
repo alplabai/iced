@@ -54,9 +54,14 @@ impl DeviceHealth {
     }
 
     fn record_error(&self, error: &wgpu::Error) {
-        log::error!("wgpu uncaptured error: {error}");
+        let count = self.uncaptured_errors.fetch_add(1, Ordering::Relaxed);
 
-        let _ = self.uncaptured_errors.fetch_add(1, Ordering::Relaxed);
+        // A broken pipeline can fail every frame, so only the first few
+        // errors and then exponentially rarer ones are logged. Counting
+        // stays exact.
+        if should_log(count) {
+            log::error!("wgpu uncaptured error (#{}): {error}", count + 1);
+        }
 
         if panics_on(error) {
             panic!("wgpu validation error: {error}");
@@ -79,6 +84,12 @@ impl DeviceHealth {
             health.record_error(&error);
         }));
     }
+}
+
+/// Returns whether the uncaptured error with the given zero-based index is
+/// logged: the first few, then exponentially rarer ones.
+fn should_log(count: u64) -> bool {
+    count < 8 || (count + 1).is_power_of_two()
 }
 
 /// Returns whether an uncaptured error must panic.
@@ -696,6 +707,15 @@ mod tests {
             source: error_source(),
             description: "broken pipeline".to_owned(),
         });
+    }
+
+    #[test]
+    fn error_logging_is_rate_limited() {
+        let logged = (0..1000).filter(|&n| should_log(n)).count();
+
+        assert!(should_log(0) && should_log(7));
+        assert!(!should_log(8) && !should_log(100));
+        assert!(logged < 20, "logged {logged} of 1000");
     }
 
     #[test]

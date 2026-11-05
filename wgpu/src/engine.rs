@@ -24,6 +24,11 @@ pub struct Engine {
 }
 
 impl Engine {
+    /// Creates a new [`Engine`] for the given device.
+    ///
+    /// This takes over the device-lost and uncaptured-error callbacks of the
+    /// device, replacing any installed earlier. Create only one [`Engine`]
+    /// per device: only the last one is told when the device is lost.
     pub fn new(
         _adapter: &wgpu::Adapter,
         device: wgpu::Device,
