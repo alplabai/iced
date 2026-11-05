@@ -94,13 +94,8 @@ impl Compositor {
         let adapter_options = wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::from_env().unwrap_or(power_preference),
             compatible_surface: compatible_surface.as_ref(),
-            force_fallback_adapter: false,
-            apply_limit_buckets: false,
-        };
-
-        let adapter_options = wgpu::RequestAdapterOptions {
             force_fallback_adapter: settings.software_fallback.force_fallback_adapter(),
-            ..adapter_options
+            apply_limit_buckets: false,
         };
 
         let adapter = match instance.request_adapter(&adapter_options).await {
@@ -439,7 +434,7 @@ pub struct Settings {
 
     /// Whether only software (CPU) adapters may be used.
     ///
-    /// By default, it is [`SoftwareFallback::Never`].
+    /// By default, it is [`SoftwareFallback::Allow`].
     ///
     /// Apps started through `iced::application` build their [`Settings`] from
     /// [`backend::Settings`], which does not carry this policy; for them it can
@@ -451,7 +446,7 @@ pub struct Settings {
 /// or WARP.
 ///
 /// It can be overridden with the `ICED_SOFTWARE_FALLBACK` environment variable
-/// (`never` or `always`).
+/// (`allow` or `always`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SoftwareFallback {
     /// Do not restrict the adapter selection.
@@ -459,7 +454,7 @@ pub enum SoftwareFallback {
     /// `wgpu` ranks software adapters last, so one is still picked when it is
     /// the only candidate; [`Compositor`] then logs a warning.
     #[default]
-    Never,
+    Allow,
     /// Only consider software (CPU) adapters, even if hardware adapters are
     /// available.
     Always,
@@ -469,7 +464,7 @@ impl SoftwareFallback {
     /// Parses a policy from the value of `ICED_SOFTWARE_FALLBACK`.
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
-            "never" | "0" | "false" => Some(Self::Never),
+            "allow" | "auto" | "0" | "false" => Some(Self::Allow),
             "always" | "1" | "true" => Some(Self::Always),
             _ => None,
         }
@@ -501,7 +496,7 @@ fn degraded_warning(
             "Using a software adapter as requested \
              (ICED_SOFTWARE_FALLBACK=always). Rendering will be slow."
         }
-        SoftwareFallback::Never => {
+        SoftwareFallback::Allow => {
             "No hardware adapter available; using a software adapter. \
              Rendering will be slow."
         }
@@ -527,8 +522,8 @@ fn adapter_report(
 
     format!(
         "backends: {backends:?}; power preference: {:?}; force fallback adapter: {}; \
-         surface given: {}; available adapters: {available}. Set ICED_SOFTWARE_FALLBACK=always \
-         to only use software adapters, or WGPU_BACKEND to pick another backend",
+         surface given: {}; available adapters: {available}. Set WGPU_BACKEND=gl to try the \
+         OpenGL backend, or install a Vulkan driver such as Mesa lavapipe",
         options.power_preference,
         options.force_fallback_adapter,
         options.compatible_surface.is_some(),
@@ -610,38 +605,43 @@ mod tests {
     fn warning_follows_adapter_and_policy() {
         use wgpu::DeviceType;
 
-        for policy in [SoftwareFallback::Never, SoftwareFallback::Always] {
+        for policy in [SoftwareFallback::Allow, SoftwareFallback::Always] {
             assert_eq!(degraded_warning(policy, DeviceType::DiscreteGpu), None);
             assert_eq!(degraded_warning(policy, DeviceType::IntegratedGpu), None);
         }
 
-        let never = degraded_warning(SoftwareFallback::Never, DeviceType::Cpu).unwrap();
+        let allow = degraded_warning(SoftwareFallback::Allow, DeviceType::Cpu).unwrap();
         let always = degraded_warning(SoftwareFallback::Always, DeviceType::Cpu).unwrap();
 
-        assert!(never.contains("No hardware adapter"));
+        assert!(allow.contains("No hardware adapter"));
         assert!(always.contains("as requested"));
         assert!(!always.contains("No hardware adapter"));
-        assert_eq!(SoftwareFallback::default(), SoftwareFallback::Never);
-        assert!(!SoftwareFallback::Never.force_fallback_adapter());
+        assert_eq!(SoftwareFallback::default(), SoftwareFallback::Allow);
+        assert!(!SoftwareFallback::Allow.force_fallback_adapter());
         assert!(SoftwareFallback::Always.force_fallback_adapter());
     }
 
     #[test]
     fn parses_policy() {
         assert_eq!(
-            SoftwareFallback::parse("never"),
-            Some(SoftwareFallback::Never)
+            SoftwareFallback::parse("allow"),
+            Some(SoftwareFallback::Allow)
         );
         assert_eq!(
-            SoftwareFallback::parse(" Never "),
-            Some(SoftwareFallback::Never)
+            SoftwareFallback::parse(" Allow "),
+            Some(SoftwareFallback::Allow)
         );
         assert_eq!(
             SoftwareFallback::parse("ALWAYS"),
             Some(SoftwareFallback::Always)
         );
         assert_eq!(SoftwareFallback::parse("1"), Some(SoftwareFallback::Always));
-        assert_eq!(SoftwareFallback::parse("0"), Some(SoftwareFallback::Never));
+        assert_eq!(SoftwareFallback::parse("0"), Some(SoftwareFallback::Allow));
+        assert_eq!(
+            SoftwareFallback::parse("auto"),
+            Some(SoftwareFallback::Allow)
+        );
+        assert_eq!(SoftwareFallback::parse("never"), None);
         assert_eq!(SoftwareFallback::parse("sometimes"), None);
     }
 
@@ -650,7 +650,10 @@ mod tests {
         let options = wgpu::RequestAdapterOptions::default();
 
         let empty = adapter_report(wgpu::Backends::VULKAN, &options, &[]);
-        assert!(empty.contains("backends: Backends(VULKAN)") || empty.contains("VULKAN"));
+        assert!(empty.starts_with("backends: "));
+        assert!(empty.contains("VULKAN"));
+        assert!(empty.contains("WGPU_BACKEND=gl"));
+        assert!(!empty.contains("ICED_SOFTWARE_FALLBACK"));
         assert!(empty.contains("force fallback adapter: false"));
         assert!(empty.contains("surface given: false"));
         assert!(empty.contains("available adapters: none"));
@@ -660,6 +663,5 @@ mod tests {
         info.name = "llvmpipe".to_owned();
         let report = adapter_report(wgpu::Backends::all(), &options, &[info]);
         assert!(report.contains("llvmpipe (Vulkan, Cpu)"));
-        assert!(report.contains("ICED_SOFTWARE_FALLBACK"));
     }
 }
