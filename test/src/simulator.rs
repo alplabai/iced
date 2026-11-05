@@ -103,7 +103,7 @@ where
     /// Sets the scale factor used when taking a [`Snapshot`] (2.0 by default).
     ///
     /// Snapshot reference files taken with a scale factor other than the default are
-    /// named with an `@<scale>x` suffix (e.g. `name-tiny-skia@1x.png`), so they never
+    /// named with an `@<scale>x` suffix (e.g. `name-tiny-skia@1x.png` or `@1.5x.png`), so they never
     /// collide with references taken at the default scale.
     ///
     /// The physical size of the snapshot (the logical size times the scale factor) must
@@ -492,14 +492,13 @@ impl Snapshot {
         };
 
         path.with_file_name(format!(
-            "{name}-{renderer}{scale}",
+            "{name}-{renderer}{scale}.{extension}",
             name = path
                 .file_stem()
                 .map(std::ffi::OsStr::to_string_lossy)
                 .unwrap_or_default(),
             renderer = self.renderer
         ))
-        .with_extension(extension)
     }
 }
 
@@ -802,6 +801,21 @@ mod tests {
         assert_eq!(
             scaled.path("dir/shot", "png"),
             PathBuf::from("dir/shot-test@1x.png")
+        );
+
+        scaled.screenshot.scale_factor = 1.5;
+        let one_and_a_half = scaled.path("dir/shot", "png");
+        assert_eq!(one_and_a_half, PathBuf::from("dir/shot-test@1.5x.png"));
+
+        scaled.screenshot.scale_factor = 1.25;
+        let one_and_a_quarter = scaled.path("dir/shot", "png");
+        assert_eq!(one_and_a_quarter, PathBuf::from("dir/shot-test@1.25x.png"));
+        assert_ne!(one_and_a_half, one_and_a_quarter);
+
+        // Artifact paths derived from the reference keep the scale.
+        assert_eq!(
+            one_and_a_half.with_extension("actual.png"),
+            PathBuf::from("dir/shot-test@1.5x.actual.png")
         );
     }
 
