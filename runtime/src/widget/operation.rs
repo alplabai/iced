@@ -79,6 +79,23 @@ pub mod scrollable {
             animation,
         )))
     }
+
+    /// Scrolls the scrollable with the given [`Id`] by the minimum amount
+    /// needed to bring `target` into view.
+    ///
+    /// The `target` is expressed in the coordinate space of the scrollable
+    /// content.
+    pub fn reveal<T>(
+        id: impl Into<Id>,
+        target: crate::core::Rectangle,
+        animation: Animation,
+    ) -> Task<T> {
+        task::effect(Action::widget(operation::scrollable::reveal(
+            id.into(),
+            target,
+            animation,
+        )))
+    }
 }
 
 /// Operations for widgets that contain text.
