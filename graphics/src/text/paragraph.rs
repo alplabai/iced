@@ -769,4 +769,46 @@ mod tests {
         assert!(bounds[0].y + bounds[0].height <= bounds[1].y + 1e-2);
         assert!((bounds[0].height - bounds[1].height).abs() < 1e-2);
     }
+
+    #[cfg(feature = "fira-sans")]
+    fn min_width(content: &str, font: Font) -> f32 {
+        let text = Text {
+            content,
+            bounds: Size::new(1000.0, f32::INFINITY),
+            size: Pixels(20.0),
+            line_height: LineHeight::Relative(1.5),
+            font,
+            align_x: Alignment::Default,
+            align_y: alignment::Vertical::Top,
+            shaping: Shaping::Advanced,
+            wrapping: Wrapping::default(),
+            ellipsis: Ellipsis::default(),
+            hint_factor: None,
+        };
+
+        Paragraph::with_text(text).min_width()
+    }
+
+    /// Fira Sans has proportional digits by default and tabular ones
+    /// behind `tnum`.
+    #[cfg(feature = "fira-sans")]
+    #[test]
+    fn tabular_figures_equalize_digit_advances() {
+        use crate::core::font::Features;
+
+        let fira = Font::new("Fira Sans");
+        let tabular = fira.features(Features::TNUM);
+
+        let (narrow, wide) = ("1111", "0000");
+
+        assert!(
+            (min_width(narrow, fira) - min_width(wide, fira)).abs() > 1e-2,
+            "digits should be proportional by default"
+        );
+
+        assert!(
+            (min_width(narrow, tabular) - min_width(wide, tabular)).abs() < 1e-2,
+            "digits should share an advance with `tnum`"
+        );
+    }
 }
