@@ -117,3 +117,41 @@ fn keyed_column_push_boxed() {
 
     assert_eq!(count(&mut column), 4);
 }
+
+/// `None` is skipped by `Grid::push_boxed` and by `keyed::Column`'s
+/// `extend_boxed`.
+#[test]
+fn none_children_skipped_in_grid_and_keyed() {
+    let none = || None::<iced_widget::Text<'static>>;
+
+    assert_eq!(
+        count(
+            &mut Grid::<El<'_>>::new()
+                .push_boxed(none())
+                .push_boxed(text("a"))
+        ),
+        1
+    );
+    assert_eq!(
+        count(&mut Grid::<El<'_>>::new().extend_boxed([none(), none()])),
+        0
+    );
+
+    let mut column = keyed::Column::<u32, El<'_>>::new()
+        .extend_boxed([(0, none()), (1, none())])
+        .push_boxed(2, text("a"));
+
+    assert_eq!(count(&mut column), 1);
+}
+
+/// `push_under_boxed` adds under and skips `None` without shifting the base
+/// layer.
+#[test]
+fn stack_push_under_boxed() {
+    let mut stack = Stack::<El<'_>>::new()
+        .push_boxed(text("top"))
+        .push_under_boxed(space())
+        .push_under_boxed(None::<iced_widget::Text<'static>>);
+
+    assert_eq!(count(&mut stack), 2);
+}

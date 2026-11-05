@@ -150,6 +150,9 @@ impl<'a, Message, Theme, Renderer> Column<crate::core::Element<'a, Message, Them
     /// Adds any [`Widget`] to the [`Column`], boxing it into an
     /// [`Element`](crate::core::Element) first.
     ///
+    /// `None` children are skipped before boxing, so they cost no heap
+    /// allocation.
+    ///
     /// This is a shorthand for `push(child._boxed())`, useful when the
     /// children have different types.
     ///
@@ -162,6 +165,10 @@ impl<'a, Message, Theme, Renderer> Column<crate::core::Element<'a, Message, Them
     ///     .push_boxed(None::<iced_widget::Text<'_>>);
     /// ```
     pub fn push_boxed(self, child: impl Widget<Message, Theme, Renderer> + 'a) -> Self {
+        if child.is_void() {
+            return self;
+        }
+
         self.push(child._boxed())
     }
 

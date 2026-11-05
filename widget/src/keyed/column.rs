@@ -171,6 +171,9 @@ where
     /// Adds any [`Widget`] to the [`Column`], boxing it into an
     /// [`Element`](crate::core::Element) first.
     ///
+    /// `None` children are skipped before boxing, so they cost no heap
+    /// allocation.
+    ///
     /// This is a shorthand for `push(key, child._boxed())`, useful when the
     /// children have different types.
     ///
@@ -183,6 +186,10 @@ where
     ///         .push_boxed(1, button("Click"));
     /// ```
     pub fn push_boxed(self, key: Key, child: impl Widget<Message, Theme, Renderer> + 'a) -> Self {
+        if child.is_void() {
+            return self;
+        }
+
         self.push(key, child._boxed())
     }
 
