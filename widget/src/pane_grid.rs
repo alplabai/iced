@@ -509,8 +509,6 @@ where
                 let bounds = layout.bounds();
 
                 if let Some(cursor_position) = cursor.position_over(bounds) {
-                    shell.capture_event();
-
                     match &self.on_resize {
                         Some((leeway, _)) => {
                             let relative_cursor = Point::new(
@@ -530,6 +528,8 @@ where
                             if let Some((split, axis, _)) = clicked_split {
                                 if action.picked_pane().is_none() {
                                     *action = state::Action::Resizing { split, axis };
+
+                                    shell.capture_event();
                                 }
                             } else {
                                 click_pane(

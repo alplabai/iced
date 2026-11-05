@@ -23,7 +23,7 @@ impl MonitorList {
 
     /// Returns the primary monitor, or the first monitor if no primary is available
     pub fn primary_or_first(&self) -> MonitorRef<'_> {
-        self.primary().unwrap_or_else(|| MonitorRef {
+        self.primary().unwrap_or(MonitorRef {
             list: self,
             index: MonitorIndex(0),
         })
@@ -81,7 +81,7 @@ impl<'a> MonitorRef<'a> {
 
     /// Returns the index of the monitor. You can use this when creating a new window.
     pub fn index(&self) -> MonitorIndex {
-        self.index.clone()
+        self.index
     }
 
     /// Returns the scale factor of the monitor.
@@ -137,8 +137,18 @@ impl MonitorData {
     ///
     /// **WARNING**: this ignores the scale factor you might have set for a **window**.
     pub fn size(&self) -> crate::Size {
-        let width = self.physical_size.width as f32 * self.scale_factor as f32;
-        let height = self.physical_size.height as f32 * self.scale_factor as f32;
+        // Logical size = physical size / scale factor. A scale factor that is
+        // not a positive finite number cannot come from a real monitor; treat
+        // it as 1.0 instead of returning infinities.
+        let scale_factor = self.scale_factor as f32;
+        let scale_factor = if scale_factor.is_finite() && scale_factor > 0.0 {
+            scale_factor
+        } else {
+            1.0
+        };
+
+        let width = self.physical_size.width as f32 / scale_factor;
+        let height = self.physical_size.height as f32 / scale_factor;
         crate::Size::new(width, height)
     }
 
@@ -155,5 +165,38 @@ impl MonitorData {
     /// Returns the refresh rate of the monitor in millihertz.
     pub fn refresh_rate_millihertz(&self) -> Option<u32> {
         self.refresh_rate_millihertz
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Size;
+
+    fn monitor(width: u32, height: u32, scale_factor: f64) -> MonitorData {
+        MonitorData::new(Size::new(width, height), scale_factor, None, None)
+    }
+
+    #[test]
+    fn size_is_unchanged_at_a_scale_factor_of_one() {
+        assert_eq!(monitor(1920, 1080, 1.0).size(), Size::new(1920.0, 1080.0));
+    }
+
+    #[test]
+    fn size_divides_the_physical_size_by_the_scale_factor() {
+        assert_eq!(monitor(3840, 2160, 2.0).size(), Size::new(1920.0, 1080.0));
+        assert_eq!(monitor(2560, 1440, 1.25).size(), Size::new(2048.0, 1152.0));
+        assert_eq!(monitor(1920, 1080, 0.5).size(), Size::new(3840.0, 2160.0));
+    }
+
+    #[test]
+    fn size_ignores_a_scale_factor_that_is_not_positive_and_finite() {
+        for scale_factor in [0.0, -2.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(
+                monitor(1920, 1080, scale_factor).size(),
+                Size::new(1920.0, 1080.0),
+                "scale factor {scale_factor}"
+            );
+        }
     }
 }

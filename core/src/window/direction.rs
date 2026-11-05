@@ -72,12 +72,7 @@ impl Direction {
     ///
     /// Returns `None` if the window size or `border` is not positive and
     /// finite, or if `position` is outside of the window.
-    pub fn at_with_corner(
-        position: Point,
-        size: Size,
-        border: f32,
-        corner: f32,
-    ) -> Option<Self> {
+    pub fn at_with_corner(position: Point, size: Size, border: f32, corner: f32) -> Option<Self> {
         let valid = |value: f32| value.is_finite() && value > 0.0;
 
         if !valid(size.width)
@@ -115,8 +110,8 @@ impl Direction {
             }
         };
 
-        let in_border = side(x, size.width, border).is_some()
-            || side(y, size.height, border).is_some();
+        let in_border =
+            side(x, size.width, border).is_some() || side(y, size.height, border).is_some();
 
         if !in_border {
             return None;
@@ -132,10 +127,7 @@ impl Direction {
             (Some(true), Some(true)) => Some(Self::SouthEast),
             _ => {
                 // Not in a corner region: fall back to the plain edge bands.
-                match (
-                    side(x, size.width, border),
-                    side(y, size.height, border),
-                ) {
+                match (side(x, size.width, border), side(y, size.height, border)) {
                     (Some(false), None) => Some(Self::West),
                     (Some(true), None) => Some(Self::East),
                     (None, Some(false)) => Some(Self::North),
@@ -162,12 +154,8 @@ impl Direction {
         match self {
             Self::North | Self::South => mouse::Interaction::ResizingVertically,
             Self::East | Self::West => mouse::Interaction::ResizingHorizontally,
-            Self::NorthEast | Self::SouthWest => {
-                mouse::Interaction::ResizingDiagonallyUp
-            }
-            Self::NorthWest | Self::SouthEast => {
-                mouse::Interaction::ResizingDiagonallyDown
-            }
+            Self::NorthEast | Self::SouthWest => mouse::Interaction::ResizingDiagonallyUp,
+            Self::NorthWest | Self::SouthEast => mouse::Interaction::ResizingDiagonallyDown,
         }
     }
 }
@@ -215,9 +203,7 @@ mod tests {
 
     #[test]
     fn larger_corner() {
-        let at = |x, y| {
-            Direction::at_with_corner(Point::new(x, y), SIZE, 4.0, 12.0)
-        };
+        let at = |x, y| Direction::at_with_corner(Point::new(x, y), SIZE, 4.0, 12.0);
 
         assert_eq!(at(1.0, 10.0), Some(Direction::NorthWest));
         assert_eq!(at(10.0, 1.0), Some(Direction::NorthWest));
@@ -230,8 +216,7 @@ mod tests {
 
     #[test]
     fn corner_smaller_than_border_is_clamped() {
-        let result =
-            Direction::at_with_corner(Point::new(1.0, 3.0), SIZE, 4.0, 0.0);
+        let result = Direction::at_with_corner(Point::new(1.0, 3.0), SIZE, 4.0, 0.0);
 
         assert_eq!(result, Some(Direction::NorthWest));
     }

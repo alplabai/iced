@@ -95,7 +95,9 @@ pub fn window_attributes(
     #[cfg(target_os = "windows")]
     {
         use window::settings::platform;
-        use winit::platform::windows::{CornerPreference, WindowAttributesExtWindows};
+        use winit::platform::windows::{
+            BackdropType, CornerPreference, WindowAttributesExtWindows,
+        };
 
         attributes = attributes.with_drag_and_drop(settings.platform_specific.drag_and_drop);
 
@@ -111,6 +113,10 @@ pub fn window_attributes(
                 platform::CornerPreference::Round => CornerPreference::Round,
                 platform::CornerPreference::RoundSmall => CornerPreference::RoundSmall,
             });
+
+        if settings.blur {
+            attributes = attributes.with_system_backdrop(BackdropType::TransientWindow);
+        }
     }
 
     #[cfg(target_os = "macos")]
@@ -204,11 +210,9 @@ pub fn window_event(
                 }))
             }
         },
-        WindowEvent::PinchGesture { delta, .. } => {
-            Some(Event::Mouse(mouse::Event::PinchGesture {
-                delta: delta as f32,
-            }))
-        }
+        WindowEvent::PinchGesture { delta, .. } => Some(Event::Mouse(mouse::Event::PinchGesture {
+            delta: delta as f32,
+        })),
         WindowEvent::PanGesture {
             delta: physical_delta,
             phase: touch_phase,
@@ -487,18 +491,27 @@ pub fn monitor_list(
     handles: impl Iterator<Item = winit::monitor::MonitorHandle>,
     primary_monitor: Option<winit::monitor::MonitorHandle>,
 ) -> window::MonitorList {
+    build_monitor_list(handles, primary_monitor.as_ref(), monitor)
+}
+
+/// Builds a [`window::MonitorList`], flagging the handle equal to `primary_monitor`.
+fn build_monitor_list<T: PartialEq>(
+    handles: impl Iterator<Item = T>,
+    primary_monitor: Option<&T>,
+    mut convert: impl FnMut(T) -> MonitorData,
+) -> window::MonitorList {
     let mut list = MonitorList::empty();
     for handle in handles {
-        let is_primary = primary_monitor
-            .as_ref()
-            .map(|p| Some(p) == primary_monitor.as_ref())
-            .unwrap_or(false);
+        let is_primary = is_primary_monitor(&handle, primary_monitor);
 
-        let monitor_data = monitor(handle);
-
-        list.add_monitor(is_primary, monitor_data);
+        list.add_monitor(is_primary, convert(handle));
     }
     list
+}
+
+/// Returns whether `handle` is the primary monitor, if there is one.
+fn is_primary_monitor<T: PartialEq>(handle: &T, primary_monitor: Option<&T>) -> bool {
+    primary_monitor == Some(handle)
 }
 
 /// Converts a [`winit`] monitor handle into a [`window::MonitorData`] by reading all relevant monitor properties.
@@ -1224,4 +1237,64 @@ pub fn ime_purpose(purpose: input_method::Purpose) -> winit::window::ImePurpose 
 // See: https://en.wikipedia.org/wiki/Private_Use_Areas
 fn is_private_use(c: char) -> bool {
     ('\u{E000}'..='\u{F8FF}').contains(&c)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_monitor_list, is_primary_monitor};
+    use crate::core::Size;
+    use crate::core::window::MonitorData;
+
+    fn named(id: u32) -> MonitorData {
+        MonitorData::new(Size::new(1, 1), 1.0, Some(id.to_string()), None)
+    }
+
+    #[test]
+    fn monitor_list_flags_only_the_primary_handle() {
+        let list = build_monitor_list([10, 20, 30].into_iter(), Some(&20), named);
+
+        let flags: Vec<bool> = list.iter().map(|monitor| monitor.is_primary()).collect();
+        assert_eq!(flags, [false, true, false]);
+        assert_eq!(
+            list.primary().and_then(|m| m.name().map(String::from)),
+            Some("20".into())
+        );
+    }
+
+    #[test]
+    fn monitor_list_has_no_primary_without_a_primary_handle() {
+        let list = build_monitor_list([10, 20].into_iter(), None, named);
+
+        assert!(list.primary().is_none());
+    }
+
+    #[test]
+    fn only_the_handle_equal_to_the_primary_one_is_primary() {
+        let handles = [10, 20, 30];
+
+        let flags: Vec<bool> = handles
+            .iter()
+            .map(|handle| is_primary_monitor(handle, Some(&20)))
+            .collect();
+
+        assert_eq!(flags, [false, true, false]);
+    }
+
+    #[test]
+    fn no_handle_is_primary_when_there_is_no_primary_monitor() {
+        assert!(
+            ![10, 20, 30]
+                .iter()
+                .any(|handle| is_primary_monitor(handle, None))
+        );
+    }
+
+    #[test]
+    fn a_primary_monitor_that_is_not_in_the_list_flags_nothing() {
+        assert!(
+            ![10, 20, 30]
+                .iter()
+                .any(|handle| is_primary_monitor(handle, Some(&99)))
+        );
+    }
 }
