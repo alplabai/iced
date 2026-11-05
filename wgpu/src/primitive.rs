@@ -3,6 +3,8 @@ use crate::core::{self, Rectangle};
 use crate::graphics::Viewport;
 use crate::graphics::futures::{MaybeSend, MaybeSync};
 
+use crate::core::time::{Duration, Instant};
+
 use rustc_hash::FxHashMap;
 use std::any::{Any, TypeId};
 use std::fmt::Debug;
@@ -11,8 +13,12 @@ use std::fmt::Debug;
 const DEFAULT_KEY: u64 = 0;
 
 /// The number of frames a keyed [`Pipeline`] may go unprepared before
-/// [`Storage::trim`] drops it.
+/// [`Storage::trim`] may drop it.
 const MAX_IDLE_FRAMES: u64 = 120;
+
+/// The time a keyed [`Pipeline`] may go unprepared before [`Storage::trim`]
+/// may drop it. A pipeline is only dropped once it exceeds both limits.
+const MAX_IDLE_TIME: Duration = Duration::from_secs(10);
 
 /// A batch of primitives.
 pub type Batch = Vec<Instance>;
@@ -37,10 +43,22 @@ pub trait Primitive: Debug + MaybeSend + MaybeSync + 'static {
     /// [`Primitive`] type keep independent GPU state without declaring a
     /// marker type for each.
     ///
-    /// A [`Pipeline`] whose key is not `0` is dropped after it has not been
-    /// prepared for a number of frames (see [`Storage::trim`]), so keys
-    /// can be derived from short-lived data. The pipeline of key `0`, the
-    /// default, is never evicted.
+    /// Keys must be unique per pipeline instance: two [`Primitive`]s of the
+    /// same type that return the same key share one [`Pipeline`] and its GPU
+    /// state, so a plain hash of some data is only safe if collisions are
+    /// handled. The key `0` is reserved for the default [`Pipeline`], which is
+    /// never evicted; do not derive it from data.
+    ///
+    /// The key is read once, when the [`Primitive`] is submitted for
+    /// drawing, and used for the whole frame. It should still be stable for
+    /// the life of the value.
+    ///
+    /// A [`Pipeline`] whose key is not `0` is dropped once it has not been
+    /// prepared for both a number of frames and a span of time (see
+    /// [`Storage::trim`]), so keys can be derived from short-lived data. The
+    /// frame count is shared by every window and screenshot that use the same
+    /// engine, which is why the time limit exists: a static window does not
+    /// lose its pipelines because another window keeps redrawing.
     fn pipeline_key(&self) -> u64 {
         DEFAULT_KEY
     }
@@ -145,6 +163,7 @@ pub(crate) trait Stored: Debug + MaybeSend + MaybeSync + 'static {
 #[derive(Debug)]
 struct BlackBox<P: Primitive> {
     primitive: P,
+    key: u64,
 }
 
 impl<P: Primitive> Stored for BlackBox<P> {
@@ -157,7 +176,7 @@ impl<P: Primitive> Stored for BlackBox<P> {
         bounds: &Rectangle,
         viewport: &Viewport,
     ) {
-        let key = self.primitive.pipeline_key();
+        let key = self.key;
 
         if !storage.has_keyed::<P>(key) {
             storage.store_keyed::<P, _>(key, P::Pipeline::new_keyed(device, queue, format, key));
@@ -175,7 +194,7 @@ impl<P: Primitive> Stored for BlackBox<P> {
 
     fn draw(&self, storage: &Storage, render_pass: &mut wgpu::RenderPass<'_>) -> bool {
         let renderer = storage
-            .get_keyed::<P>(self.primitive.pipeline_key())
+            .get_keyed::<P>(self.key)
             .expect("renderer should be initialized")
             .downcast_ref::<P::Pipeline>()
             .expect("renderer should have the proper type");
@@ -191,7 +210,7 @@ impl<P: Primitive> Stored for BlackBox<P> {
         clip_bounds: &Rectangle<u32>,
     ) {
         let renderer = storage
-            .get_keyed::<P>(self.primitive.pipeline_key())
+            .get_keyed::<P>(self.key)
             .expect("renderer should be initialized")
             .downcast_ref::<P::Pipeline>()
             .expect("renderer should have the proper type");
@@ -216,7 +235,10 @@ impl Instance {
     pub fn new(bounds: Rectangle, primitive: impl Primitive) -> Self {
         Instance {
             bounds,
-            primitive: Box::new(BlackBox { primitive }),
+            primitive: Box::new(BlackBox {
+                key: primitive.pipeline_key(),
+                primitive,
+            }),
         }
     }
 }
@@ -237,6 +259,7 @@ pub struct Storage {
 struct Entry {
     pipeline: Box<dyn Pipeline>,
     last_used: u64,
+    last_used_at: Instant,
 }
 
 impl Storage {
@@ -262,6 +285,7 @@ impl Storage {
             Entry {
                 pipeline: Box::new(pipeline),
                 last_used: self.frame,
+                last_used_at: Instant::now(),
             },
         );
     }
@@ -291,29 +315,38 @@ impl Storage {
     /// being evicted by [`trim`](Self::trim).
     pub fn get_mut_keyed<T: 'static>(&mut self, key: u64) -> Option<&mut dyn Any> {
         let frame = self.frame;
+        let now = Instant::now();
 
         self.pipelines
             .get_mut(&(TypeId::of::<T>(), key))
             .map(|entry| {
                 entry.last_used = frame;
+                entry.last_used_at = now;
                 entry.pipeline.as_mut() as &mut dyn Any
             })
     }
 
     /// Trims the cache of all the pipelines in the [`Storage`], ends the
     /// current frame, and drops any keyed pipeline that has not been prepared
-    /// for a number of frames.
+    /// for both a number of frames and a span of time.
+    ///
+    /// A [`Storage`] is shared by all the windows of an engine and trimmed on
+    /// every render, screenshots included, so the frame count advances with
+    /// the renders of all of them. The time limit keeps a window that is
+    /// static (and so not redrawing) from losing its pipelines.
     ///
     /// Pipelines stored under the default key are never dropped.
     pub fn trim(&mut self) {
-        self.trim_idle(MAX_IDLE_FRAMES);
+        self.trim_idle(MAX_IDLE_FRAMES, MAX_IDLE_TIME, Instant::now());
     }
 
-    fn trim_idle(&mut self, max_idle_frames: u64) {
+    fn trim_idle(&mut self, max_idle_frames: u64, max_idle_time: Duration, now: Instant) {
         let frame = self.frame;
 
         self.pipelines.retain(|&(_, key), entry| {
-            key == DEFAULT_KEY || frame.saturating_sub(entry.last_used) <= max_idle_frames
+            key == DEFAULT_KEY
+                || frame.saturating_sub(entry.last_used) <= max_idle_frames
+                || now.saturating_duration_since(entry.last_used_at) <= max_idle_time
         });
 
         for entry in self.pipelines.values_mut() {
@@ -379,7 +412,7 @@ mod tests {
         for _ in 0..3 {
             // Only key 2 keeps being prepared.
             let _ = storage.get_mut_keyed::<Marker>(2);
-            storage.trim_idle(1);
+            storage.trim_idle(1, Duration::ZERO, Instant::now() + Duration::from_secs(1));
         }
 
         assert_eq!(drops.load(Ordering::SeqCst), 1);
@@ -406,8 +439,73 @@ mod tests {
         storage.trim();
         storage.trim();
 
+        // The frame limit alone is not enough: the pipeline was used just now.
+        assert!(storage.has_keyed::<Marker>(1));
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+
+        storage.trim_idle(
+            MAX_IDLE_FRAMES,
+            MAX_IDLE_TIME,
+            Instant::now() + MAX_IDLE_TIME + Duration::from_secs(1),
+        );
+
         assert!(!storage.has_keyed::<Marker>(1));
         assert_eq!(drops.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn static_window_pipelines_survive_other_windows_frames() {
+        let drops = Arc::new(AtomicUsize::new(0));
+        let mut storage = Storage::default();
+
+        // Window B prepares its keyed pipeline once and then stays static,
+        // while window A renders (and trims the shared storage) every frame.
+        storage.store_keyed::<Marker, _>(1, Counted(drops.clone()));
+
+        for _ in 0..(MAX_IDLE_FRAMES * 3) {
+            let _ = storage.get_mut_keyed::<Marker>(2);
+            storage.trim();
+        }
+
+        assert!(storage.has_keyed::<Marker>(1));
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn key_is_read_once_per_instance() {
+        use std::sync::atomic::AtomicU64;
+
+        #[derive(Debug)]
+        struct Shifty(Arc<AtomicU64>);
+
+        impl Primitive for Shifty {
+            type Pipeline = KeyedPipeline;
+
+            fn pipeline_key(&self) -> u64 {
+                self.0.fetch_add(1, Ordering::SeqCst) + 1
+            }
+
+            fn prepare(
+                &self,
+                _: &mut KeyedPipeline,
+                _: &wgpu::Device,
+                _: &wgpu::Queue,
+                _: &Rectangle,
+                _: &Viewport,
+            ) {
+            }
+        }
+
+        let calls = Arc::new(AtomicU64::new(0));
+        let instance = Instance::new(
+            Rectangle::with_size(core::Size::new(1.0, 1.0)),
+            Shifty(calls.clone()),
+        );
+
+        // Building the instance reads the key exactly once; later phases
+        // reuse the stored value instead of asking again.
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        drop(instance);
     }
 
     fn block_on<F: std::future::Future>(future: F) -> F::Output {
