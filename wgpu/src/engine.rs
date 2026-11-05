@@ -3,6 +3,7 @@ use crate::primitive;
 use crate::quad;
 use crate::text;
 use crate::triangle;
+use crate::window::compositor::DeviceHealth;
 
 use std::sync::{Arc, RwLock};
 
@@ -11,6 +12,7 @@ pub struct Engine {
     pub(crate) device: wgpu::Device,
     pub(crate) queue: wgpu::Queue,
     pub(crate) format: wgpu::TextureFormat,
+    pub(crate) health: Arc<DeviceHealth>,
 
     pub(crate) quad_pipeline: quad::Pipeline,
     pub(crate) text_pipeline: text::Pipeline,
@@ -30,8 +32,12 @@ impl Engine {
         antialiasing: Option<Antialiasing>, // TODO: Initialize AA pipelines lazily
         shell: Shell,
     ) -> Self {
+        let health = Arc::new(DeviceHealth::default());
+        health.install(&device);
+
         Self {
             format,
+            health,
 
             quad_pipeline: quad::Pipeline::new(&device, format),
             text_pipeline: text::Pipeline::new(&device, &queue, format),
@@ -55,7 +61,7 @@ impl Engine {
     #[cfg(any(feature = "image", feature = "svg"))]
     pub fn create_image_cache(&self) -> crate::image::Cache {
         self.image_pipeline
-            .create_cache(&self.device, &self.queue, &self._shell)
+            .create_cache(&self.device, &self.queue, &self._shell, &self.health)
     }
 
     pub fn trim(&mut self) {

@@ -983,8 +983,18 @@ async fn run_instance<P>(
 
                                     // The device cannot recover and recreating the surface
                                     // will not help. Skip the frame without requesting a
-                                    // redraw, so the loop does not spin. The cause was
-                                    // logged when the device reported the loss.
+                                    // redraw, so the loop does not spin.
+                                    if window
+                                        .surface_error_at
+                                        .is_none_or(|at| at.elapsed() > Duration::from_secs(1))
+                                    {
+                                        window.surface_error_at = Some(Instant::now());
+
+                                        log::error!(
+                                            "The graphics device was lost; the window \
+                                             will not be redrawn anymore."
+                                        );
+                                    }
                                 }
                                 compositor::SurfaceError::Occluded => {
                                     present_span.finish();

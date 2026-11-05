@@ -18,7 +18,6 @@ pub struct Compositor {
     alpha_mode: wgpu::CompositeAlphaMode,
     engine: Engine,
     settings: Settings,
-    health: Arc<DeviceHealth>,
 }
 
 /// Tracks whether the `wgpu` device of a [`Compositor`] is still usable.
@@ -28,7 +27,7 @@ pub struct Compositor {
 /// captured. Shared through an [`Arc`] because those callbacks may run on any
 /// thread.
 #[derive(Debug, Default)]
-pub struct DeviceHealth {
+pub(crate) struct DeviceHealth {
     lost: AtomicBool,
     uncaptured_errors: AtomicU64,
 }
@@ -38,12 +37,13 @@ impl DeviceHealth {
     ///
     /// A lost device never recovers: everything created from it must be
     /// recreated, so callers should stop rendering with it.
-    pub fn is_lost(&self) -> bool {
+    pub(crate) fn is_lost(&self) -> bool {
         self.lost.load(Ordering::Acquire)
     }
 
     /// Returns how many errors the device reported outside of any error scope.
-    pub fn uncaptured_errors(&self) -> u64 {
+    #[allow(dead_code)] // Only read by tests until an app-facing hook lands.
+    pub(crate) fn uncaptured_errors(&self) -> u64 {
         self.uncaptured_errors.load(Ordering::Relaxed)
     }
 
@@ -57,12 +57,16 @@ impl DeviceHealth {
         log::error!("wgpu uncaptured error: {error}");
 
         let _ = self.uncaptured_errors.fetch_add(1, Ordering::Relaxed);
+
+        if panics_on(error) {
+            panic!("wgpu validation error: {error}");
+        }
     }
 
     /// Installs the lost and uncaptured error callbacks on the given device.
     ///
     /// Without them, `wgpu` panics on any uncaptured error.
-    fn install(self: &Arc<Self>, device: &wgpu::Device) {
+    pub(crate) fn install(self: &Arc<Self>, device: &wgpu::Device) {
         let health = Arc::clone(self);
 
         device.set_device_lost_callback(move |reason, message| {
@@ -75,6 +79,17 @@ impl DeviceHealth {
             health.record_error(&error);
         }));
     }
+}
+
+/// Returns whether an uncaptured error must panic.
+///
+/// A validation error is a bug in the code or data given to `wgpu` (for example
+/// a broken custom shader pipeline), so it keeps panicking in debug builds, or
+/// when the `ICED_WGPU_PANIC_ON_ERROR` environment variable is set. Out of
+/// memory and internal errors are only logged and counted.
+fn panics_on(error: &wgpu::Error) -> bool {
+    matches!(error, wgpu::Error::Validation { .. })
+        && (cfg!(debug_assertions) || std::env::var_os("ICED_WGPU_PANIC_ON_ERROR").is_some())
 }
 
 /// A compositor error.
@@ -105,8 +120,9 @@ impl From<Error> for backend::Error {
 
 impl Compositor {
     /// Returns the [`DeviceHealth`] of the device of this [`Compositor`].
-    pub fn health(&self) -> &Arc<DeviceHealth> {
-        &self.health
+    #[allow(dead_code)] // Only read by tests until an app-facing hook lands.
+    pub(crate) fn health(&self) -> &Arc<DeviceHealth> {
+        &self.engine.health
     }
 
     /// Requests a new [`Compositor`] with the given [`Settings`].
@@ -256,9 +272,6 @@ impl Compositor {
 
             match result {
                 Ok((device, queue)) => {
-                    let health = Arc::new(DeviceHealth::default());
-                    health.install(&device);
-
                     let engine = Engine::new(
                         &adapter,
                         device,
@@ -275,7 +288,6 @@ impl Compositor {
                         alpha_mode,
                         engine,
                         settings,
-                        health,
                     });
                 }
                 Err(error) => {
@@ -384,7 +396,7 @@ impl graphics::Compositor for Compositor {
     }
 
     fn configure_surface(&mut self, surface: &mut Self::Surface, width: u32, height: u32) {
-        if width == 0 || height == 0 {
+        if width == 0 || height == 0 || self.engine.health.is_lost() {
             return;
         }
 
@@ -429,7 +441,7 @@ impl graphics::Compositor for Compositor {
         background_color: Color,
         on_pre_present: impl FnOnce(),
     ) -> Result<(), compositor::SurfaceError> {
-        if self.health.is_lost() {
+        if self.engine.health.is_lost() {
             return Err(compositor::SurfaceError::DeviceLost);
         }
 
@@ -448,6 +460,10 @@ impl graphics::Compositor for Compositor {
         viewport: &Viewport,
         background_color: Color,
     ) -> Vec<u8> {
+        if self.engine.health.is_lost() {
+            return Vec::new();
+        }
+
         renderer.screenshot(viewport, background_color)
     }
 }
@@ -600,26 +616,96 @@ mod tests {
     }
 
     #[test]
-    fn uncaptured_errors_are_counted_instead_of_panicking() {
-        let Some((device, _queue)) = device() else {
+    fn screenshot_returns_early_on_a_lost_device() {
+        let (instance, adapter) = futures::executor::block_on(async {
+            let instance =
+                wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions::default())
+                .await
+                .ok();
+
+            (instance, adapter)
+        });
+
+        let _instance = instance;
+
+        let Some(adapter) = adapter else {
             eprintln!("no graphics adapter available; skipping");
             return;
         };
 
-        let health = Arc::new(DeviceHealth::default());
-        health.install(&device);
+        let Ok((device, queue)) =
+            futures::executor::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+        else {
+            return;
+        };
 
-        // A buffer without usages is a validation error.
-        let _buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: None,
-            size: 4,
-            usage: wgpu::BufferUsages::empty(),
-            mapped_at_creation: false,
+        let engine = Engine::new(
+            &adapter,
+            device,
+            queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            None,
+            Shell::headless(),
+        );
+
+        let mut renderer =
+            Renderer::new(engine.clone(), crate::core::renderer::Settings::default());
+        let viewport = Viewport::with_physical_size(
+            crate::core::Size::new(8, 8),
+            crate::core::renderer::Scale::default(),
+        );
+
+        assert!(!renderer.screenshot(&viewport, Color::BLACK).is_empty());
+
+        engine
+            .health
+            .mark_lost(wgpu::DeviceLostReason::Unknown, "test");
+
+        assert!(renderer.screenshot(&viewport, Color::BLACK).is_empty());
+    }
+
+    fn error_source() -> wgpu::ErrorSource {
+        "test".into()
+    }
+
+    #[test]
+    fn out_of_memory_and_internal_errors_are_counted_without_panicking() {
+        let health = DeviceHealth::default();
+
+        health.record_error(&wgpu::Error::OutOfMemory {
+            source: error_source(),
+        });
+        health.record_error(&wgpu::Error::Internal {
+            source: error_source(),
+            description: "internal".to_owned(),
         });
 
-        let _ = device.poll(wgpu::PollType::wait_indefinitely());
-
-        assert_eq!(health.uncaptured_errors(), 1);
+        assert_eq!(health.uncaptured_errors(), 2);
         assert!(!health.is_lost());
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "wgpu validation error")]
+    fn validation_errors_panic_in_debug_builds() {
+        let health = DeviceHealth::default();
+
+        health.record_error(&wgpu::Error::Validation {
+            source: error_source(),
+            description: "broken pipeline".to_owned(),
+        });
+    }
+
+    #[test]
+    fn only_validation_errors_may_panic() {
+        assert!(!panics_on(&wgpu::Error::OutOfMemory {
+            source: error_source(),
+        }));
+        assert!(!panics_on(&wgpu::Error::Internal {
+            source: error_source(),
+            description: String::new(),
+        }));
     }
 }
