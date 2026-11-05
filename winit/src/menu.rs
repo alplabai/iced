@@ -33,7 +33,13 @@ impl<Message> Native<Message> {
         Self(std::marker::PhantomData)
     }
 
-    pub(crate) fn sync(&mut self, _menu: Option<Menu<Message>>, _proxy: &crate::Proxy<Message>) {}
+    /// Never calls `menu`, so the program does not build a menu nobody draws.
+    pub(crate) fn sync(
+        &mut self,
+        _menu: impl FnOnce() -> Option<Menu<Message>>,
+        _proxy: &crate::Proxy<Message>,
+    ) {
+    }
 }
 
 /// A row of the native menu, without its flags.

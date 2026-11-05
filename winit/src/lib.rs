@@ -35,6 +35,7 @@ pub mod conversion;
 mod error;
 mod menu;
 mod proxy;
+mod quit;
 mod window;
 
 pub use clipboard::Clipboard;
@@ -167,8 +168,8 @@ where
         receiver: mpsc::UnboundedReceiver<Control>,
         error: Option<Error>,
         system_theme: Option<oneshot::Sender<theme::Mode>>,
-        /// Whether macOS waits for an answer to a quit request.
-        is_quit_pending: bool,
+        /// The macOS quit request waiting for an answer, if any.
+        quit: quit::Quit,
 
         #[cfg(target_arch = "wasm32")]
         canvas: Option<web_sys::HtmlCanvasElement>,
@@ -182,7 +183,7 @@ where
         receiver: control_receiver,
         error: None,
         system_theme: Some(system_theme_sender),
-        is_quit_pending: false,
+        quit: quit::Quit::default(),
 
         #[cfg(target_arch = "wasm32")]
         canvas: None,
@@ -266,12 +267,14 @@ where
         }
 
         fn terminate_requested(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-            self.is_quit_pending = true;
+            // Shutting down, or no `quit_requests` subscription would see it: macOS still
+            // waits for an answer, so let it terminate.
+            let answer = self
+                .quit
+                .request(event_loop.exiting(), runtime::system::has_quit_listener());
 
-            // Already shutting down: nobody would see the request, and macOS waits for an
-            // answer, so let it terminate.
-            if event_loop.exiting() {
-                self.reply_to_quit(event_loop, true);
+            if answer.is_some() {
+                self.answer_quit(event_loop, answer);
                 return;
             }
 
@@ -292,21 +295,31 @@ where
     }
 
     impl<Message> Runner<Message> {
-        fn reply_to_quit(
-            &mut self,
+        fn answer_quit(
+            &self,
             _event_loop: &winit::event_loop::ActiveEventLoop,
-            should_quit: bool,
+            answer: quit::Answer,
         ) {
-            self.is_quit_pending = false;
+            let Some(_should_quit) = answer else {
+                return;
+            };
 
             #[cfg(target_os = "macos")]
             {
                 use winit::platform::macos::ActiveEventLoopExtMacOS;
-                _event_loop.reply_to_terminate_request(should_quit);
+                _event_loop.reply_to_terminate_request(_should_quit);
             }
+        }
 
-            #[cfg(not(target_os = "macos"))]
-            let _ = should_quit;
+        /// Stops the event loop. Every exit path goes through here, so a quit request
+        /// macOS is waiting on is answered "quit" instead of leaving a logout blocked;
+        /// whichever ends the process first, the stopped loop or AppKit's terminate,
+        /// the app quits.
+        fn exit(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+            event_loop.exit();
+
+            let answer = self.quit.exit();
+            self.answer_quit(event_loop, answer);
         }
 
         fn process_event(
@@ -455,24 +468,16 @@ where
                             }
                             Control::Exit => {
                                 self.process_event(event_loop, Event::Exit);
-                                event_loop.exit();
-
-                                // macOS is also waiting on a quit request: answer yes, or a
-                                // logout would stay blocked. Whichever ends the process first,
-                                // the stopped loop or AppKit's terminate, the app quits.
-                                if self.is_quit_pending {
-                                    self.reply_to_quit(event_loop, true);
-                                }
+                                self.exit(event_loop);
                                 break;
                             }
                             Control::CancelQuit => {
-                                if self.is_quit_pending {
-                                    self.reply_to_quit(event_loop, false);
-                                }
+                                let answer = self.quit.cancel();
+                                self.answer_quit(event_loop, answer);
                             }
                             Control::Crash(error) => {
                                 self.error = Some(error);
-                                event_loop.exit();
+                                self.exit(event_loop);
                             }
                             Control::SetAutomaticWindowTabbing(_enabled) => {
                                 #[cfg(target_os = "macos")]
@@ -495,7 +500,7 @@ where
                         }
                     },
                     task::Poll::Ready(_) => {
-                        event_loop.exit();
+                        self.exit(event_loop);
                         break;
                     }
                 };
@@ -634,7 +639,7 @@ async fn run_instance<P>(
         // windowing system installs its default menu; installing before that
         // would be overwritten.
         if !is_menu_synced {
-            native_menu.sync(program.menu(), &proxy);
+            native_menu.sync(|| program.menu(), &proxy);
             is_menu_synced = true;
         }
 
@@ -1413,7 +1418,7 @@ where
 
     runtime.track(recipes);
 
-    native_menu.sync(program.menu(), proxy);
+    native_menu.sync(|| program.menu(), proxy);
 
     actions
 }

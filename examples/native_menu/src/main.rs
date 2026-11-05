@@ -90,18 +90,8 @@ impl Editor {
                     item_maybe("Revert", dirty.then_some(Message::Revert)),
                 ],
             ),
-            submenu(
-                "Edit",
-                [
-                    predefined(Predefined::Undo),
-                    predefined(Predefined::Redo),
-                    separator(),
-                    predefined(Predefined::Cut),
-                    predefined(Predefined::Copy),
-                    predefined(Predefined::Paste),
-                    predefined(Predefined::SelectAll),
-                ],
-            ),
+            // No Edit menu: system Edit rows would take Command+C/V away from
+            // the text input (see `Predefined`).
             submenu(
                 "View",
                 [item("Word Wrap", Message::ToggleWordWrap).checked(self.is_word_wrap)],

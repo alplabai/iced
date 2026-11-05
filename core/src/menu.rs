@@ -11,6 +11,15 @@
 ///
 /// On macOS every top-level item should be a [`submenu`]; the first one is
 /// the application menu and is titled by the system with the process name.
+///
+/// A [`Menu`] replaces the default menu bar entirely, including its Command+Q
+/// and Command+H. Put [`Predefined::Quit`], [`Predefined::Hide`],
+/// [`Predefined::HideOthers`] and [`Predefined::ShowAll`] in the first
+/// submenu to keep them.
+///
+/// The menu is delivered through `muda`'s process-wide event handler, which
+/// iced installs; another `muda` menu in the same application will not
+/// receive its events.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Menu<Message> {
     items: Vec<Item<Message>>,
@@ -143,6 +152,12 @@ pub struct Submenu<Message> {
 }
 
 /// A row whose behavior is provided by the operating system.
+///
+/// There are no Edit rows (Undo, Cut, Copy, Paste, Select All): the system
+/// sends those to native text views, which iced widgets are not, so they would
+/// do nothing and their key equivalents would take Command+C/V/X/A/Z away from
+/// `text_input` and `text_editor`. Use an [`item`] that sends your own message
+/// and show the shortcut in its label instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Predefined {
     /// About the application.
@@ -171,18 +186,6 @@ pub enum Predefined {
     CloseWindow,
     /// Bring all windows to the front (macOS).
     BringAllToFront,
-    /// Undo in the focused text field.
-    Undo,
-    /// Redo in the focused text field.
-    Redo,
-    /// Cut the selection.
-    Cut,
-    /// Copy the selection.
-    Copy,
-    /// Paste the clipboard.
-    Paste,
-    /// Select everything in the focused text field.
-    SelectAll,
 }
 
 /// Creates an enabled [`Item::Action`] that produces `on_activate`.

@@ -8,7 +8,7 @@ use crate::core::menu::{Menu, Predefined};
 
 use muda::accelerator::Accelerator;
 use muda::{CheckMenuItem, MenuItem, PredefinedMenuItem, Submenu};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 // A poisoned lock still holds a usable map; panicking inside an AppKit
 // callback would abort the process instead.
@@ -19,6 +19,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 struct Router<Message: 'static> {
     actions: FxHashMap<String, Message>,
     proxy: Proxy<Message>,
+    /// Rows chosen since the last sync; AppKit may have flipped their check
+    /// mark, so their flags are written again even when unchanged.
+    clicked: FxHashSet<String>,
 }
 
 /// A row the sync can flip in place.
@@ -34,11 +37,15 @@ struct Installed {
     menu: muda::Menu,
     nodes: Vec<Node>,
     handles: FxHashMap<String, Handle>,
+    /// The flags last written to each row.
+    applied: FxHashMap<String, Flags>,
 }
 
 pub(crate) struct Native<Message: 'static> {
     installed: Option<Installed>,
     router: Option<Arc<Mutex<Router<Message>>>>,
+    /// Rows that failed to build; not retried until they change.
+    failed: Option<Vec<Node>>,
 }
 
 impl<Message: Send + 'static> Native<Message> {
@@ -46,16 +53,22 @@ impl<Message: Send + 'static> Native<Message> {
         Self {
             installed: None,
             router: None,
+            failed: None,
         }
     }
 
     /// Brings the native menu bar in line with `menu`.
     ///
-    /// Same rows: the flags are written in place (all of them, since AppKit
-    /// flips a check item itself when it is chosen). Different rows: the
-    /// menu is rebuilt. `None`: the menu is taken down.
-    pub(crate) fn sync(&mut self, menu: Option<Menu<Message>>, proxy: &Proxy<Message>) {
-        let Some(menu) = menu else {
+    /// Same rows: only the flags that changed (or rows chosen since the last
+    /// sync, whose check mark AppKit flips itself) are written. Different
+    /// rows: the menu is rebuilt, and the old one stays installed if that
+    /// fails. `None`: the menu is taken down.
+    pub(crate) fn sync(
+        &mut self,
+        menu: impl FnOnce() -> Option<Menu<Message>>,
+        proxy: &Proxy<Message>,
+    ) {
+        let Some(menu) = menu() else {
             if let Some(installed) = self.installed.take() {
                 installed.menu.remove_for_nsapp();
             }
@@ -75,35 +88,43 @@ impl<Message: Send + 'static> Native<Message> {
             actions,
         } = Spec::new(menu);
 
-        self.router(proxy)
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .actions = actions;
+        let clicked = {
+            let mut router = self
+                .router(proxy)
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+
+            router.actions = actions;
+            std::mem::take(&mut router.clicked)
+        };
 
         let is_same = self
             .installed
             .as_ref()
             .is_some_and(|installed| installed.nodes == nodes);
 
-        if !is_same {
-            if let Some(installed) = self.installed.take() {
-                installed.menu.remove_for_nsapp();
-            }
-
-            match build(nodes) {
+        if !is_same && self.failed.as_ref() != Some(&nodes) {
+            match build(nodes.clone()) {
                 Ok(installed) => {
+                    if let Some(old) = self.installed.take() {
+                        old.menu.remove_for_nsapp();
+                    }
                     installed.menu.init_for_nsapp();
                     self.installed = Some(installed);
+                    self.failed = None;
                 }
                 Err(error) => {
-                    log::error!("Failed to build the native menu bar: {error}");
+                    log::error!(
+                        "Failed to build the native menu bar, keeping the old one: {error}"
+                    );
+                    self.failed = Some(nodes);
                     return;
                 }
             }
         }
 
-        if let Some(installed) = &self.installed {
-            apply(&installed.handles, &flags);
+        if let Some(installed) = &mut self.installed {
+            apply(installed, &flags, &clicked);
         }
     }
 
@@ -113,6 +134,7 @@ impl<Message: Send + 'static> Native<Message> {
             let router = Arc::new(Mutex::new(Router {
                 actions: FxHashMap::default(),
                 proxy: proxy.clone(),
+                clicked: FxHashSet::default(),
             }));
 
             let handler = router.clone();
@@ -121,6 +143,8 @@ impl<Message: Send + 'static> Native<Message> {
 
                 // Taken, not cloned: a second click before the next update
                 // (which refreshes the map) cannot send a stale message.
+                let _ = router.clicked.insert(event.id.0.clone());
+
                 match router.actions.remove(&event.id.0) {
                     Some(message) => router.proxy.send(message),
                     None => log::debug!("Ignored inactive menu item: {}", event.id.0),
@@ -151,6 +175,7 @@ fn build(nodes: Vec<Node>) -> muda::Result<Installed> {
         menu,
         nodes,
         handles,
+        applied: FxHashMap::default(),
     })
 }
 
@@ -200,9 +225,13 @@ fn submenu(node: &Node, handles: &mut FxHashMap<String, Handle>) -> muda::Result
     Ok(submenu)
 }
 
-fn apply(handles: &FxHashMap<String, Handle>, flags: &[(String, Flags)]) {
+fn apply(installed: &mut Installed, flags: &[(String, Flags)], clicked: &FxHashSet<String>) {
     for (id, flags) in flags {
-        match handles.get(id) {
+        if installed.applied.get(id) == Some(flags) && !clicked.contains(id) {
+            continue;
+        }
+
+        match installed.handles.get(id) {
             Some(Handle::Item(item)) => item.set_enabled(flags.enabled),
             Some(Handle::Check(item)) => {
                 item.set_enabled(flags.enabled);
@@ -211,6 +240,8 @@ fn apply(handles: &FxHashMap<String, Handle>, flags: &[(String, Flags)]) {
             Some(Handle::Submenu(submenu)) => submenu.set_enabled(flags.enabled),
             None => {}
         }
+
+        let _ = installed.applied.insert(id.clone(), *flags);
     }
 }
 
@@ -240,11 +271,5 @@ fn predefined(predefined: Predefined) -> PredefinedMenuItem {
         Predefined::Fullscreen => PredefinedMenuItem::fullscreen(None),
         Predefined::CloseWindow => PredefinedMenuItem::close_window(None),
         Predefined::BringAllToFront => PredefinedMenuItem::bring_all_to_front(None),
-        Predefined::Undo => PredefinedMenuItem::undo(None),
-        Predefined::Redo => PredefinedMenuItem::redo(None),
-        Predefined::Cut => PredefinedMenuItem::cut(None),
-        Predefined::Copy => PredefinedMenuItem::copy(None),
-        Predefined::Paste => PredefinedMenuItem::paste(None),
-        Predefined::SelectAll => PredefinedMenuItem::select_all(None),
     }
 }
