@@ -7,13 +7,15 @@
 //!
 //! An id comes from the row alone, `<submenu path>/<label>` (for example
 //! `File/Export/PDF`), never from an index, so an activation that arrives
-//! after a rebuild cannot fire a different row. A repeated id within one
-//! menu gets a `#2`, `#3`, ... suffix.
+//! after a rebuild cannot fire a different row. An id already taken within
+//! one menu (a repeated label, or a label that itself contains `/` or `#`)
+//! gets the first free `#2`, `#3`, ... suffix, so every row has its own id and
+//! a click can never send another row's message.
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 
 use crate::core::menu::{Item, Menu, Predefined};
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 #[cfg(target_os = "macos")]
 mod macos;
@@ -74,7 +76,7 @@ impl<Message> Spec<Message> {
             flags: Vec::new(),
             actions: FxHashMap::default(),
         };
-        let mut seen = FxHashMap::default();
+        let mut seen = FxHashSet::default();
 
         spec.nodes = menu
             .into_items()
@@ -85,12 +87,7 @@ impl<Message> Spec<Message> {
         spec
     }
 
-    fn node(
-        &mut self,
-        item: Item<Message>,
-        path: &str,
-        seen: &mut FxHashMap<String, usize>,
-    ) -> Node {
+    fn node(&mut self, item: Item<Message>, path: &str, seen: &mut FxHashSet<String>) -> Node {
         match item {
             Item::Action(action) => {
                 let id = unique_id(path, &action.label, seen);
@@ -144,21 +141,24 @@ impl<Message> Spec<Message> {
     }
 }
 
-fn unique_id(path: &str, label: &str, seen: &mut FxHashMap<String, usize>) -> String {
+fn unique_id(path: &str, label: &str, seen: &mut FxHashSet<String>) -> String {
     let base = if path.is_empty() {
         label.to_owned()
     } else {
         format!("{path}/{label}")
     };
 
-    let count = seen.entry(base.clone()).or_insert(0);
-    *count += 1;
+    let mut id = base.clone();
+    let mut suffix = 1;
 
-    if *count == 1 {
-        base
-    } else {
-        format!("{base}#{count}")
+    // Check the final id, not the base: a label such as `Save#2` or `A/B` can
+    // spell an id another row already took.
+    while !seen.insert(id.clone()) {
+        suffix += 1;
+        id = format!("{base}#{suffix}");
     }
+
+    id
 }
 
 #[cfg(test)]
@@ -209,6 +209,29 @@ mod tests {
         );
         assert_eq!(spec.actions["File/Save#2"], 3);
         assert_eq!(spec.actions["File/Export/PDF"], 2);
+    }
+
+    #[test]
+    fn labels_that_spell_another_id_get_their_own() {
+        let spec = Spec::new(Menu::new([submenu(
+            "File",
+            [
+                item("Save", 1),
+                item("Save", 2),
+                item("Save#2", 3),
+                item("A/B", 4),
+                submenu("A", [item("B", 5)]),
+            ],
+        )]));
+
+        let ids = ids(&spec.nodes);
+        let unique: FxHashSet<_> = ids.iter().collect();
+        assert_eq!(unique.len(), ids.len(), "duplicate ids: {ids:?}");
+
+        // Every live row keeps its own message.
+        let mut messages: Vec<_> = spec.actions.values().copied().collect();
+        messages.sort_unstable();
+        assert_eq!(messages, [1, 2, 3, 4, 5]);
     }
 
     #[test]
