@@ -1233,7 +1233,11 @@ mod tests {
         let mut mask = tiny_skia::Mask::new(16, 16).expect("Create mask");
         let mut previous = Rectangle::new(Point::ORIGIN, Size::ZERO);
 
-        for bounds in [big, small, small, big, small] {
+        let negative = Rectangle::new(Point::new(-3.0, -2.0), Size::new(8.0, 6.0));
+        let overflowing = Rectangle::new(Point::new(10.0, 10.0), Size::new(20.0, 20.0));
+        let empty = Rectangle::new(Point::new(4.0, 4.0), Size::ZERO);
+
+        for bounds in [big, small, small, big, negative, overflowing, empty, small] {
             adjust_clip_mask(&mut mask, &mut previous, bounds);
             assert_eq!(mask.data(), fresh(bounds).data());
         }
