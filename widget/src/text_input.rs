@@ -96,6 +96,8 @@ where
     on_input: Option<Box<dyn Fn(String) -> Message + 'a>>,
     on_paste: Option<Box<dyn Fn(String) -> Message + 'a>>,
     on_submit: Option<Message>,
+    on_focus: Option<Message>,
+    on_blur: Option<Message>,
     class: Theme::Class<'a>,
     last_status: Option<Status>,
 }
@@ -130,6 +132,8 @@ where
             on_input: None,
             on_paste: None,
             on_submit: None,
+            on_focus: None,
+            on_blur: None,
             class: Theme::default(),
             last_status: None,
         }
@@ -176,6 +180,39 @@ where
     /// focused and the enter key is pressed, if `Some`.
     pub fn on_submit_maybe(mut self, on_submit: Option<Message>) -> Self {
         self.on_submit = on_submit;
+        self
+    }
+
+    /// Sets the message that should be produced when the [`TextInput`]
+    /// gains focus, whether by clicking it or through a focus operation.
+    ///
+    /// It is produced once per transition, never while the focus does not change.
+    pub fn on_focus(mut self, message: Message) -> Self {
+        self.on_focus = Some(message);
+        self
+    }
+
+    /// Sets the message that should be produced when the [`TextInput`]
+    /// gains focus, if `Some`.
+    pub fn on_focus_maybe(mut self, on_focus: Option<Message>) -> Self {
+        self.on_focus = on_focus;
+        self
+    }
+
+    /// Sets the message that should be produced when the [`TextInput`]
+    /// loses focus, whether by clicking elsewhere, pressing escape or
+    /// through a focus operation.
+    ///
+    /// It is produced once per transition, never while the focus does not change.
+    pub fn on_blur(mut self, message: Message) -> Self {
+        self.on_blur = Some(message);
+        self
+    }
+
+    /// Sets the message that should be produced when the [`TextInput`]
+    /// loses focus, if `Some`.
+    pub fn on_blur_maybe(mut self, on_blur: Option<Message>) -> Self {
+        self.on_blur = on_blur;
         self
     }
 
@@ -258,6 +295,36 @@ where
 }
 
 impl<Message, Theme> widget::Meta for TextInput<'_, Message, Theme> where Theme: Catalog {}
+
+impl<Message, Theme> TextInput<'_, Message, Theme>
+where
+    Message: Clone,
+    Theme: Catalog,
+{
+    fn publish_focus_change<R: text::Renderer>(
+        &self,
+        state: &mut State<R>,
+        shell: &mut Shell<'_, Message>,
+    ) {
+        let is_focused = state.input.is_focused();
+
+        if is_focused == state.was_focused {
+            return;
+        }
+
+        state.was_focused = is_focused;
+
+        let message = if is_focused {
+            &self.on_focus
+        } else {
+            &self.on_blur
+        };
+
+        if let Some(message) = message {
+            shell.publish(message.clone());
+        }
+    }
+}
 
 impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer> for TextInput<'_, Message, Theme>
 where
@@ -367,6 +434,10 @@ where
             }
         }
 
+        // Focus operations change the state outside of `update`, so they are
+        // reported after the next event the widget receives.
+        self.publish_focus_change(state, shell);
+
         let status = if is_disabled {
             Status::Disabled
         } else if state.input.is_focused() {
@@ -455,6 +526,7 @@ struct State<R: text::Renderer> {
     input: text::Input<R>,
     value: String,
     transaction: Option<shell::Tracking>,
+    was_focused: bool,
 }
 
 fn state<Renderer: text::Renderer + 'static>(tree: &mut Tree) -> &mut State<Renderer> {
@@ -468,6 +540,7 @@ impl<R: text::Renderer> State<R> {
             input: text::Input::new(),
             value: String::new(),
             transaction: None,
+            was_focused: false,
         }
     }
 }
