@@ -28,9 +28,14 @@ pub struct Simulator<'a, Message, Theme = core::Theme, Renderer = renderer::Rend
     raw: UserInterface<'a, Message, Theme, Renderer>,
     renderer: Renderer,
     size: Size,
+    scale_factor: f32,
     cursor: mouse::Cursor,
     messages: shell::Bus<Message>,
 }
+
+/// The scale factor used by a [`Simulator`] unless changed with
+/// [`Simulator::with_scale_factor`].
+pub const DEFAULT_SCALE_FACTOR: f32 = 2.0;
 
 impl<'a, Message, Theme, Renderer> Simulator<'a, Message, Theme, Renderer>
 where
@@ -89,9 +94,24 @@ where
             raw,
             renderer,
             size,
+            scale_factor: DEFAULT_SCALE_FACTOR,
             cursor: mouse::Cursor::Unavailable,
             messages: shell::Bus::new(),
         }
+    }
+
+    /// Sets the scale factor used when taking a [`Snapshot`] (2.0 by default).
+    ///
+    /// # Panics
+    /// Panics if the scale factor is not finite and greater than zero.
+    pub fn with_scale_factor(mut self, scale_factor: f32) -> Self {
+        assert!(
+            scale_factor.is_finite() && scale_factor > 0.0,
+            "scale factor must be finite and greater than zero"
+        );
+
+        self.scale_factor = scale_factor;
+        self
     }
 
     /// Finds the target of the given widget [`Selector`] in the [`Simulator`].
@@ -141,6 +161,7 @@ where
             raw: UserInterface::build(element, self.size, cache, &mut self.renderer),
             renderer: self.renderer,
             size: self.size,
+            scale_factor: self.scale_factor,
             cursor: self.cursor,
             messages: self.messages,
         }
@@ -262,7 +283,7 @@ where
 
         self.draw(theme);
 
-        let scale_factor = 2.0;
+        let scale_factor = self.scale_factor;
 
         let physical_size = Size::new(
             (self.size.width * scale_factor).round() as u32,
@@ -303,41 +324,96 @@ impl Snapshot {
     ///
     /// If the PNG image does not exist, it will be created by the [`Snapshot`] for future
     /// testing and `true` will be returned.
+    ///
+    /// On a mismatch, the rendered image and a difference image are written next to the
+    /// reference as `*.actual.png` and `*.diff.png`. If the `ICED_UPDATE_SNAPSHOTS`
+    /// environment variable is set to `1`, the reference is overwritten instead.
+    ///
+    /// This is [`matches_image_with`](Self::matches_image_with) with an exact [`Tolerance`].
     pub fn matches_image(&self, path: impl AsRef<Path>) -> Result<bool, Error> {
+        self.matches_image_with(path, Tolerance::default())
+    }
+
+    /// Like [`matches_image`](Self::matches_image), but accepts small differences
+    /// as described by the given [`Tolerance`].
+    pub fn matches_image_with(
+        &self,
+        path: impl AsRef<Path>,
+        tolerance: Tolerance,
+    ) -> Result<bool, Error> {
+        let update = env::var("ICED_UPDATE_SNAPSHOTS").is_ok_and(|value| value == "1");
+
+        self.compare_image(path.as_ref(), tolerance, update)
+    }
+
+    fn compare_image(
+        &self,
+        path: &Path,
+        tolerance: Tolerance,
+        update: bool,
+    ) -> Result<bool, Error> {
         let path = self.path(path, "png");
 
-        if path.exists() {
-            let file = fs::File::open(&path)?;
-            let decoder = png::Decoder::new(io::BufReader::new(file));
-
-            let mut reader = decoder.read_info()?;
-            let n = reader
-                .output_buffer_size()
-                .expect("snapshot should fit in memory");
-            let mut bytes = vec![0; n];
-            let info = reader.next_frame(&mut bytes)?;
-
-            Ok(self.screenshot.rgba == bytes[..info.buffer_size()])
-        } else {
-            if let Some(directory) = path.parent() {
-                fs::create_dir_all(directory)?;
-            }
-
-            let file = fs::File::create(path)?;
-
-            let mut encoder = png::Encoder::new(
-                file,
-                self.screenshot.size.width,
-                self.screenshot.size.height,
-            );
-            encoder.set_color(png::ColorType::Rgba);
-
-            let mut writer = encoder.write_header()?;
-            writer.write_image_data(&self.screenshot.rgba)?;
-            writer.finish()?;
-
-            Ok(true)
+        if !path.exists() || update {
+            return self.write_png(&path, &self.screenshot.rgba).map(|_| true);
         }
+
+        let file = fs::File::open(&path)?;
+        let decoder = png::Decoder::new(io::BufReader::new(file));
+
+        let mut reader = decoder.read_info()?;
+        let n = reader
+            .output_buffer_size()
+            .expect("snapshot should fit in memory");
+        let mut bytes = vec![0; n];
+        let info = reader.next_frame(&mut bytes)?;
+        bytes.truncate(info.buffer_size());
+
+        let same_size = info.width == self.screenshot.size.width
+            && info.height == self.screenshot.size.height
+            && info.color_type == png::ColorType::Rgba;
+
+        let diff = if same_size {
+            diff(&bytes, &self.screenshot.rgba, tolerance)
+        } else {
+            None
+        };
+
+        let matches = same_size
+            && diff
+                .as_ref()
+                .is_some_and(|diff| diff.pixels <= tolerance.max_diff_pixels);
+
+        if !matches {
+            self.write_png(&path.with_extension("actual.png"), &self.screenshot.rgba)?;
+
+            if let Some(diff) = diff {
+                self.write_png(&path.with_extension("diff.png"), &diff.image)?;
+            }
+        }
+
+        Ok(matches)
+    }
+
+    fn write_png(&self, path: &Path, rgba: &[u8]) -> Result<(), Error> {
+        if let Some(directory) = path.parent() {
+            fs::create_dir_all(directory)?;
+        }
+
+        let file = fs::File::create(path)?;
+
+        let mut encoder = png::Encoder::new(
+            file,
+            self.screenshot.size.width,
+            self.screenshot.size.height,
+        );
+        encoder.set_color(png::ColorType::Rgba);
+
+        let mut writer = encoder.write_header()?;
+        writer.write_image_data(rgba)?;
+        writer.finish()?;
+
+        Ok(())
     }
 
     /// Compares the [`Snapshot`] with the SHA-256 hash file found in the given path, returning
@@ -383,6 +459,50 @@ impl Snapshot {
         ))
         .with_extension(extension)
     }
+}
+
+/// How much a [`Snapshot`] may differ from its reference image and still match.
+///
+/// The default is an exact match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Tolerance {
+    /// The largest difference allowed in any single color channel (including alpha)
+    /// for a pixel to count as equal.
+    pub max_channel_delta: u8,
+    /// The number of pixels allowed to differ by more than `max_channel_delta`.
+    pub max_diff_pixels: usize,
+}
+
+struct Diff {
+    pixels: usize,
+    image: Vec<u8>,
+}
+
+/// Compares two RGBA buffers of the same size. Differing pixels are painted red in the
+/// returned image; the rest are shown dimmed.
+fn diff(expected: &[u8], actual: &[u8], tolerance: Tolerance) -> Option<Diff> {
+    if expected.len() != actual.len() {
+        return None;
+    }
+
+    let mut pixels = 0;
+    let mut image = Vec::with_capacity(actual.len());
+
+    for (expected, actual) in expected.chunks_exact(4).zip(actual.chunks_exact(4)) {
+        let differs = expected
+            .iter()
+            .zip(actual)
+            .any(|(a, b)| a.abs_diff(*b) > tolerance.max_channel_delta);
+
+        if differs {
+            pixels += 1;
+            image.extend([255, 0, 0, 255]);
+        } else {
+            image.extend([actual[0] / 4, actual[1] / 4, actual[2] / 4, 255]);
+        }
+    }
+
+    Some(Diff { pixels, image })
 }
 
 /// Creates a new [`Simulator`].
@@ -471,4 +591,107 @@ fn load_font(font: Cow<'static, [u8]>) -> Result<(), font::Error> {
         .load_font(font);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn snapshot(rgba: Vec<u8>, width: u32, height: u32) -> Snapshot {
+        let size = Size::new(width, height);
+
+        Snapshot {
+            screenshot: window::Screenshot::new(rgba, size, 1.0),
+            renderer: "test".to_owned(),
+        }
+    }
+
+    fn directory(name: &str) -> PathBuf {
+        let path = env::temp_dir().join(format!("iced_test-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&path);
+        path
+    }
+
+    fn pixels(values: &[[u8; 4]]) -> Vec<u8> {
+        values.iter().flatten().copied().collect()
+    }
+
+    #[test]
+    fn exact_match_and_mismatch_write_files() {
+        let dir = directory("exact");
+        let path = dir.join("shot");
+        let none = Tolerance::default();
+
+        let base = snapshot(pixels(&[[10, 10, 10, 255], [20, 20, 20, 255]]), 2, 1);
+        assert!(base.compare_image(&path, none, false).unwrap());
+
+        let off = snapshot(pixels(&[[10, 10, 10, 255], [21, 20, 20, 255]]), 2, 1);
+        assert!(!off.compare_image(&path, none, false).unwrap());
+
+        assert!(dir.join("shot-test.actual.png").exists());
+        assert!(dir.join("shot-test.diff.png").exists());
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn tolerance_bounds_delta_and_pixel_count() {
+        let dir = directory("tolerance");
+        let path = dir.join("shot");
+
+        let base = snapshot(pixels(&[[10, 10, 10, 255], [20, 20, 20, 255]]), 2, 1);
+        assert!(
+            base.compare_image(&path, Tolerance::default(), false)
+                .unwrap()
+        );
+
+        let off = snapshot(pixels(&[[13, 10, 10, 255], [20, 20, 20, 255]]), 2, 1);
+
+        let tolerance = |max_channel_delta, max_diff_pixels| Tolerance {
+            max_channel_delta,
+            max_diff_pixels,
+        };
+
+        assert!(off.compare_image(&path, tolerance(3, 0), false).unwrap());
+        assert!(!off.compare_image(&path, tolerance(2, 0), false).unwrap());
+        assert!(off.compare_image(&path, tolerance(2, 1), false).unwrap());
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn size_mismatch_fails_without_diff() {
+        let dir = directory("size");
+        let path = dir.join("shot");
+        let tolerance = Tolerance {
+            max_channel_delta: 255,
+            max_diff_pixels: usize::MAX,
+        };
+
+        let narrow = snapshot(pixels(&[[1, 2, 3, 255]]), 1, 1);
+        assert!(narrow.compare_image(&path, tolerance, false).unwrap());
+
+        let wider = snapshot(pixels(&[[1, 2, 3, 255], [1, 2, 3, 255]]), 2, 1);
+        assert!(!wider.compare_image(&path, tolerance, false).unwrap());
+        assert!(dir.join("shot-test.actual.png").exists());
+        assert!(!dir.join("shot-test.diff.png").exists());
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn update_overwrites_reference() {
+        let dir = directory("update");
+        let path = dir.join("shot");
+        let none = Tolerance::default();
+
+        let original = snapshot(pixels(&[[1, 1, 1, 255]]), 1, 1);
+        assert!(original.compare_image(&path, none, false).unwrap());
+
+        let changed = snapshot(pixels(&[[9, 9, 9, 255]]), 1, 1);
+        assert!(changed.compare_image(&path, none, true).unwrap());
+        assert!(changed.compare_image(&path, none, false).unwrap());
+
+        let _ = fs::remove_dir_all(dir);
+    }
 }
