@@ -586,6 +586,11 @@ async fn run_instance<P>(
                          before it was created"
                     );
 
+                    // `window::open` set this when the window was requested.
+                    // Skipping the normal path below must clear it, or a
+                    // non-daemon app never exits once its windows are gone.
+                    is_window_opening = false;
+
                     continue;
                 }
 
@@ -1421,11 +1426,15 @@ fn run_action<'a, P, C>(
             window::Action::Close(id) => {
                 // Windows owned by this one close with it, children first.
                 let mut closing = window_manager.descendants(id);
-                closing.push(id);
 
                 // A child that is still being created is not open yet:
                 // drop it when it arrives instead of leaving it orphaned.
-                window_manager.cancel_pending(&closing);
+                // It will never report `Opened`, so report `Closed` now.
+                for cancelled in window_manager.cancel_pending(&closing) {
+                    events.push((cancelled, core::Event::Window(core::window::Event::Closed)));
+                }
+
+                closing.push(id);
 
                 for id in closing {
                     let _ = ui_caches.remove(&id);

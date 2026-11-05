@@ -55,6 +55,21 @@ impl Family {
         self.forget(id);
     }
 
+    /// Cancels the ids in `ids` that have a parent and are not `is_open`.
+    fn cancel_pending(&mut self, ids: &[Id], is_open: impl Fn(Id) -> bool) -> Vec<Id> {
+        let pending: Vec<Id> = ids
+            .iter()
+            .copied()
+            .filter(|id| self.parents.contains_key(id) && !is_open(*id))
+            .collect();
+
+        for &id in &pending {
+            self.cancel(id);
+        }
+
+        pending
+    }
+
     /// Returns whether the creation of `id` was cancelled, and clears it.
     fn take_cancelled(&mut self, id: Id) -> bool {
         self.cancelled.remove(&id)
@@ -104,13 +119,14 @@ where
         self.family.descendants(id)
     }
 
-    /// Cancels the creation of every window in `ids` that is not open yet.
-    pub fn cancel_pending(&mut self, ids: &[Id]) {
-        for &id in ids {
-            if !self.entries.contains_key(&id) {
-                self.family.cancel(id);
-            }
-        }
+    /// Cancels the creation of every window in `ids` that is owned by a
+    /// window but is not open yet, and returns the cancelled ids.
+    ///
+    /// Only ids with a recorded parent are considered, so closing an
+    /// unrelated or already closed id records nothing.
+    pub fn cancel_pending(&mut self, ids: &[Id]) -> Vec<Id> {
+        self.family
+            .cancel_pending(ids, |id| self.entries.contains_key(&id))
     }
 
     /// Returns whether the creation of `id` was cancelled by
@@ -643,6 +659,23 @@ mod tests {
         assert!(family.take_cancelled(child));
         assert!(!family.take_cancelled(child));
         assert!(!family.take_cancelled(root));
+    }
+
+    #[test]
+    fn only_pending_owned_windows_are_cancelled() {
+        let (root, open, pending, stray) = (Id::unique(), Id::unique(), Id::unique(), Id::unique());
+
+        let mut family = Family::default();
+        family.set_parent(open, root);
+        family.set_parent(pending, root);
+
+        let cancelled = family.cancel_pending(&[open, pending, stray, root], |id| id == open);
+
+        assert_eq!(cancelled, [pending]);
+        assert!(family.take_cancelled(pending));
+        assert!(!family.take_cancelled(stray));
+        assert!(!family.take_cancelled(root));
+        assert!(!family.take_cancelled(open));
     }
 
     #[test]

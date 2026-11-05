@@ -108,7 +108,8 @@ pub struct Settings {
     ///
     /// On every platform, closing the owner also closes every window that
     /// names it as its parent, recursively. A window whose parent is closed
-    /// before the window has been created is never created.
+    /// before the window has been created is never created; it reports
+    /// [`Closed`](crate::window::Event::Closed) but never `Opened`.
     ///
     /// By default there is no parent.
     pub parent: Option<Id>,
