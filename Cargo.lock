@@ -2440,6 +2440,7 @@ dependencies = [
  "iced_widget",
  "log",
  "num-traits",
+ "png",
  "pulldown-cmark",
  "qrcode",
  "rustc-hash 2.1.3",
