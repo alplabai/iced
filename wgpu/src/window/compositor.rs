@@ -98,48 +98,40 @@ impl Compositor {
             apply_limit_buckets: false,
         };
 
-        let mut adapter = None;
-        let mut tried = Vec::new();
-
-        for force_fallback_adapter in settings.software_fallback.attempts() {
-            let options = wgpu::RequestAdapterOptions {
-                force_fallback_adapter: *force_fallback_adapter,
-                ..adapter_options
-            };
-
-            match instance.request_adapter(&options).await {
-                Ok(found) => {
-                    if *force_fallback_adapter {
-                        log::warn!(
-                            "No hardware adapter available; using a software \
-                             adapter. Rendering will be slow."
-                        );
-                    }
-
-                    adapter = Some(found);
-                    break;
-                }
-                Err(error) => {
-                    log::warn!("Adapter request failed ({options:?}): {error}");
-                    tried.push(format!("{options:?}"));
-                }
-            }
-        }
-
-        let Some(adapter) = adapter else {
-            #[cfg(not(target_arch = "wasm32"))]
-            let available: Vec<_> = instance
-                .enumerate_adapters(settings.backends)
-                .await
-                .iter()
-                .map(wgpu::Adapter::get_info)
-                .collect();
-
-            #[cfg(target_arch = "wasm32")]
-            let available = Vec::new();
-
-            return Err(Error::NoAdapterFound(adapter_report(&tried, &available)));
+        let adapter_options = wgpu::RequestAdapterOptions {
+            force_fallback_adapter: settings.software_fallback.force_fallback_adapter(),
+            ..adapter_options
         };
+
+        let adapter = match instance.request_adapter(&adapter_options).await {
+            Ok(adapter) => adapter,
+            Err(error) => {
+                log::warn!("Adapter request failed: {error}");
+
+                #[cfg(not(target_arch = "wasm32"))]
+                let available: Vec<_> = instance
+                    .enumerate_adapters(settings.backends)
+                    .await
+                    .iter()
+                    .map(wgpu::Adapter::get_info)
+                    .collect();
+
+                #[cfg(target_arch = "wasm32")]
+                let available = Vec::new();
+
+                return Err(Error::NoAdapterFound(adapter_report(
+                    settings.backends,
+                    &adapter_options,
+                    &available,
+                )));
+            }
+        };
+
+        if let Some(warning) =
+            degraded_warning(settings.software_fallback, adapter.get_info().device_type)
+        {
+            log::warn!("{warning}");
+        }
 
         log::info!("Selected: {:#?}", adapter.get_info());
 
@@ -445,25 +437,31 @@ pub struct Settings {
     /// By default, it is `None`.
     pub antialiasing: Option<Antialiasing>,
 
-    /// Whether a software (fallback) adapter may be used.
+    /// Whether only software (CPU) adapters may be used.
     ///
-    /// By default, it is [`SoftwareFallback::Automatic`].
+    /// By default, it is [`SoftwareFallback::Never`].
+    ///
+    /// Apps started through `iced::application` build their [`Settings`] from
+    /// [`backend::Settings`], which does not carry this policy; for them it can
+    /// only be set with the `ICED_SOFTWARE_FALLBACK` environment variable.
     pub software_fallback: SoftwareFallback,
 }
 
-/// The policy for using a software (fallback) graphics adapter, such as
-/// `llvmpipe` or WARP.
+/// The policy for using a software (CPU) graphics adapter, such as `llvmpipe`
+/// or WARP.
 ///
 /// It can be overridden with the `ICED_SOFTWARE_FALLBACK` environment variable
-/// (`never`, `auto` or `always`).
+/// (`never` or `always`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SoftwareFallback {
-    /// Never use a software adapter.
-    Never,
-    /// Use a software adapter only if no hardware adapter is available.
+    /// Do not restrict the adapter selection.
+    ///
+    /// `wgpu` ranks software adapters last, so one is still picked when it is
+    /// the only candidate; [`Compositor`] then logs a warning.
     #[default]
-    Automatic,
-    /// Use a software adapter even if hardware adapters are available.
+    Never,
+    /// Only consider software (CPU) adapters, even if hardware adapters are
+    /// available.
     Always,
 }
 
@@ -472,7 +470,6 @@ impl SoftwareFallback {
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "never" | "0" | "false" => Some(Self::Never),
-            "auto" | "automatic" => Some(Self::Automatic),
             "always" | "1" | "true" => Some(Self::Always),
             _ => None,
         }
@@ -483,19 +480,41 @@ impl SoftwareFallback {
         Self::parse(&std::env::var("ICED_SOFTWARE_FALLBACK").ok()?)
     }
 
-    /// The values of `force_fallback_adapter` to try, in order.
-    fn attempts(self) -> &'static [bool] {
-        match self {
-            Self::Never => &[false],
-            Self::Automatic => &[false, true],
-            Self::Always => &[true],
-        }
+    /// The value of `force_fallback_adapter` for the adapter request.
+    fn force_fallback_adapter(self) -> bool {
+        matches!(self, Self::Always)
     }
 }
 
-/// Describes a failed adapter selection, listing the options tried and the
-/// adapters that were available.
-fn adapter_report(tried: &[String], available: &[wgpu::AdapterInfo]) -> String {
+/// The warning to log for the selected adapter, if it is running in degraded
+/// mode (a software adapter).
+fn degraded_warning(
+    policy: SoftwareFallback,
+    device_type: wgpu::DeviceType,
+) -> Option<&'static str> {
+    if device_type != wgpu::DeviceType::Cpu {
+        return None;
+    }
+
+    Some(match policy {
+        SoftwareFallback::Always => {
+            "Using a software adapter as requested \
+             (ICED_SOFTWARE_FALLBACK=always). Rendering will be slow."
+        }
+        SoftwareFallback::Never => {
+            "No hardware adapter available; using a software adapter. \
+             Rendering will be slow."
+        }
+    })
+}
+
+/// Describes a failed adapter selection, listing the backends and options
+/// requested and the adapters that were available.
+fn adapter_report(
+    backends: wgpu::Backends,
+    options: &wgpu::RequestAdapterOptions<'_, '_>,
+    available: &[wgpu::AdapterInfo],
+) -> String {
     let available = if available.is_empty() {
         "none".to_owned()
     } else {
@@ -507,9 +526,12 @@ fn adapter_report(tried: &[String], available: &[wgpu::AdapterInfo]) -> String {
     };
 
     format!(
-        "tried [{}]; available adapters: {available}. Set ICED_SOFTWARE_FALLBACK=always \
-         to force a software adapter, or WGPU_BACKEND to pick another backend",
-        tried.join("; ")
+        "backends: {backends:?}; power preference: {:?}; force fallback adapter: {}; \
+         surface given: {}; available adapters: {available}. Set ICED_SOFTWARE_FALLBACK=always \
+         to only use software adapters, or WGPU_BACKEND to pick another backend",
+        options.power_preference,
+        options.force_fallback_adapter,
+        options.compatible_surface.is_some(),
     )
 }
 
@@ -585,11 +607,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn attempts_follow_policy() {
-        assert_eq!(SoftwareFallback::Never.attempts(), &[false]);
-        assert_eq!(SoftwareFallback::Automatic.attempts(), &[false, true]);
-        assert_eq!(SoftwareFallback::Always.attempts(), &[true]);
-        assert_eq!(SoftwareFallback::default(), SoftwareFallback::Automatic);
+    fn warning_follows_adapter_and_policy() {
+        use wgpu::DeviceType;
+
+        for policy in [SoftwareFallback::Never, SoftwareFallback::Always] {
+            assert_eq!(degraded_warning(policy, DeviceType::DiscreteGpu), None);
+            assert_eq!(degraded_warning(policy, DeviceType::IntegratedGpu), None);
+        }
+
+        let never = degraded_warning(SoftwareFallback::Never, DeviceType::Cpu).unwrap();
+        let always = degraded_warning(SoftwareFallback::Always, DeviceType::Cpu).unwrap();
+
+        assert!(never.contains("No hardware adapter"));
+        assert!(always.contains("as requested"));
+        assert!(!always.contains("No hardware adapter"));
+        assert_eq!(SoftwareFallback::default(), SoftwareFallback::Never);
+        assert!(!SoftwareFallback::Never.force_fallback_adapter());
+        assert!(SoftwareFallback::Always.force_fallback_adapter());
     }
 
     #[test]
@@ -599,8 +633,8 @@ mod tests {
             Some(SoftwareFallback::Never)
         );
         assert_eq!(
-            SoftwareFallback::parse(" Auto "),
-            Some(SoftwareFallback::Automatic)
+            SoftwareFallback::parse(" Never "),
+            Some(SoftwareFallback::Never)
         );
         assert_eq!(
             SoftwareFallback::parse("ALWAYS"),
@@ -613,13 +647,18 @@ mod tests {
 
     #[test]
     fn report_lists_adapters() {
-        let empty = adapter_report(&["a".to_owned(), "b".to_owned()], &[]);
-        assert!(empty.contains("tried [a; b]"));
+        let options = wgpu::RequestAdapterOptions::default();
+
+        let empty = adapter_report(wgpu::Backends::VULKAN, &options, &[]);
+        assert!(empty.contains("backends: Backends(VULKAN)") || empty.contains("VULKAN"));
+        assert!(empty.contains("force fallback adapter: false"));
+        assert!(empty.contains("surface given: false"));
         assert!(empty.contains("available adapters: none"));
+        assert!(!empty.contains("Surface"));
 
         let mut info = wgpu::AdapterInfo::new(wgpu::DeviceType::Cpu, wgpu::Backend::Vulkan);
         info.name = "llvmpipe".to_owned();
-        let report = adapter_report(&[], &[info]);
+        let report = adapter_report(wgpu::Backends::all(), &options, &[info]);
         assert!(report.contains("llvmpipe (Vulkan, Cpu)"));
         assert!(report.contains("ICED_SOFTWARE_FALLBACK"));
     }
