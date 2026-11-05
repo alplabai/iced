@@ -314,6 +314,32 @@ fn unbounded_height_does_not_build_every_row() {
 }
 
 #[test]
+fn flagged_infinite_height_does_not_build_every_row() {
+    let built = Cell::new(0);
+
+    let mut list = VirtualList::new(100_000, 10.0, |i| {
+        built.set(built.get() + 1);
+        Probe(i as u64)
+    });
+    let mut tree = Tree::new::<Never, Theme, ()>(&list);
+
+    // What a vertical `scrollable` hands to its content: a finite viewport
+    // height, flagged as infinite
+    list.layout(
+        &mut tree,
+        &(),
+        &layout::Limits::with_flags(
+            Size::ZERO,
+            Size::new(100.0, 95.0),
+            Size::new(false, false),
+            Size::new(false, true),
+        ),
+    );
+
+    assert!(built.get() < 1_000, "built {} rows", built.get());
+}
+
+#[test]
 fn pixel_scrolling_moves_rows_without_a_relayout() {
     let mut list = VirtualList::new(100, 10.0, |i| Probe(i as u64));
     let mut tree = Tree::new::<Never, Theme, ()>(&list);

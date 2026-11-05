@@ -23,8 +23,9 @@
 //! A [`VirtualList`] needs a bounded height. Do not put it inside a vertical
 //! [`scrollable`](crate::scrollable) (or in a column that is): the viewport
 //! would be unbounded and every row would have to be built. If it is laid
-//! out with an unbounded height anyway, it falls back to a viewport of
-//! 4096 logical pixels instead of building all of its rows.
+//! out with an unbounded height anyway (an infinite maximum, or the
+//! `infinite` limits flag a vertical scrollable sets), it falls back to a
+//! viewport of 4096 logical pixels instead of building all of its rows.
 //!
 //! # Precision
 //! The scroll offset is an `f32`, like in [`scrollable`](crate::scrollable).
@@ -315,7 +316,10 @@ where
 
         let mut size = limits.resolve(self.width, self.height, Size::new(0.0, total));
 
-        if !size.height.is_finite() {
+        // A vertical `scrollable` does not hand out an infinite maximum, it
+        // sets the `infinite` flag on a finite viewport height, so the flag
+        // has to be checked as well as the resolved size.
+        if limits.infinite.height || !size.height.is_finite() {
             // An unbounded height would build every row.
             size.height = total.min(FALLBACK_HEIGHT);
         }

@@ -31,6 +31,23 @@ pub trait Scrollable {
         bounds: Rectangle,
         content: Size,
     );
+
+    /// Scrolls the widget so that the given `translation` (measured from the
+    /// top-left of the content, like the translation passed to
+    /// [`Operation::scrollable`]) is the new scroll position.
+    ///
+    /// By default, this is [`scroll_to`](Self::scroll_to). Widgets whose
+    /// absolute offsets are not measured from the start of the content, such
+    /// as an end-anchored `scrollable`, override it to convert.
+    fn scroll_to_translation(
+        &mut self,
+        translation: AbsoluteOffset<Option<f32>>,
+        animation: Animation,
+        bounds: Rectangle,
+        content: Size,
+    ) {
+        self.scroll_to(translation, animation, bounds, content);
+    }
 }
 
 /// Produces an [`Operation`] that snaps the widget with the given [`Id`] to
@@ -215,7 +232,7 @@ impl<T> Operation<T> for Reveal {
             .and_then(|(start, end)| reveal_offset(translation.y, bounds.height, start, end));
 
         if x.is_some() || y.is_some() {
-            state.scroll_to(AbsoluteOffset { x, y }, self.animation, bounds, content);
+            state.scroll_to_translation(AbsoluteOffset { x, y }, self.animation, bounds, content);
         }
     }
 }
