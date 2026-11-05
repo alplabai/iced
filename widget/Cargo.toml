@@ -55,4 +55,4 @@ iced_renderer.workspace = true
 iced_renderer.features = ["tiny-skia", "x11", "wayland"]
 
 iced_widget.workspace = true
-iced_widget.features = ["markdown"]
+iced_widget.features = ["markdown", "image"]

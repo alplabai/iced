@@ -359,8 +359,9 @@ where
             Event::Keyboard(keyboard::Event::KeyPressed {
                 key: keyboard::Key::Named(keyboard::key::Named::Enter | keyboard::key::Named::Space),
                 repeat: false,
+                modifiers,
                 ..
-            }) if self.on_press.is_some() => {
+            }) if self.on_press.is_some() && modifiers.is_empty() => {
                 let state = tree.state.downcast_mut::<State>();
 
                 if state.is_focused {
@@ -472,18 +473,21 @@ where
             &viewport,
         );
 
-        // The ring is drawn inside the bounds, over the content, so that it
-        // never depends on space outside the layout (parent clips, siblings).
+        // The ring is drawn inside the bounds, in a layer of its own so it
+        // is composited above every kind of content (images, SVGs, text,
+        // meshes), and never depends on space outside the layout.
         if is_focused && let Some(ring) = style.focus_ring {
-            renderer.fill_quad(
-                renderer::Quad {
-                    bounds,
-                    border: ring,
-                    shadow: Shadow::default(),
-                    snap: style.snap,
-                },
-                Background::Color(Color::TRANSPARENT),
-            );
+            renderer.with_layer(bounds, |renderer| {
+                renderer.fill_quad(
+                    renderer::Quad {
+                        bounds,
+                        border: ring,
+                        shadow: Shadow::default(),
+                        snap: style.snap,
+                    },
+                    Background::Color(Color::TRANSPARENT),
+                );
+            });
         }
     }
 
@@ -557,8 +561,8 @@ pub struct Style {
     pub shadow: Shadow,
     /// Whether the button should be snapped to the pixel grid.
     pub snap: bool,
-    /// The [`Border`] drawn inside the button bounds, over its content, while
-    /// it has keyboard (or operation) focus, if any.
+    /// The [`Border`] drawn inside the button bounds, above its content (in a
+    /// layer of its own), while it has keyboard (or operation) focus, if any.
     ///
     /// Its color should contrast with the button background. A pointer press
     /// never focuses a button.

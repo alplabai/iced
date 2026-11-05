@@ -94,6 +94,38 @@ fn enter_and_space_activate_the_focused_button() {
     assert!(!messages.contains(&Message::Disabled));
 }
 
+/// Enter and Space with a modifier held are left to the application.
+#[test]
+fn modified_activation_keys_are_not_captured() {
+    let mut simulator = dialog();
+    next(&mut simulator);
+
+    let Event::Keyboard(keyboard::Event::KeyPressed {
+        key,
+        modified_key,
+        physical_key,
+        location,
+        repeat,
+        text,
+        ..
+    }) = key(Named::Enter)
+    else {
+        unreachable!()
+    };
+
+    let statuses = simulator.simulate([Event::Keyboard(keyboard::Event::KeyPressed {
+        key,
+        modified_key,
+        physical_key,
+        location,
+        modifiers: keyboard::Modifiers::CTRL,
+        repeat,
+        text,
+    })]);
+    assert_eq!(statuses, [iced_widget::core::event::Status::Ignored]);
+    assert_eq!(simulator.drain().count(), 0);
+}
+
 /// A key press that is not an activation key is left to the application.
 #[test]
 fn other_keys_are_not_captured() {
@@ -160,6 +192,75 @@ fn click_does_not_focus_the_button() {
     let statuses = simulator.simulate([key(Named::Space), key(Named::Enter)]);
     assert_eq!(statuses, [iced_widget::core::event::Status::Ignored; 2]);
     assert_eq!(simulator.drain().count(), 0);
+}
+
+/// The ring is composited above content that is not a quad, such as an
+/// image that fills the button.
+#[test]
+fn focus_ring_is_drawn_over_an_image() {
+    use iced_widget::core::{Color, ContentFit, Length};
+    use iced_widget::image;
+
+    let directory = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let theme = Theme::Light;
+
+    let render = |focus: bool| {
+        let handle = image::Handle::from_rgba(1, 1, vec![255, 255, 255, 255]);
+        let mut simulator = Simulator::new(
+            button(
+                image(handle)
+                    .width(Length::Fixed(40.0))
+                    .height(Length::Fixed(20.0))
+                    .content_fit(ContentFit::Fill),
+            )
+            .padding(0)
+            .style(|_, _| button::Style {
+                background: Some(Color::BLACK.into()),
+                text_color: Color::BLACK,
+                focus_ring: Some(
+                    iced_widget::core::border::rounded(0)
+                        .color(Color::BLACK)
+                        .width(2),
+                ),
+                ..button::Style::default()
+            })
+            .on_press(Message::First),
+        );
+
+        if focus {
+            next(&mut simulator);
+        }
+
+        let name = if focus {
+            "image_ring_on"
+        } else {
+            "image_ring_off"
+        };
+        let path = directory.join(format!("{name}.png"));
+        let tiny = directory.join(format!("{name}-tiny-skia.png"));
+        let _ = std::fs::remove_file(&tiny);
+
+        let _ = simulator
+            .snapshot(&theme)
+            .unwrap()
+            .matches_image(&path)
+            .unwrap();
+
+        let mut reader =
+            png::Decoder::new(std::io::BufReader::new(std::fs::File::open(&tiny).unwrap()))
+                .read_info()
+                .unwrap();
+        let mut bytes = vec![0; reader.output_buffer_size().unwrap()];
+        let info = reader.next_frame(&mut bytes).unwrap();
+        let _ = std::fs::remove_file(&tiny);
+
+        // Middle of the top edge at 2x.
+        let i = (1 * info.width as usize + 30) * 4;
+        i32::from(bytes[i]) + i32::from(bytes[i + 1]) + i32::from(bytes[i + 2])
+    };
+
+    assert!(render(false) > 600, "the image covers the button edge");
+    assert!(render(true) < 100, "the ring is drawn above the image");
 }
 
 /// The focus ring is drawn inside the button, with a color that contrasts
