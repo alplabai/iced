@@ -74,6 +74,8 @@ where
             )
         };
 
+        let maximized_hint = window.is_maximized();
+
         Self {
             title,
             viewport,
@@ -84,8 +86,8 @@ where
             theme_mode,
             default_theme,
             style,
-            mode_flags: ModeFlags::read(window, false),
-            maximized_hint: ModeFlags::reads_maximized(window) && window.is_maximized(),
+            mode_flags: ModeFlags::read(window, maximized_hint),
+            maximized_hint,
             mode_dirty: false,
         }
     }
@@ -108,14 +110,12 @@ where
         self.mode_dirty = true;
     }
 
-    /// Returns whether the `window` is maximized without the side effects
-    /// of reading it on undecorated macOS windows.
-    pub fn is_maximized(&self, window: &Window) -> bool {
-        if ModeFlags::reads_maximized(window) {
-            window.is_maximized()
-        } else {
-            self.maximized_hint
-        }
+    /// Reads the maximized state of the `window` once and stores it as the
+    /// hint. Call it before a change that makes the window stop being read
+    /// directly (see [`ModeFlags::reads_maximized`]), so the hint is not stale.
+    pub fn sync_maximized_hint(&mut self, window: &Window) {
+        self.maximized_hint = window.is_maximized();
+        self.mode_dirty = true;
     }
 
     /// If the mode flags were marked dirty, reads them and returns a
@@ -125,8 +125,13 @@ where
             return None;
         }
 
-        self.mode_flags
-            .update(ModeFlags::read(window, self.maximized_hint))
+        let current = ModeFlags::read(window, self.maximized_hint);
+
+        if ModeFlags::reads_maximized(window) {
+            self.maximized_hint = current.maximized();
+        }
+
+        self.mode_flags.update(current)
     }
 
     pub fn viewport(&self) -> &Viewport {

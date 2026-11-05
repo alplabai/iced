@@ -46,8 +46,9 @@ pub enum Event {
     ///
     /// - **macOS / X11:** `fullscreen` reports the requested state, so it
     ///   flips when the transition starts, not when it ends.
-    /// - **macOS:** for undecorated windows `maximized` follows only the
-    ///   maximize actions, not changes made by the user or window manager.
+    /// - **macOS:** for undecorated or non-resizable windows `maximized`
+    ///   follows only the window actions, not changes made by the user or
+    ///   window manager.
     /// - **X11:** minimizing may not produce a window event of its own, so
     ///   it is detected through the focus change that usually accompanies it.
     /// - **Wayland:** `minimized` is always `None`, and `maximized` changes

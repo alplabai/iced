@@ -1481,6 +1481,7 @@ fn run_action<'a, P, C>(
             }
             window::Action::SetResizable(id, resizable) => {
                 if let Some(window) = window_manager.get_mut(id) {
+                    window.state.sync_maximized_hint(&window.raw);
                     window.raw.set_resizable(resizable);
                 }
             }
@@ -1594,7 +1595,7 @@ fn run_action<'a, P, C>(
             }
             window::Action::ToggleMaximize(id) => {
                 if let Some(window) = window_manager.get_mut(id) {
-                    let maximized = !window.state.is_maximized(&window.raw);
+                    let maximized = !window.raw.is_maximized();
 
                     window.raw.set_maximized(maximized);
                     window.state.set_maximized_hint(maximized);
@@ -1602,6 +1603,7 @@ fn run_action<'a, P, C>(
             }
             window::Action::ToggleDecorations(id) => {
                 if let Some(window) = window_manager.get_mut(id) {
+                    window.state.sync_maximized_hint(&window.raw);
                     window.raw.set_decorations(!window.raw.is_decorated());
                 }
             }

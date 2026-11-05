@@ -23,9 +23,10 @@ impl ModeFlags {
 
     /// Reads the current [`ModeFlags`] of a [`winit::window::Window`].
     ///
-    /// `maximized_hint` is used instead of asking the window for undecorated
-    /// windows on macOS, where `is_maximized` temporarily changes the window's
-    /// style mask and can feed back into new `Resized` events.
+    /// `maximized_hint` is used instead of asking the window for windows on
+    /// macOS that are undecorated or not resizable, where `is_maximized`
+    /// temporarily changes the window's style mask and can feed back into new
+    /// `Resized` events.
     pub fn read(window: &winit::window::Window, maximized_hint: bool) -> Self {
         Self::new(
             if Self::reads_maximized(window) {
@@ -40,7 +41,12 @@ impl ModeFlags {
 
     /// Whether `is_maximized` can be called on the window without side effects.
     pub fn reads_maximized(window: &winit::window::Window) -> bool {
-        !cfg!(target_os = "macos") || window.is_decorated()
+        !cfg!(target_os = "macos") || (window.is_decorated() && window.is_resizable())
+    }
+
+    /// Whether the window is maximized.
+    pub fn maximized(self) -> bool {
+        self.maximized
     }
 
     /// Stores the `current` flags and returns a [`window::Event::ModeChanged`]
