@@ -163,6 +163,41 @@ where
     }
 }
 
+impl<'a, Key, Message, Theme, Renderer>
+    Column<Key, crate::core::Element<'a, Message, Theme, Renderer>>
+where
+    Key: Copy + PartialEq,
+{
+    /// Adds any [`Widget`] to the [`Column`], boxing it into an
+    /// [`Element`](crate::core::Element) first.
+    ///
+    /// This is a shorthand for `push(key, child._boxed())`, useful when the
+    /// children have different types.
+    ///
+    /// ```
+    /// # use iced_widget::core::Element;
+    /// # use iced_widget::{button, text, keyed};
+    /// let view: keyed::Column<u32, Element<'_, (), iced_widget::Theme, iced_widget::Renderer>> =
+    ///     keyed::Column::new()
+    ///         .push_boxed(0, text("Hello"))
+    ///         .push_boxed(1, button("Click"));
+    /// ```
+    pub fn push_boxed(self, key: Key, child: impl Widget<Message, Theme, Renderer> + 'a) -> Self {
+        self.push(key, child._boxed())
+    }
+
+    /// Extends the [`Column`] with the given children, boxing each of them
+    /// into an [`Element`](crate::core::Element) first.
+    pub fn extend_boxed<I>(self, children: impl IntoIterator<Item = (Key, I)>) -> Self
+    where
+        I: Widget<Message, Theme, Renderer> + 'a,
+    {
+        children
+            .into_iter()
+            .fold(self, |column, (key, child)| column.push_boxed(key, child))
+    }
+}
+
 impl<Key, W> Default for Column<Key, W>
 where
     Key: Copy + PartialEq,

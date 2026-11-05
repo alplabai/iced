@@ -71,6 +71,7 @@ Numbers refer to the ranks in `TRIAGE.md`, which has the status of all 20.
 - #49: `MonitorData::size()` (and `Monitor::size()`) returned physical size multiplied by the scale factor; it now divides, so a 3840x2160 monitor at 2.0 reports 1920x1080. A non-positive or non-finite scale factor is treated as 1.0. Unit tests in `core/src/window/monitor.rs`. Signex reads `size()` as logical (trunk `handlers/window_controls.rs:22`; signex#2052 `window_geometry_events.rs`), so it needs no correction after this fix; any caller that compensated for the old bug must drop it.
 - #50: `winit::conversion::monitor_list` compared the primary monitor handle with itself, so every monitor was flagged primary; it now compares each handle with the primary one (`is_primary_monitor`). Unit tests in `winit/src/conversion.rs` go through the list-building function.
 - #7 was not reproducible (a negative-sweep arc test was added); #13 was already handled in this tree. Other ranks were skipped.
+- Issue #44: `push_boxed` and `extend_boxed` on `Row`, `Column`, `Stack`, `Grid` and `keyed::Column` (`push_boxed(key, child)`) take any `Widget` and box it, so children of different types need no `.boxed()`; `None` children are still skipped. Purely additive (widget). Tests in `widget/tests/push_boxed.rs`.
 
 ## Verification
 
