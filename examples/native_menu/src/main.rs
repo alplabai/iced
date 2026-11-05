@@ -2,10 +2,11 @@
 //! unsaved changes.
 //!
 //! Edit the text, then press Command+Q, choose Quit from the app menu or the
-//! Dock: the app asks before it quits. On other platforms the menu is ignored.
+//! Dock, or close the window: the app asks before it quits. On other
+//! platforms the menu is ignored and only closing the window asks.
 use iced::menu::{Menu, Predefined, item, item_maybe, predefined, separator, submenu};
 use iced::widget::{button, center, column, row, text, text_input};
-use iced::{Element, Settings, Subscription, Task, Widget, system};
+use iced::{Element, Settings, Subscription, Task, Widget, system, window};
 
 pub fn main() -> iced::Result {
     iced::application(Editor::default, Editor::update, Editor::view)
@@ -14,6 +15,8 @@ pub fn main() -> iced::Result {
             exit_on_quit_request: false,
             ..Settings::default()
         })
+        // Closing the window asks too, instead of exiting at once.
+        .exit_on_close_request(false)
         .menu(Editor::menu)
         .subscription(Editor::subscription)
         .run()
@@ -115,7 +118,11 @@ impl Editor {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        system::quit_requests().map(|()| Message::QuitRequested)
+        // An app quit (macOS) and a window close lead to the same question.
+        Subscription::batch([
+            system::quit_requests().map(|()| Message::QuitRequested),
+            window::close_requests().map(|_| Message::QuitRequested),
+        ])
     }
 
     fn view(&self) -> Element<'_, Message> {
