@@ -116,3 +116,30 @@ fn escape_is_ignored_after_panning_back_to_default() {
     simulator.point_at(Point::new(-100.0, -100.0));
     assert_eq!(simulator.simulate([escape()]), [event::Status::Ignored]);
 }
+
+/// Zooming in and out by the same number of notches returns the view to its
+/// default, even though the repeated f32 steps leave the scale a few ulps
+/// away from 1.0.
+#[test]
+fn escape_is_ignored_after_zooming_in_and_out() {
+    let mut simulator: Simulator<'_, ()> = Simulator::new(
+        Viewer::new(Handle::from_rgba(100, 100, vec![0; 100 * 100 * 4]))
+            .content_fit(ContentFit::Contain)
+            .width(10)
+            .height(10),
+    );
+
+    simulator.point_at(Point::new(5.0, 5.0));
+
+    let wheel = |y: f32| {
+        Event::Mouse(mouse::Event::WheelScrolled {
+            delta: mouse::ScrollDelta::Lines { x: 0.0, y },
+        })
+    };
+
+    let _ = simulator.simulate((0..15).map(|_| wheel(1.0)));
+    let _ = simulator.simulate((0..15).map(|_| wheel(-1.0)));
+
+    simulator.point_at(Point::new(-100.0, -100.0));
+    assert_eq!(simulator.simulate([escape()]), [event::Status::Ignored]);
+}

@@ -196,6 +196,15 @@ where
                             })
                             .clamp(self.min_scale, self.max_scale);
 
+                            // Repeated steps in and out leave `scale` a few
+                            // ulps off 1.0; within half a step of 1.0 that
+                            // can only be drift, so snap back.
+                            if (self.min_scale..=self.max_scale).contains(&1.0)
+                                && (state.scale - 1.0).abs() < self.scale_step / 2.0
+                            {
+                                state.scale = 1.0;
+                            }
+
                             let scaled_size = scaled_image_size(
                                 renderer,
                                 &self.handle,
