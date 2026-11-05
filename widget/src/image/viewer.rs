@@ -168,8 +168,8 @@ where
                     && state.current_offset == Vector::default();
 
                 // Fork: upstream #3522 captures every Escape; leave it to
-                // the app unless this viewer is hovered or has changed.
-                if cursor.is_over(bounds) || !is_default {
+                // the app unless this viewer has changed.
+                if !is_default {
                     *state = State::new();
                     shell.request_redraw();
                     shell.capture_event();
