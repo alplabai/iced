@@ -550,6 +550,54 @@ mod tests {
     }
 
     #[test]
+    fn clip_mask_is_reset_per_frame_and_tracked_through_images() {
+        fn image_of(rgba: [u8; 4]) -> core::Image {
+            core::Image::new(image::Handle::from_rgba(
+                SIZE,
+                SIZE,
+                rgba.repeat((SIZE * SIZE) as usize),
+            ))
+            .filter_method(image::FilterMethod::Nearest)
+        }
+
+        // A dirty mask, as a compositor surface carries over from the last frame.
+        let mut mask = tiny_skia::Mask::new(SIZE, SIZE).expect("Create mask");
+        mask.data_mut().fill(255);
+
+        let mut renderer = renderer();
+        let full = rectangle(0.0, 0.0, 40.0, 40.0);
+
+        renderer.start_layer(rectangle(0.0, 0.0, 10.0, 10.0));
+        // Narrows the mask to 5x5 from inside `draw_image`...
+        core::image::Renderer::draw_image(
+            &mut renderer,
+            image_of([255; 4]),
+            full,
+            rectangle(0.0, 0.0, 5.0, 5.0),
+        );
+        // ...which the next image must widen back to the 10x10 layer.
+        core::image::Renderer::draw_image(&mut renderer, image_of([0, 0, 0, 255]), full, full);
+        renderer.end_layer();
+
+        // Damage that misses part of the surface leaves the dirty mask there.
+        let damage = rectangle(0.0, 0.0, 30.0, 30.0);
+        let mut pixmap = tiny_skia::Pixmap::new(SIZE, SIZE).expect("Create pixmap");
+        let viewport = Viewport::with_physical_size(Size::new(SIZE, SIZE), Scale::default());
+
+        renderer.draw(
+            &mut pixmap.as_mut(),
+            &mut mask,
+            &viewport,
+            &[damage],
+            BACKGROUND,
+        );
+
+        assert_eq!(pixel(&pixmap, 7, 7), BLACK);
+        assert_eq!(pixel(&pixmap, 15, 15), GRAY);
+        assert_eq!(pixmap.pixel(35, 35).expect("Pixel in bounds").alpha(), 0);
+    }
+
+    #[test]
     fn shape_then_image_use_a_single_layer() {
         let mut renderer = renderer();
         let mut frame = frame(&renderer);
