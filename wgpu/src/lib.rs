@@ -524,7 +524,7 @@ impl Renderer {
                 for instance in &layer.primitives {
                     let bounds = instance.bounds * scale;
 
-                    if let Some(clip_bounds) = (instance.bounds * scale)
+                    if let Some(clip_bounds) = (instance.clip_bounds * scale)
                         .intersection(&physical_bounds)
                         .and_then(nudge::snap)
                     {
@@ -865,7 +865,7 @@ impl graphics::geometry::Renderer for Renderer {
                         layer.draw_mesh_group(section.meshes, transformation);
                     }
 
-                    for instance in &section.primitives {
+                    for instance in section.primitives {
                         layer.draw_primitive_instance(instance, transformation);
                     }
 
@@ -892,7 +892,7 @@ impl graphics::geometry::Renderer for Renderer {
 
                     if let Some(primitives) = &section.primitives {
                         for instance in primitives.iter() {
-                            layer.draw_primitive_instance(instance, transformation);
+                            layer.draw_primitive_instance(instance.clone(), transformation);
                         }
                     }
 

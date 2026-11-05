@@ -547,16 +547,18 @@ impl geometry::frame::Backend for Frame {
 
 impl<P: crate::Primitive> geometry::frame::DrawPrimitive<P> for Frame {
     fn draw_primitive(&mut self, bounds: Rectangle, primitive: P) {
-        // Like images, the primitive is only moved and scaled: a rotation
-        // cannot be applied to its (axis-aligned) bounds.
-        let (bounds, _rotation) = self.transforms.current.transform_rectangle(bounds);
+        // A primitive cannot be rotated, so it covers the axis-aligned
+        // bounding box of the transformed rectangle (which also handles
+        // mirrored transforms, unlike `transform_rectangle`).
+        let bounds = self.transforms.current.bounding_box(bounds);
+        let clip_bounds = self.clip_bounds;
 
         self.begin(Kind::Primitive);
 
         self.sections
             .current_mut()
             .primitives
-            .push(primitive::Instance::new(bounds, primitive));
+            .push(primitive::Instance::new(bounds, primitive).clipped(clip_bounds));
     }
 }
 
@@ -719,6 +721,29 @@ impl Transform {
         }
 
         gradient
+    }
+
+    /// The axis-aligned bounding box of the transformed `rectangle`.
+    fn bounding_box(&self, rectangle: Rectangle) -> Rectangle {
+        let corners = [
+            Vector::new(0.0, 0.0),
+            Vector::new(rectangle.width, 0.0),
+            Vector::new(0.0, rectangle.height),
+            Vector::new(rectangle.width, rectangle.height),
+        ]
+        .map(|corner| self.transform_point(rectangle.position() + corner));
+
+        let (min_x, max_x) = corners.iter().fold((f32::MAX, f32::MIN), |(min, max), p| {
+            (min.min(p.x), max.max(p.x))
+        });
+        let (min_y, max_y) = corners.iter().fold((f32::MAX, f32::MIN), |(min, max), p| {
+            (min.min(p.y), max.max(p.y))
+        });
+
+        Rectangle::new(
+            Point::new(min_x, min_y),
+            Size::new(max_x - min_x, max_y - min_y),
+        )
     }
 
     fn transform_rectangle(&self, rectangle: Rectangle) -> (Rectangle, Radians) {
@@ -1002,6 +1027,17 @@ mod tests {
         })
     }
 
+    /// Reports a GPU test that could not run. Set `ICED_REQUIRE_GPU_TESTS` to
+    /// make it fail instead of passing silently.
+    fn skipped() {
+        assert!(
+            std::env::var_os("ICED_REQUIRE_GPU_TESTS").is_none(),
+            "no GPU adapter available, but ICED_REQUIRE_GPU_TESTS is set"
+        );
+
+        eprintln!("SKIPPED: no GPU adapter available (set ICED_REQUIRE_GPU_TESTS=1 to fail)");
+    }
+
     /// A red square, a green primitive on top of it, and a blue square on top
     /// of the primitive, all drawn in a single frame.
     fn sandwich() -> Geometry {
@@ -1025,8 +1061,7 @@ mod tests {
     #[test]
     fn primitive_renders_between_geometry() {
         let Some(pixel) = render(sandwich) else {
-            eprintln!("no GPU adapter available; skipping");
-            return;
+            return skipped();
         };
 
         assert_eq!(pixel(15, 15), RED, "red only");
@@ -1049,8 +1084,7 @@ mod tests {
         };
 
         let Some(pixel) = render(cached) else {
-            eprintln!("no GPU adapter available; skipping");
-            return;
+            return skipped();
         };
 
         assert_eq!(pixel(15, 15), RED, "red only");
@@ -1060,5 +1094,111 @@ mod tests {
             "the primitive is above earlier shapes"
         );
         assert_eq!(pixel(65, 65), BLUE, "later shapes are above the primitive");
+    }
+
+    /// Geometry of a frame of the given size, filled in by `draw`.
+    fn primitive_frame(frame_size: Size, draw: impl FnOnce(&mut Frame)) -> impl Fn() -> Geometry {
+        let mut frame = Frame::new(Rectangle::with_size(frame_size));
+        draw(&mut frame);
+        let geometry = std::cell::RefCell::new(Some(frame.into_geometry()));
+
+        move || geometry.borrow_mut().take().expect("rendered once")
+    }
+
+    const NONE: [u8; 4] = [0, 0, 0, 0];
+
+    #[test]
+    fn primitive_is_clipped_to_the_frame() {
+        let geometry = primitive_frame(Size::new(50.0, 50.0), |frame| {
+            DrawPrimitive::draw_primitive(
+                frame,
+                Rectangle::new(Point::new(30.0, 30.0), Size::new(60.0, 60.0)),
+                Green,
+            );
+        });
+
+        let Some(pixel) = render(geometry) else {
+            return skipped();
+        };
+
+        assert_eq!(pixel(40, 40), GREEN, "inside the frame");
+        assert_eq!(pixel(60, 60), NONE, "past the frame");
+        assert_eq!(pixel(85, 85), NONE, "past the frame, inside the bounds");
+    }
+
+    #[test]
+    fn primitive_is_clipped_to_with_clip_region() {
+        let geometry = primitive_frame(Size::new(100.0, 100.0), |frame| {
+            let mut clipped = frame.draft(Rectangle::new(
+                Point::new(20.0, 20.0),
+                Size::new(40.0, 40.0),
+            ));
+
+            DrawPrimitive::draw_primitive(
+                &mut clipped,
+                Rectangle::new(Point::new(10.0, 10.0), Size::new(80.0, 80.0)),
+                Green,
+            );
+
+            frame.paste(clipped);
+        });
+
+        let Some(pixel) = render(geometry) else {
+            return skipped();
+        };
+
+        assert_eq!(pixel(15, 15), NONE, "before the region");
+        assert_eq!(pixel(30, 30), GREEN, "inside the region");
+        assert_eq!(pixel(70, 70), NONE, "after the region");
+    }
+
+    #[test]
+    fn primitive_follows_a_flipped_transform() {
+        let geometry = primitive_frame(Size::new(100.0, 100.0), |frame| {
+            frame.translate(Vector::new(0.0, 80.0));
+            frame.scale_nonuniform(Vector::new(1.0, -1.0));
+
+            // Y-up: covers x in [10, 40] and y in [30, 70] on screen.
+            DrawPrimitive::draw_primitive(
+                frame,
+                Rectangle::new(Point::new(10.0, 10.0), Size::new(30.0, 40.0)),
+                Green,
+            );
+        });
+
+        let Some(pixel) = render(geometry) else {
+            return skipped();
+        };
+
+        assert_eq!(pixel(20, 50), GREEN, "where the flipped rectangle is");
+        assert_eq!(pixel(20, 20), NONE, "above it");
+        assert_eq!(pixel(20, 75), NONE, "below it");
+        assert_eq!(pixel(60, 50), NONE, "beside it");
+    }
+
+    #[test]
+    fn primitive_bounds_are_the_bounding_box_of_a_rotation() {
+        let mut frame = Frame::new(Rectangle::with_size(Size::new(100.0, 100.0)));
+
+        frame.translate(Vector::new(50.0, 50.0));
+        frame.rotate(Radians(std::f32::consts::FRAC_PI_2));
+
+        // A 20x10 rectangle turned a quarter turn is 10x20.
+        DrawPrimitive::draw_primitive(
+            &mut frame,
+            Rectangle::new(Point::ORIGIN, Size::new(20.0, 10.0)),
+            Green,
+        );
+
+        let Geometry::Live { sections } = frame.into_geometry() else {
+            unreachable!("a new frame is live");
+        };
+
+        let bounds = sections[0].primitives[0].bounds;
+
+        assert!((bounds.x - 40.0).abs() < 1e-3, "{bounds:?}");
+        assert!((bounds.y - 50.0).abs() < 1e-3, "{bounds:?}");
+        assert!((bounds.width - 10.0).abs() < 1e-3, "{bounds:?}");
+        assert!((bounds.height - 20.0).abs() < 1e-3, "{bounds:?}");
     }
 }

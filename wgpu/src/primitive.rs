@@ -1,5 +1,5 @@
 //! Draw custom primitives.
-use crate::core::{self, Rectangle};
+use crate::core::{self, Rectangle, Transformation};
 use crate::graphics::Viewport;
 use crate::graphics::futures::{MaybeSend, MaybeSync};
 
@@ -165,6 +165,10 @@ pub struct Instance {
     /// The bounds of the [`Instance`].
     pub(crate) bounds: Rectangle,
 
+    /// The region the [`Instance`] is clipped to. The viewport of the
+    /// [`Primitive`] stays at its `bounds`.
+    pub(crate) clip_bounds: Rectangle,
+
     /// The [`Primitive`] to render.
     pub(crate) primitive: Arc<dyn Stored>,
 }
@@ -174,8 +178,22 @@ impl Instance {
     pub fn new(bounds: Rectangle, primitive: impl Primitive) -> Self {
         Instance {
             bounds,
+            clip_bounds: bounds,
             primitive: Arc::new(BlackBox { primitive }),
         }
+    }
+
+    /// Clips the [`Instance`] to the given region, instead of its bounds.
+    pub(crate) fn clipped(mut self, clip_bounds: Rectangle) -> Self {
+        self.clip_bounds = clip_bounds;
+        self
+    }
+
+    /// Moves and scales the [`Instance`] by the given [`Transformation`].
+    pub(crate) fn transformed(mut self, transformation: Transformation) -> Self {
+        self.bounds = self.bounds * transformation;
+        self.clip_bounds = self.clip_bounds * transformation;
+        self
     }
 }
 

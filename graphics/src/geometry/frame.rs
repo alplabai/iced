@@ -112,11 +112,19 @@ where
     /// The primitive is drawn in the order it was added: above everything
     /// drawn before it, and below everything drawn after it.
     ///
+    /// The primitive is clipped to the bounds of the [`Frame`] (or of the
+    /// region given to [`with_clip`]), like the rest of the geometry.
+    ///
+    /// Rotation is not applied to a primitive: under a rotated transform it
+    /// covers the axis-aligned bounding box of the transformed `bounds`.
+    /// Translation, scaling and mirroring are respected.
+    ///
     /// This is only available if the [`Frame`] of the [`Renderer`] knows how
     /// to draw primitives of type `P` (see [`DrawPrimitive`]). Renderers that
     /// cannot draw a primitive (like a software renderer) skip it, so choose
     /// what to draw with a different technique when that matters.
     ///
+    /// [`with_clip`]: Self::with_clip
     /// [`Renderer`]: crate::geometry::Renderer
     pub fn draw_primitive<P>(&mut self, bounds: Rectangle, primitive: P)
     where

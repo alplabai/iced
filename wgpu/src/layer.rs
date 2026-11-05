@@ -361,13 +361,10 @@ impl Layer {
     /// like the ones kept by cached geometry.
     pub fn draw_primitive_instance(
         &mut self,
-        instance: &primitive::Instance,
+        instance: primitive::Instance,
         transformation: Transformation,
     ) {
-        self.primitives.push(primitive::Instance {
-            bounds: instance.bounds * transformation,
-            primitive: instance.primitive.clone(),
-        });
+        self.primitives.push(instance.transformed(transformation));
     }
 
     #[allow(clippy::drain_collect)] // We want to reuse `Layer` capacity
