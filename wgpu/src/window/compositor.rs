@@ -7,6 +7,9 @@ use crate::graphics::compositor;
 use crate::graphics::{self, Antialiasing, Shell, Viewport};
 use crate::{Engine, Renderer};
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
 /// A window graphics backend for iced powered by `wgpu`.
 pub struct Compositor {
     instance: wgpu::Instance,
@@ -15,6 +18,63 @@ pub struct Compositor {
     alpha_mode: wgpu::CompositeAlphaMode,
     engine: Engine,
     settings: Settings,
+    health: Arc<DeviceHealth>,
+}
+
+/// Tracks whether the `wgpu` device of a [`Compositor`] is still usable.
+///
+/// It is updated from the callbacks `wgpu` invokes when the device is lost
+/// (for example after a driver reset) or reports an error that no error scope
+/// captured. Shared through an [`Arc`] because those callbacks may run on any
+/// thread.
+#[derive(Debug, Default)]
+pub struct DeviceHealth {
+    lost: AtomicBool,
+    uncaptured_errors: AtomicU64,
+}
+
+impl DeviceHealth {
+    /// Returns `true` once the device has been lost.
+    ///
+    /// A lost device never recovers: everything created from it must be
+    /// recreated, so callers should stop rendering with it.
+    pub fn is_lost(&self) -> bool {
+        self.lost.load(Ordering::Acquire)
+    }
+
+    /// Returns how many errors the device reported outside of any error scope.
+    pub fn uncaptured_errors(&self) -> u64 {
+        self.uncaptured_errors.load(Ordering::Relaxed)
+    }
+
+    fn mark_lost(&self, reason: wgpu::DeviceLostReason, message: &str) {
+        log::error!("wgpu device lost ({reason:?}): {message}");
+
+        self.lost.store(true, Ordering::Release);
+    }
+
+    fn record_error(&self, error: &wgpu::Error) {
+        log::error!("wgpu uncaptured error: {error}");
+
+        let _ = self.uncaptured_errors.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Installs the lost and uncaptured error callbacks on the given device.
+    ///
+    /// Without them, `wgpu` panics on any uncaptured error.
+    fn install(self: &Arc<Self>, device: &wgpu::Device) {
+        let health = Arc::clone(self);
+
+        device.set_device_lost_callback(move |reason, message| {
+            health.mark_lost(reason, &message);
+        });
+
+        let health = Arc::clone(self);
+
+        device.on_uncaptured_error(Arc::new(move |error: wgpu::Error| {
+            health.record_error(&error);
+        }));
+    }
 }
 
 /// A compositor error.
@@ -44,6 +104,11 @@ impl From<Error> for backend::Error {
 }
 
 impl Compositor {
+    /// Returns the [`DeviceHealth`] of the device of this [`Compositor`].
+    pub fn health(&self) -> &Arc<DeviceHealth> {
+        &self.health
+    }
+
     /// Requests a new [`Compositor`] with the given [`Settings`].
     ///
     /// Returns `None` if no compatible graphics adapter could be found.
@@ -191,6 +256,9 @@ impl Compositor {
 
             match result {
                 Ok((device, queue)) => {
+                    let health = Arc::new(DeviceHealth::default());
+                    health.install(&device);
+
                     let engine = Engine::new(
                         &adapter,
                         device,
@@ -207,6 +275,7 @@ impl Compositor {
                         alpha_mode,
                         engine,
                         settings,
+                        health,
                     });
                 }
                 Err(error) => {
@@ -360,6 +429,10 @@ impl graphics::Compositor for Compositor {
         background_color: Color,
         on_pre_present: impl FnOnce(),
     ) -> Result<(), compositor::SurfaceError> {
+        if self.health.is_lost() {
+            return Err(compositor::SurfaceError::DeviceLost);
+        }
+
         present(
             renderer,
             surface,
@@ -463,5 +536,90 @@ pub fn present_mode_from_env() -> Option<wgpu::PresentMode> {
         "fifo_relaxed" => Some(wgpu::PresentMode::FifoRelaxed),
         "mailbox" => Some(wgpu::PresentMode::Mailbox),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Creates a device with an adapter, if the machine has one.
+    fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
+        futures::executor::block_on(async {
+            let instance =
+                wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    force_fallback_adapter: false,
+                    ..wgpu::RequestAdapterOptions::default()
+                })
+                .await
+                .ok()?;
+
+            adapter
+                .request_device(&wgpu::DeviceDescriptor::default())
+                .await
+                .ok()
+        })
+    }
+
+    #[test]
+    fn starts_healthy() {
+        let health = DeviceHealth::default();
+
+        assert!(!health.is_lost());
+        assert_eq!(health.uncaptured_errors(), 0);
+    }
+
+    #[test]
+    fn lost_device_is_flagged() {
+        let health = DeviceHealth::default();
+
+        health.mark_lost(wgpu::DeviceLostReason::Unknown, "driver reset");
+
+        assert!(health.is_lost());
+    }
+
+    #[test]
+    fn destroying_the_device_marks_it_lost() {
+        let Some((device, _queue)) = device() else {
+            eprintln!("no graphics adapter available; skipping");
+            return;
+        };
+
+        let health = Arc::new(DeviceHealth::default());
+        health.install(&device);
+
+        assert!(!health.is_lost());
+
+        device.destroy();
+        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+
+        assert!(health.is_lost());
+    }
+
+    #[test]
+    fn uncaptured_errors_are_counted_instead_of_panicking() {
+        let Some((device, _queue)) = device() else {
+            eprintln!("no graphics adapter available; skipping");
+            return;
+        };
+
+        let health = Arc::new(DeviceHealth::default());
+        health.install(&device);
+
+        // A buffer without usages is a validation error.
+        let _buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: 4,
+            usage: wgpu::BufferUsages::empty(),
+            mapped_at_creation: false,
+        });
+
+        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+
+        assert_eq!(health.uncaptured_errors(), 1);
+        assert!(!health.is_lost());
     }
 }

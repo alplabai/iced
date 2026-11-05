@@ -978,6 +978,14 @@ async fn run_instance<P>(
                                     // This is an unrecoverable error.
                                     panic!("{error:?}");
                                 }
+                                compositor::SurfaceError::DeviceLost => {
+                                    present_span.finish();
+
+                                    // The device cannot recover and recreating the surface
+                                    // will not help. Skip the frame without requesting a
+                                    // redraw, so the loop does not spin. The cause was
+                                    // logged when the device reported the loss.
+                                }
                                 compositor::SurfaceError::Occluded => {
                                     present_span.finish();
 
