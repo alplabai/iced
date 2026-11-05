@@ -300,6 +300,7 @@ where
                                 scale_factor,
                                 last_monitor,
                                 on_open,
+                                parent,
                             } => {
                                 let requested_monitor = match settings.position {
                                     core::window::Position::Default => None,
@@ -330,6 +331,9 @@ where
                                     self.id.clone(),
                                 )
                                 .with_visible(false);
+
+                                let window_attributes =
+                                    conversion::with_parent(window_attributes, parent.as_deref());
 
                                 #[cfg(target_arch = "wasm32")]
                                 let window_attributes = {
@@ -485,6 +489,7 @@ enum Control {
         last_monitor: Option<winit::monitor::MonitorHandle>,
         on_open: oneshot::Sender<window::Id>,
         scale_factor: f32,
+        parent: Option<Arc<winit::window::Window>>,
     },
     SetAutomaticWindowTabbing(bool),
     ListMonitors(oneshot::Sender<MonitorList>),
@@ -1368,6 +1373,23 @@ fn run_action<'a, P, C>(
             window::Action::Open(id, settings, channel) => {
                 let last_monitor = window_manager.last_monitor();
 
+                let parent = settings.parent.and_then(|parent_id| {
+                    let parent = window_manager
+                        .get(parent_id)
+                        .map(|window| window.raw.clone());
+
+                    if parent.is_some() {
+                        window_manager.set_parent(id, parent_id);
+                    } else {
+                        log::warn!(
+                            "Ignoring parent `{parent_id:?}` of window `{id:?}`: \
+                             no such window is open"
+                        );
+                    }
+
+                    parent
+                });
+
                 control_sender
                     .start_send(Control::CreateWindow {
                         id,
@@ -1376,6 +1398,7 @@ fn run_action<'a, P, C>(
                         scale_factor: program.scale_factor(id),
                         last_monitor,
                         on_open: channel,
+                        parent,
                     })
                     .expect("Send control action");
 
@@ -1387,11 +1410,17 @@ fn run_action<'a, P, C>(
                     .expect("Send control action");
             }
             window::Action::Close(id) => {
-                let _ = ui_caches.remove(&id);
-                let _ = interfaces.remove(&id);
+                // Windows owned by this one close with it, children first.
+                let mut closing = window_manager.descendants(id);
+                closing.push(id);
 
-                if window_manager.remove(id).is_some() {
-                    events.push((id, core::Event::Window(core::window::Event::Closed)));
+                for id in closing {
+                    let _ = ui_caches.remove(&id);
+                    let _ = interfaces.remove(&id);
+
+                    if window_manager.remove(id).is_some() {
+                        events.push((id, core::Event::Window(core::window::Event::Closed)));
+                    }
                 }
 
                 if window_manager.is_empty() {

@@ -25,7 +25,7 @@ mod platform;
 mod platform;
 
 use crate::Size;
-use crate::window::{Icon, Level, Position};
+use crate::window::{Icon, Id, Level, Position};
 
 pub use platform::PlatformSpecific;
 
@@ -91,6 +91,21 @@ pub struct Settings {
     /// The icon of the window.
     pub icon: Option<Icon>,
 
+    /// The [`Id`] of the window that owns this one, if any.
+    ///
+    /// An owned window (e.g. a modal dialog) stays above its owner. The
+    /// runtime maps this to the native owner relation of the platform: an
+    /// owner window on Windows, `transient_for` on X11 and Wayland, and a
+    /// child window on macOS. Where the platform has no such relation the
+    /// setting has no effect.
+    ///
+    /// If no open window has the given [`Id`], the setting is ignored and a
+    /// warning is logged. Closing the owner also closes every window that
+    /// names it as its parent, recursively.
+    ///
+    /// By default there is no parent.
+    pub parent: Option<Id>,
+
     /// Platform specific settings.
     pub platform_specific: PlatformSpecific,
 
@@ -123,8 +138,19 @@ impl Default for Settings {
             blur: false,
             level: Level::default(),
             icon: None,
+            parent: None,
             exit_on_close_request: true,
             platform_specific: PlatformSpecific::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Settings;
+
+    #[test]
+    fn windows_have_no_parent_by_default() {
+        assert_eq!(Settings::default().parent, None);
     }
 }
