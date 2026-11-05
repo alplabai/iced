@@ -357,6 +357,19 @@ impl Layer {
             .push(primitive::Instance::new(bounds, primitive));
     }
 
+    /// Draws an already built primitive [`Instance`](primitive::Instance),
+    /// like the ones kept by cached geometry.
+    pub fn draw_primitive_instance(
+        &mut self,
+        instance: &primitive::Instance,
+        transformation: Transformation,
+    ) {
+        self.primitives.push(primitive::Instance {
+            bounds: instance.bounds * transformation,
+            primitive: instance.primitive.clone(),
+        });
+    }
+
     #[allow(clippy::drain_collect)] // We want to reuse `Layer` capacity
     fn flush_meshes(&mut self) {
         if !self.pending_meshes.is_empty() {
