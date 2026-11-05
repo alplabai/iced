@@ -173,7 +173,11 @@ fn focus_ring_is_drawn_inside_the_button() {
         let path = directory.join(format!("{name}.png"));
         let _ = std::fs::remove_file(directory.join(format!("{name}-tiny-skia.png")));
 
-        let _ = simulator.snapshot(&theme).unwrap().matches_image(&path).unwrap();
+        let _ = simulator
+            .snapshot(&theme)
+            .unwrap()
+            .matches_image(&path)
+            .unwrap();
 
         let file = std::fs::File::open(directory.join(format!("{name}-tiny-skia.png"))).unwrap();
         let mut reader = png::Decoder::new(std::io::BufReader::new(file))
