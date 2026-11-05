@@ -6,6 +6,7 @@ use crate::graphics::futures::{MaybeSend, MaybeSync};
 use rustc_hash::FxHashMap;
 use std::any::{Any, TypeId};
 use std::fmt::Debug;
+use std::sync::Arc;
 
 /// A batch of primitives.
 pub type Batch = Vec<Instance>;
@@ -158,14 +159,14 @@ impl<P: Primitive> Stored for BlackBox<P> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 /// An instance of a specific [`Primitive`].
 pub struct Instance {
     /// The bounds of the [`Instance`].
     pub(crate) bounds: Rectangle,
 
     /// The [`Primitive`] to render.
-    pub(crate) primitive: Box<dyn Stored>,
+    pub(crate) primitive: Arc<dyn Stored>,
 }
 
 impl Instance {
@@ -173,7 +174,7 @@ impl Instance {
     pub fn new(bounds: Rectangle, primitive: impl Primitive) -> Self {
         Instance {
             bounds,
-            primitive: Box::new(BlackBox { primitive }),
+            primitive: Arc::new(BlackBox { primitive }),
         }
     }
 }

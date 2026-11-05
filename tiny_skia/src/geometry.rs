@@ -137,6 +137,12 @@ fn append_clipped<T>(groups: &mut Vec<Clipped<Vec<T>>>, mut group: Clipped<Vec<T
     }
 }
 
+/// Custom primitives are renderer-specific and cannot be drawn by a
+/// software renderer, so they are skipped.
+impl<P> geometry::frame::DrawPrimitive<P> for Frame {
+    fn draw_primitive(&mut self, _bounds: Rectangle, _primitive: P) {}
+}
+
 impl geometry::frame::Backend for Frame {
     type Geometry = Geometry;
 
@@ -610,6 +616,26 @@ mod tests {
         assert!(
             primitives == 0 && text > 0,
             "{primitives} primitives, {text} text"
+        );
+    }
+
+    #[test]
+    fn primitives_are_skipped() {
+        use crate::graphics::geometry::frame::DrawPrimitive;
+
+        let bounds = Rectangle::with_size(Size::new(10.0, 10.0));
+        let mut frame = Frame::new(bounds);
+
+        DrawPrimitive::draw_primitive(&mut frame, bounds, ());
+
+        let Geometry::Live { sections } = frame.into_geometry() else {
+            unreachable!("a new frame is live");
+        };
+
+        assert!(
+            sections
+                .iter()
+                .all(|s| s.primitives.is_empty() && s.text.is_empty())
         );
     }
 }

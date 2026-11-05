@@ -865,6 +865,10 @@ impl graphics::geometry::Renderer for Renderer {
                         layer.draw_mesh_group(section.meshes, transformation);
                     }
 
+                    for instance in &section.primitives {
+                        layer.draw_primitive_instance(instance, transformation);
+                    }
+
                     for image in section.images {
                         layer.draw_image(image, transformation);
                     }
@@ -884,6 +888,12 @@ impl graphics::geometry::Renderer for Renderer {
 
                     if let Some(meshes) = &section.meshes {
                         layer.draw_mesh_cache(meshes.clone(), transformation);
+                    }
+
+                    if let Some(primitives) = &section.primitives {
+                        for instance in primitives.iter() {
+                            layer.draw_primitive_instance(instance, transformation);
+                        }
                     }
 
                     if let Some(images) = &section.images {

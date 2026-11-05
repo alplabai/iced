@@ -106,6 +106,25 @@ where
         self.raw.draw_svg(bounds, svg);
     }
 
+    /// Draws a custom, renderer-specific primitive (like a shader) on the
+    /// [`Frame`] inside the given bounds.
+    ///
+    /// The primitive is drawn in the order it was added: above everything
+    /// drawn before it, and below everything drawn after it.
+    ///
+    /// This is only available if the [`Frame`] of the [`Renderer`] knows how
+    /// to draw primitives of type `P` (see [`DrawPrimitive`]). Renderers that
+    /// cannot draw a primitive (like a software renderer) skip it, so choose
+    /// what to draw with a different technique when that matters.
+    ///
+    /// [`Renderer`]: crate::geometry::Renderer
+    pub fn draw_primitive<P>(&mut self, bounds: Rectangle, primitive: P)
+    where
+        Renderer::Frame: DrawPrimitive<P>,
+    {
+        self.raw.draw_primitive(bounds, primitive);
+    }
+
     /// Stores the current transform of the [`Frame`] and executes the given
     /// drawing operations, restoring the transform afterwards.
     ///
@@ -226,6 +245,24 @@ pub trait Backend: Sized {
     fn draw_svg(&mut self, bounds: Rectangle, svg: impl Into<Svg>);
 
     fn into_geometry(self) -> Self::Geometry;
+}
+
+/// A [`Backend`] that can draw primitives of type `P` of its renderer.
+///
+/// This is an opt-in extension of a [`Backend`]. A backend that cannot draw
+/// primitives of type `P` implements it as a no-op, so a [`Frame`] using
+/// [`draw_primitive`] still works (without the primitive) on every renderer.
+///
+/// [`draw_primitive`]: Frame::draw_primitive
+pub trait DrawPrimitive<P>: Backend {
+    /// Draws the given primitive inside the given bounds, in the current
+    /// transform of the frame.
+    fn draw_primitive(&mut self, bounds: Rectangle, primitive: P);
+}
+
+#[cfg(debug_assertions)]
+impl<P> DrawPrimitive<P> for () {
+    fn draw_primitive(&mut self, _bounds: Rectangle, _primitive: P) {}
 }
 
 #[cfg(debug_assertions)]
