@@ -115,21 +115,48 @@ impl Text {
 #[cfg(feature = "fira-sans")]
 pub const FIRA_SANS_REGULAR: &[u8] = include_bytes!("../fonts/FiraSans-Regular.ttf").as_slice();
 
+/// Returns the fonts that are always bundled with the [`FontSystem`].
+fn bundled_fonts() -> impl IntoIterator<Item = cosmic_text::fontdb::Source> {
+    [
+        cosmic_text::fontdb::Source::Binary(Arc::new(
+            include_bytes!("../fonts/Iced-Icons.ttf").as_slice(),
+        )),
+        #[cfg(feature = "fira-sans")]
+        cosmic_text::fontdb::Source::Binary(Arc::new(
+            include_bytes!("../fonts/FiraSans-Regular.ttf").as_slice(),
+        )),
+    ]
+}
+
+/// Creates the raw [`cosmic_text::FontSystem`] with the bundled fonts and the
+/// installed system fonts.
+///
+/// Scanning and parsing every installed font on each start is slow, so on
+/// native targets the parsed index is kept in a cache file that is reused as
+/// long as the font directories are unchanged.
+#[cfg(not(target_arch = "wasm32"))]
+fn new_raw_font_system() -> cosmic_text::FontSystem {
+    cosmic_text::FontSystem::new_with_fonts_and_cache(bundled_fonts())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn new_raw_font_system() -> cosmic_text::FontSystem {
+    cosmic_text::FontSystem::new_with_fonts(bundled_fonts())
+}
+
+/// Like [`new_raw_font_system`], but keeps the font index cache at `path`.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+fn new_raw_font_system_with_cache(path: std::path::PathBuf) -> cosmic_text::FontSystem {
+    cosmic_text::FontSystem::new_with_fonts_and_cache_path(bundled_fonts(), path)
+}
+
 /// Returns the global [`FontSystem`].
 pub fn font_system() -> &'static RwLock<FontSystem> {
     static FONT_SYSTEM: OnceLock<RwLock<FontSystem>> = OnceLock::new();
 
     FONT_SYSTEM.get_or_init(|| {
         #[allow(unused_mut)]
-        let mut raw = cosmic_text::FontSystem::new_with_fonts([
-            cosmic_text::fontdb::Source::Binary(Arc::new(
-                include_bytes!("../fonts/Iced-Icons.ttf").as_slice(),
-            )),
-            #[cfg(feature = "fira-sans")]
-            cosmic_text::fontdb::Source::Binary(Arc::new(
-                include_bytes!("../fonts/FiraSans-Regular.ttf").as_slice(),
-            )),
-        ]);
+        let mut raw = new_raw_font_system();
 
         #[cfg(feature = "fira-sans")]
         raw.db_mut().set_sans_serif_family("Fira Sans");
@@ -476,4 +503,37 @@ pub fn regions(
 pub trait Renderer {
     /// Draws the given [`Raw`] text.
     fn fill_raw(&mut self, raw: Raw);
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    fn family_count(raw: &cosmic_text::FontSystem) -> usize {
+        raw.db().faces().count()
+    }
+
+    #[test]
+    fn font_index_cache_is_written_and_reused() {
+        let dir = std::env::temp_dir().join(format!("iced_font_cache_{}", std::process::id()));
+        let path = dir.join("fonts.cache");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let first = new_raw_font_system_with_cache(path.clone());
+        assert!(path.is_file(), "the first start must write the cache");
+
+        let second = new_raw_font_system_with_cache(path.clone());
+        assert_eq!(family_count(&first), family_count(&second));
+
+        for raw in [&first, &second] {
+            assert!(
+                raw.db()
+                    .faces()
+                    .any(|face| face.families.iter().any(|(name, _)| name == "Iced-Icons")),
+                "bundled fonts must be loaded"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
