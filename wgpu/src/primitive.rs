@@ -183,10 +183,12 @@ impl Instance {
         }
     }
 
-    /// Clips the [`Instance`] to the given region, instead of its bounds.
-    pub(crate) fn clipped(mut self, clip_bounds: Rectangle) -> Self {
-        self.clip_bounds = clip_bounds;
-        self
+    /// Clips the [`Instance`] to the given region, never past its bounds.
+    ///
+    /// Returns `None` if nothing of the [`Instance`] is left to draw.
+    pub(crate) fn clipped(mut self, clip_bounds: Rectangle) -> Option<Self> {
+        self.clip_bounds = self.bounds.intersection(&clip_bounds)?;
+        Some(self)
     }
 
     /// Moves and scales the [`Instance`] by the given [`Transformation`].

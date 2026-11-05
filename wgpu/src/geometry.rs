@@ -551,14 +551,16 @@ impl<P: crate::Primitive> geometry::frame::DrawPrimitive<P> for Frame {
         // bounding box of the transformed rectangle (which also handles
         // mirrored transforms, unlike `transform_rectangle`).
         let bounds = self.transforms.current.bounding_box(bounds);
-        let clip_bounds = self.clip_bounds;
+
+        // Nothing to draw if the primitive is clipped away entirely.
+        let Some(instance) = primitive::Instance::new(bounds, primitive).clipped(self.clip_bounds)
+        else {
+            return;
+        };
 
         self.begin(Kind::Primitive);
 
-        self.sections
-            .current_mut()
-            .primitives
-            .push(primitive::Instance::new(bounds, primitive).clipped(clip_bounds));
+        self.sections.current_mut().primitives.push(instance);
     }
 }
 
@@ -1200,5 +1202,65 @@ mod tests {
         assert!((bounds.y - 50.0).abs() < 1e-3, "{bounds:?}");
         assert!((bounds.width - 10.0).abs() < 1e-3, "{bounds:?}");
         assert!((bounds.height - 20.0).abs() < 1e-3, "{bounds:?}");
+    }
+
+    #[test]
+    fn primitive_outside_the_frame_is_not_drawn() {
+        let mut frame = Frame::new(Rectangle::with_size(Size::new(50.0, 50.0)));
+
+        DrawPrimitive::draw_primitive(
+            &mut frame,
+            Rectangle::new(Point::new(200.0, 200.0), Size::new(40.0, 40.0)),
+            Green,
+        );
+
+        let Geometry::Live { sections } = frame.into_geometry() else {
+            unreachable!("a new frame is live");
+        };
+
+        assert!(sections.iter().all(|s| s.primitives.is_empty()));
+    }
+
+    #[test]
+    fn primitive_clip_is_inside_its_bounds() {
+        let mut frame = Frame::new(Rectangle::with_size(Size::new(50.0, 50.0)));
+
+        DrawPrimitive::draw_primitive(
+            &mut frame,
+            Rectangle::new(Point::new(30.0, 30.0), Size::new(60.0, 60.0)),
+            Green,
+        );
+
+        let Geometry::Live { sections } = frame.into_geometry() else {
+            unreachable!("a new frame is live");
+        };
+
+        let instance = &sections[0].primitives[0];
+
+        assert_eq!(
+            instance.clip_bounds,
+            Rectangle::new(Point::new(30.0, 30.0), Size::new(20.0, 20.0))
+        );
+        assert_eq!(instance.bounds.width, 60.0);
+    }
+
+    #[test]
+    fn primitive_far_larger_than_the_device_limits_does_not_panic() {
+        let geometry = primitive_frame(Size::new(100.0, 100.0), |frame| {
+            DrawPrimitive::draw_primitive(
+                frame,
+                Rectangle::new(
+                    Point::new(-200_000.0, -200_000.0),
+                    Size::new(400_000.0, 400_000.0),
+                ),
+                Green,
+            );
+        });
+
+        let Some(pixel) = render(geometry) else {
+            return skipped();
+        };
+
+        assert_eq!(pixel(50, 50), NONE, "skipped, not stretched or crashed");
     }
 }

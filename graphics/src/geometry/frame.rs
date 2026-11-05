@@ -119,6 +119,10 @@ where
     /// covers the axis-aligned bounding box of the transformed `bounds`.
     /// Translation, scaling and mirroring are respected.
     ///
+    /// A primitive whose bounds, in physical pixels, are larger than the
+    /// maximum texture dimension of the device (for example after zooming in
+    /// a lot), or too far from the screen, is not drawn.
+    ///
     /// This is only available if the [`Frame`] of the [`Renderer`] knows how
     /// to draw primitives of type `P` (see [`DrawPrimitive`]). Renderers that
     /// cannot draw a primitive (like a software renderer) skip it, so choose

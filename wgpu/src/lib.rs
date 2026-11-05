@@ -520,9 +520,15 @@ impl Renderer {
                     .expect("Read primitive storage");
 
                 let mut need_render = Vec::new();
+                let max_viewport = self.engine.device.limits().max_texture_dimension_2d;
 
                 for instance in &layer.primitives {
                     let bounds = instance.bounds * scale;
+
+                    if !viewport_in_limits(bounds, max_viewport) {
+                        warn_viewport_out_of_limits(bounds, max_viewport);
+                        continue;
+                    }
 
                     if let Some(clip_bounds) = (instance.clip_bounds * scale)
                         .intersection(&physical_bounds)
@@ -1004,5 +1010,59 @@ impl renderer::Headless for Renderer {
             ),
             background_color,
         )
+    }
+}
+
+/// Returns `true` if `wgpu` accepts `bounds` (in physical pixels) as the
+/// viewport of a render pass, given the `max_texture_dimension_2d` limit of
+/// the device. Anything else is a validation error, which panics by default.
+fn viewport_in_limits(bounds: Rectangle, max_dimension: u32) -> bool {
+    let max = max_dimension as f32;
+
+    bounds.x.is_finite()
+        && bounds.y.is_finite()
+        && bounds.width.is_finite()
+        && bounds.height.is_finite()
+        && bounds.width <= max
+        && bounds.height <= max
+        && bounds.x >= -2.0 * max
+        && bounds.y >= -2.0 * max
+        && bounds.x + bounds.width <= 2.0 * max - 1.0
+        && bounds.y + bounds.height <= 2.0 * max - 1.0
+}
+
+/// Warns, once, that a primitive was skipped because its viewport is out of
+/// the limits of the device.
+fn warn_viewport_out_of_limits(bounds: Rectangle, max_dimension: u32) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static WARNED: AtomicBool = AtomicBool::new(false);
+
+    if !WARNED.swap(true, Ordering::Relaxed) {
+        log::warn!(
+            "A custom primitive with bounds {bounds:?} (physical pixels) is not drawn: \
+             its viewport is larger than, or too far from, the screen for a device \
+             with a maximum texture dimension of {max_dimension}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod viewport_tests {
+    use super::*;
+
+    #[test]
+    fn viewport_limits() {
+        let at = |x, y, w, h| {
+            viewport_in_limits(Rectangle::new(Point::new(x, y), Size::new(w, h)), 16384)
+        };
+
+        assert!(at(0.0, 0.0, 800.0, 600.0));
+        assert!(at(-20000.0, 10.0, 800.0, 600.0));
+        assert!(at(0.0, 0.0, 16384.0, 16384.0));
+        assert!(!at(0.0, 0.0, 16385.0, 10.0), "too large");
+        assert!(!at(33000.0, 0.0, 800.0, 600.0), "too far right");
+        assert!(!at(0.0, -33000.0, 800.0, 600.0), "too far up");
+        assert!(!at(f32::NAN, 0.0, 10.0, 10.0), "not finite");
     }
 }
