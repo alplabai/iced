@@ -400,7 +400,11 @@ where
         let state = tree.state.downcast_mut::<State<Renderer>>();
 
         operation.text_input(self.id.as_ref(), layout.bounds(), state);
-        operation.focusable(self.id.as_ref(), layout.bounds(), state);
+
+        // A disabled input is skipped by `focus_next` and `focus_previous`.
+        if self.on_input.is_some() {
+            operation.focusable(self.id.as_ref(), layout.bounds(), state);
+        }
     }
 
     fn update(

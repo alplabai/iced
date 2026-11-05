@@ -138,6 +138,42 @@ fn focusing_a_disabled_input_by_operation_emits_nothing() {
     assert_eq!(simulator.drain().count(), 0);
 }
 
+#[test]
+fn focus_next_skips_a_disabled_input() {
+    let disabled: iced_widget::TextInput<'_, Pair> = text_input("Placeholder", "")
+        .id("input-1")
+        .on_focus(Pair::Focus(1))
+        .on_blur(Pair::Blur(1));
+    let enabled: iced_widget::TextInput<'_, Pair> = text_input("Placeholder", "")
+        .id("input-2")
+        .on_input(|_| Pair::Input)
+        .on_focus(Pair::Focus(2))
+        .on_blur(Pair::Blur(2));
+
+    let mut simulator: Simulator<'_, Pair> =
+        Simulator::new(iced_widget::column![disabled, enabled]);
+
+    for _ in 0..2 {
+        let mut count = operation::focusable::focus_next::<()>();
+        simulator.operate(&mut count);
+
+        if let operation::Outcome::Chain(mut next) = count.finish() {
+            simulator.operate(next.as_mut());
+        }
+
+        let _ = simulator.simulate([Event::Mouse(mouse::Event::CursorLeft)]);
+        let messages = simulator.drain().collect::<Vec<_>>();
+
+        if messages == vec![Pair::Focus(2)] {
+            return;
+        }
+
+        assert!(messages.is_empty(), "{messages:?}");
+    }
+
+    panic!("focus never reached the enabled input");
+}
+
 #[derive(Debug, Clone, PartialEq)]
 enum Pair {
     Input,
