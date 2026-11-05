@@ -62,7 +62,7 @@ Numbers refer to the ranks in `TRIAGE.md`, which has the status of all 20.
 
 - #1, #2: zero-size image and surface guards (wgpu).
 - #8, #9: `keyed::Column` reconciles children by key; `from_vecs` asserts one key per child. Regression tests in `widget/tests/keyed_column.rs`.
-- #6: the system-font index is cached on disk on native targets (`new_with_fonts_and_cache`), so later starts skip parsing every installed font; the scan still runs when the font directories change. Test in `graphics/src/text.rs`.
+- #6: the system-font index can be cached on disk behind the opt-in `font-cache` feature (`iced_graphics`, forwarded by `iced_renderer` and `iced`; off by default, native targets only), in an iced-owned `iced-fonts.cache` next to cosmic-text's default cache, so later starts skip parsing every installed font. Limit of cosmic-text: only directories that held a font file at the last scan are fingerprinted, so a font installed into a directory that held none (for example a new `/usr/share/fonts/truetype/<name>/`) stays invisible until the cache file is deleted. Test in `graphics/src/text.rs` (`cargo test -p iced_graphics --features font-cache`).
 - #12: `window::Direction::at`/`at_with_corner` hit-testing and `Direction::interaction()` / `From<Direction> for mouse::Interaction` (core).
 - #15: pending events, including the final `Closed`, are flushed to subscriptions before exit (winit).
 - #16: pane_grid title bar padded width sign bug.

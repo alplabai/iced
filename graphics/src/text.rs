@@ -131,21 +131,30 @@ fn bundled_fonts() -> impl IntoIterator<Item = cosmic_text::fontdb::Source> {
 /// Creates the raw [`cosmic_text::FontSystem`] with the bundled fonts and the
 /// installed system fonts.
 ///
-/// Scanning and parsing every installed font on each start is slow, so on
-/// native targets the parsed index is kept in a cache file that is reused as
-/// long as the font directories are unchanged.
-#[cfg(not(target_arch = "wasm32"))]
+/// With the `font-cache` feature on native targets, the parsed font index is
+/// kept in an iced-owned cache file (`iced-fonts.cache` next to cosmic-text's
+/// default cache) and reused while the cached font files are unchanged. The
+/// cache only fingerprints the directories that held a font file at the last
+/// scan, so a font installed into a directory that held none (for example a
+/// new `/usr/share/fonts/truetype/<name>/`) stays invisible until the cache
+/// file is deleted. This is a limit of cosmic-text, which is why the feature
+/// is off by default. Without the feature, or when no cache directory is
+/// available, every start scans the installed fonts.
+#[cfg(all(feature = "font-cache", not(target_arch = "wasm32")))]
 fn new_raw_font_system() -> cosmic_text::FontSystem {
-    cosmic_text::FontSystem::new_with_fonts_and_cache(bundled_fonts())
+    match cosmic_text::FontSystem::default_cache_path() {
+        Some(path) => new_raw_font_system_with_cache(path.with_file_name("iced-fonts.cache")),
+        None => cosmic_text::FontSystem::new_with_fonts(bundled_fonts()),
+    }
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(not(all(feature = "font-cache", not(target_arch = "wasm32"))))]
 fn new_raw_font_system() -> cosmic_text::FontSystem {
     cosmic_text::FontSystem::new_with_fonts(bundled_fonts())
 }
 
 /// Like [`new_raw_font_system`], but keeps the font index cache at `path`.
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(all(feature = "font-cache", not(target_arch = "wasm32")))]
 fn new_raw_font_system_with_cache(path: std::path::PathBuf) -> cosmic_text::FontSystem {
     cosmic_text::FontSystem::new_with_fonts_and_cache_path(bundled_fonts(), path)
 }
@@ -505,7 +514,7 @@ pub trait Renderer {
     fn fill_raw(&mut self, raw: Raw);
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(all(test, feature = "font-cache", not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
 
@@ -521,8 +530,19 @@ mod tests {
 
         let first = new_raw_font_system_with_cache(path.clone());
         assert!(path.is_file(), "the first start must write the cache");
+        let bytes = std::fs::read(&path).unwrap();
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+
+        // Make a rewrite observable even on coarse filesystem timestamps.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
 
         let second = new_raw_font_system_with_cache(path.clone());
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().modified().unwrap(),
+            modified,
+            "the second start must reuse the cache, not rewrite it"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
         assert_eq!(family_count(&first), family_count(&second));
 
         for raw in [&first, &second] {
