@@ -57,8 +57,10 @@ pub trait Primitive: Debug + MaybeSend + MaybeSync + 'static {
     /// prepared for both a number of frames and a span of time (see
     /// [`Storage::trim`]), so keys can be derived from short-lived data. The
     /// frame count is shared by every window and screenshot that use the same
-    /// engine, which is why the time limit exists: a static window does not
-    /// lose its pipelines because another window keeps redrawing.
+    /// engine, which is why the time limit exists: a static window keeps its
+    /// keyed pipelines for at least [`Storage::trim`]'s idle time (10
+    /// seconds) while another window keeps redrawing. After that they are
+    /// dropped and recreated with [`Pipeline::new_keyed`] on its next redraw.
     fn pipeline_key(&self) -> u64 {
         DEFAULT_KEY
     }
@@ -333,7 +335,9 @@ impl Storage {
     /// A [`Storage`] is shared by all the windows of an engine and trimmed on
     /// every render, screenshots included, so the frame count advances with
     /// the renders of all of them. The time limit keeps a window that is
-    /// static (and so not redrawing) from losing its pipelines.
+    /// static (and so not redrawing) from losing its pipelines for at least
+    /// 10 seconds; after that they are dropped and recreated on its next
+    /// redraw.
     ///
     /// Pipelines stored under the default key are never dropped.
     pub fn trim(&mut self) {
@@ -469,6 +473,16 @@ mod tests {
 
         assert!(storage.has_keyed::<Marker>(1));
         assert_eq!(drops.load(Ordering::SeqCst), 0);
+
+        // The protection is bounded: past the idle time the pipeline goes.
+        storage.trim_idle(
+            MAX_IDLE_FRAMES,
+            MAX_IDLE_TIME,
+            Instant::now() + MAX_IDLE_TIME + Duration::from_secs(1),
+        );
+
+        assert!(!storage.has_keyed::<Marker>(1));
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
     }
 
     #[test]
@@ -566,19 +580,21 @@ mod tests {
         }
     }
 
+    /// Needs a wgpu adapter (a GPU, or lavapipe/llvmpipe on Linux). It is
+    /// ignored by default so a runner without one does not report a pass
+    /// for a test that never ran; run it with `--ignored`.
     #[test]
+    #[ignore = "needs a wgpu adapter; run with --ignored on a machine with a GPU or lavapipe"]
     fn primitives_with_different_keys_get_their_own_pipeline() {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
 
-        let Ok(adapter) = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::LowPower,
             force_fallback_adapter: false,
             compatible_surface: None,
             apply_limit_buckets: false,
-        })) else {
-            eprintln!("no adapter available; skipping");
-            return;
-        };
+        }))
+        .expect("no wgpu adapter available");
 
         let (device, queue) =
             block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).expect("device");
