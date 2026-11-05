@@ -392,10 +392,13 @@ fn to_align(alignment: Alignment) -> Option<cosmic_text::Align> {
 }
 
 /// Converts some [`Shaping`] strategy to a [`cosmic_text::Shaping`] strategy.
-pub fn to_shaping(shaping: Shaping, text: &str) -> cosmic_text::Shaping {
+///
+/// [`Shaping::Auto`] is promoted to advanced shaping when the [`Font`] requests
+/// OpenType features, since basic shaping ignores them.
+pub fn to_shaping(shaping: Shaping, text: &str, font: Font) -> cosmic_text::Shaping {
     match shaping {
         Shaping::Auto => {
-            if text.is_ascii() {
+            if text.is_ascii() && font.features.is_empty() {
                 cosmic_text::Shaping::Basic
             } else {
                 cosmic_text::Shaping::Advanced

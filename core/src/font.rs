@@ -77,6 +77,9 @@ bitflags! {
     ///
     /// A feature only has an effect if the font face supports it, and only
     /// when text is shaped with [`Shaping::Advanced`](crate::text::Shaping::Advanced).
+    /// [`Shaping::Auto`](crate::text::Shaping::Auto) is promoted to advanced
+    /// shaping for a font that requests features, even for ASCII text; an
+    /// explicit [`Shaping::Basic`](crate::text::Shaping::Basic) ignores them.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
     pub struct Features: u8 {
         /// Tabular figures (`tnum`): all digits have the same advance.

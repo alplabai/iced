@@ -54,7 +54,7 @@ impl Cache {
             buffer.set_text(
                 key.content,
                 &text::to_attributes(key.font),
-                text::to_shaping(key.shaping, key.content),
+                text::to_shaping(key.shaping, key.content, key.font),
                 None,
             );
             buffer.shape_until_scroll(font_system, false);

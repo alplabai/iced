@@ -107,7 +107,7 @@ impl core::text::Paragraph for Paragraph {
         buffer.set_text(
             text.content,
             &text::to_attributes(text.font),
-            text::to_shaping(text.shaping, text.content),
+            text::to_shaping(text.shaping, text.content, text.font),
             None,
         );
         buffer.shape_until_scroll(font_system.raw(), false);
@@ -771,7 +771,7 @@ mod tests {
     }
 
     #[cfg(feature = "fira-sans")]
-    fn min_width(content: &str, font: Font) -> f32 {
+    fn shaped(content: &str, font: Font, shaping: Shaping) -> Paragraph {
         let text = Text {
             content,
             bounds: Size::new(1000.0, f32::INFINITY),
@@ -780,13 +780,27 @@ mod tests {
             font,
             align_x: Alignment::Default,
             align_y: alignment::Vertical::Top,
-            shaping: Shaping::Advanced,
+            shaping,
             wrapping: Wrapping::default(),
             ellipsis: Ellipsis::default(),
             hint_factor: None,
         };
 
-        Paragraph::with_text(text).min_width()
+        Paragraph::with_text(text)
+    }
+
+    #[cfg(feature = "fira-sans")]
+    fn min_width(content: &str, font: Font, shaping: Shaping) -> f32 {
+        shaped(content, font, shaping).min_width()
+    }
+
+    #[cfg(feature = "fira-sans")]
+    fn glyph_count(paragraph: &Paragraph) -> usize {
+        paragraph
+            .buffer()
+            .layout_runs()
+            .map(|run| run.glyphs.len())
+            .sum()
     }
 
     /// Fira Sans has proportional digits by default and tabular ones
@@ -801,14 +815,36 @@ mod tests {
 
         let (narrow, wide) = ("1111", "0000");
 
-        assert!(
-            (min_width(narrow, fira) - min_width(wide, fira)).abs() > 1e-2,
-            "digits should be proportional by default"
-        );
+        for shaping in [Shaping::Advanced, Shaping::Auto] {
+            assert!(
+                (min_width(narrow, fira, shaping) - min_width(wide, fira, shaping)).abs() > 1e-2,
+                "digits should be proportional by default ({shaping:?})"
+            );
 
-        assert!(
-            (min_width(narrow, tabular) - min_width(wide, tabular)).abs() < 1e-2,
-            "digits should share an advance with `tnum`"
+            assert!(
+                (min_width(narrow, tabular, shaping) - min_width(wide, tabular, shaping)).abs()
+                    < 1e-2,
+                "digits should share an advance with `tnum` ({shaping:?})"
+            );
+        }
+    }
+
+    /// Fira Sans has an `fi` ligature that `LIGA_OFF` splits.
+    #[cfg(feature = "fira-sans")]
+    #[test]
+    fn liga_off_splits_the_fi_ligature() {
+        use crate::core::font::Features;
+
+        let fira = Font::new("Fira Sans");
+
+        let count = |font| glyph_count(&shaped("fi", font, Shaping::Advanced));
+
+        assert_eq!(count(fira), 1, "`fi` should ligate by default");
+
+        assert_eq!(
+            count(fira.features(Features::LIGA_OFF)),
+            2,
+            "`LIGA_OFF` should keep `f` and `i` apart"
         );
     }
 }
