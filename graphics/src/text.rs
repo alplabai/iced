@@ -137,8 +137,16 @@ fn bundled_fonts() -> impl IntoIterator<Item = cosmic_text::fontdb::Source> {
 /// cache only fingerprints the directories that held a font file at the last
 /// scan, so a font installed into a directory that held none (for example a
 /// new `/usr/share/fonts/truetype/<name>/`) stays invisible until the cache
-/// file is deleted. This is a limit of cosmic-text, which is why the feature
-/// is off by default. Without the feature, or when no cache directory is
+/// file is deleted. The cache is also never invalidated when the first scan
+/// found no file-backed fonts (it is then written empty and accepted on every
+/// later start), nor when the fontconfig configuration changes (the
+/// `FONTCONFIG_FILE` or `fonts.conf` directory list is not fingerprinted, so
+/// iced apps run with different configurations overwrite each other's face
+/// set). On Linux, a cache hit also skips fontconfig's `<alias>` pass, so
+/// `Family::Cursive` and `Family::Fantasy` can resolve to fontdb's defaults
+/// (`Comic Sans MS`, `Impact`) on warm starts instead of the configured faces.
+/// These are limits of cosmic-text, which is why the feature is off by
+/// default. Without the feature, or when no cache directory is
 /// available, every start scans the installed fonts.
 #[cfg(all(feature = "font-cache", not(target_arch = "wasm32")))]
 fn new_raw_font_system() -> cosmic_text::FontSystem {
