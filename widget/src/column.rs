@@ -263,6 +263,8 @@ where
         self.children
             .iter()
             .zip(layout.iter(&tree.children))
+            // Children outside of the viewport cannot be interacted with
+            .filter(|(_, (layout, _))| layout.bounds().intersects(viewport))
             .map(|(child, (layout, tree))| {
                 child.mouse_interaction(tree, layout, cursor, viewport, renderer)
             })
