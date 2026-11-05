@@ -219,6 +219,7 @@ log = "0.4"
 lyon = "1.0"
 lyon_path = "1.0"
 mundy = { version = "0.2", default-features = false }
+muda = { version = "0.20", default-features = false }
 nom = "8"
 num-traits = "0.2"
 png = "0.18"
@@ -277,3 +278,7 @@ useless_conversion = "deny"
 
 [workspace.lints.rustdoc]
 broken_intra_doc_links = "forbid"
+
+# shortcut: local winit fork checkout for #37 until alplabai/winit is published; replace with the git rev before merging.
+[patch."https://github.com/iced-rs/winit.git"]
+winit = { path = "../winit-alplab" }

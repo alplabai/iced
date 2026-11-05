@@ -15,6 +15,9 @@ pub enum Action {
 
     /// Notify to the runtime that the system theme has changed.
     NotifyTheme(theme::Mode),
+
+    /// Cancel a pending quit request.
+    CancelQuit,
 }
 
 /// Contains information about the system (e.g. system name, processor, memory, graphics adapter).
@@ -69,4 +72,34 @@ pub fn theme_changes() -> Subscription<theme::Mode> {
 
         Some(mode)
     })
+}
+
+/// Subscribes to requests to quit the application.
+///
+/// On macOS a quit request is Command+Q, Dock ▸ Quit, logout or
+/// [`Predefined::Quit`](crate::core::menu::Predefined::Quit). It only reaches
+/// the application when `Settings::exit_on_quit_request` is `false`; the
+/// application must then answer every request, with [`exit`](crate::exit) to
+/// quit or [`cancel_quit`] to stay. While it has not answered, macOS waits;
+/// at logout it only waits a limited time before it reports that the
+/// application is blocking logout.
+///
+/// Other platforms have no application-wide quit request; there, closing
+/// windows goes through `window::close_requests`.
+pub fn quit_requests() -> Subscription<()> {
+    #[derive(Hash)]
+    struct QuitRequests;
+
+    subscription::filter_map(QuitRequests, |event| match event {
+        subscription::Event::PlatformSpecific(subscription::PlatformSpecific::MacOS(
+            subscription::MacOS::QuitRequested,
+        )) => Some(()),
+        _ => None,
+    })
+}
+
+/// Cancels a pending quit request (see [`quit_requests`]); the application
+/// keeps running. Does nothing when no request is pending.
+pub fn cancel_quit<T>() -> Task<T> {
+    task::effect(crate::Action::System(Action::CancelQuit))
 }

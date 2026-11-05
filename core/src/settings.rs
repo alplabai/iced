@@ -66,6 +66,29 @@ pub struct Settings {
     ///
     /// By default, it is enabled.
     pub vsync: bool,
+
+    /// Whether a request to quit the application (on macOS: Command+Q,
+    /// Dock ▸ Quit, logout, [`menu::Predefined::Quit`](crate::menu::Predefined::Quit))
+    /// quits it at once.
+    ///
+    /// When `false`, the request reaches the application through
+    /// `system::quit_requests`, which must answer it with `exit` (quit) or
+    /// `system::cancel_quit` (stay). Until it answers, the system waits; at
+    /// logout macOS only waits a limited time before it reports that the
+    /// application is blocking logout.
+    ///
+    /// Only has an effect on macOS. By default, it is enabled.
+    pub exit_on_quit_request: bool,
+
+    /// Whether the windowing system installs its default menu bar.
+    ///
+    /// Turn it off when the application installs its own native menu bar
+    /// without using a [`Menu`](crate::menu::Menu). A program that provides a
+    /// [`Menu`](crate::menu::Menu) does not need to: its menu replaces the
+    /// default one once the application has launched.
+    ///
+    /// Only has an effect on macOS. By default, it is enabled.
+    pub default_menu: bool,
 }
 
 impl Default for Settings {
@@ -83,6 +106,8 @@ impl Default for Settings {
             power_preference: backend::PowerPreference::None,
             antialiasing: true,
             vsync: true,
+            exit_on_quit_request: true,
+            default_menu: true,
         }
     }
 }

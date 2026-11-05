@@ -2,6 +2,7 @@
 //!
 //! This module is only available when the `hot` feature is enabled.
 use crate::core::Widget;
+use crate::core::menu;
 use crate::program::Program;
 use crate::theme;
 use crate::window;
@@ -73,6 +74,11 @@ impl<P: Program> Program for Hot<P> {
     #[inline]
     fn subscription(&self, state: &Self::State) -> Subscription<Self::Message> {
         debug::hot(|| self.program.subscription(state))
+    }
+
+    #[inline]
+    fn menu(&self, state: &Self::State) -> Option<menu::Menu<Self::Message>> {
+        self.program.menu(state)
     }
 
     #[inline]

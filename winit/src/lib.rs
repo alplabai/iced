@@ -33,6 +33,7 @@ pub mod clipboard;
 pub mod conversion;
 
 mod error;
+mod menu;
 mod proxy;
 mod window;
 
@@ -82,9 +83,18 @@ where
     let settings = program.settings();
     let window_settings = program.window();
 
-    let event_loop = EventLoop::with_user_event()
-        .build()
-        .expect("Create event loop");
+    let mut event_loop = EventLoop::with_user_event();
+
+    #[cfg(target_os = "macos")]
+    {
+        use winit::platform::macos::EventLoopBuilderExtMacOS;
+
+        let _ = event_loop
+            .with_default_menu(settings.default_menu)
+            .with_terminate_requests(!settings.exit_on_quit_request);
+    }
+
+    let event_loop = event_loop.build().expect("Create event loop");
 
     let backend_settings = backend::Settings::from(&settings);
     let renderer_settings = renderer::Settings::from(&settings);
@@ -157,6 +167,8 @@ where
         receiver: mpsc::UnboundedReceiver<Control>,
         error: Option<Error>,
         system_theme: Option<oneshot::Sender<theme::Mode>>,
+        /// Whether macOS waits for an answer to a quit request.
+        is_quit_pending: bool,
 
         #[cfg(target_arch = "wasm32")]
         canvas: Option<web_sys::HtmlCanvasElement>,
@@ -170,6 +182,7 @@ where
         receiver: control_receiver,
         error: None,
         system_theme: Some(system_theme_sender),
+        is_quit_pending: false,
 
         #[cfg(target_arch = "wasm32")]
         canvas: None,
@@ -252,6 +265,17 @@ where
             );
         }
 
+        fn terminate_requested(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+            self.is_quit_pending = true;
+
+            self.process_event(
+                event_loop,
+                Event::EventLoopAwakened(winit::event::Event::PlatformSpecific(
+                    winit::event::PlatformSpecific::MacOS(winit::event::MacOS::TerminateRequested),
+                )),
+            );
+        }
+
         fn about_to_wait(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
             self.process_event(
                 event_loop,
@@ -261,6 +285,23 @@ where
     }
 
     impl<Message> Runner<Message> {
+        fn reply_to_quit(
+            &mut self,
+            _event_loop: &winit::event_loop::ActiveEventLoop,
+            should_quit: bool,
+        ) {
+            self.is_quit_pending = false;
+
+            #[cfg(target_os = "macos")]
+            {
+                use winit::platform::macos::ActiveEventLoopExtMacOS;
+                _event_loop.reply_to_terminate_request(should_quit);
+            }
+
+            #[cfg(not(target_os = "macos"))]
+            let _ = should_quit;
+        }
+
         fn process_event(
             &mut self,
             event_loop: &winit::event_loop::ActiveEventLoop,
@@ -407,8 +448,20 @@ where
                             }
                             Control::Exit => {
                                 self.process_event(event_loop, Event::Exit);
-                                event_loop.exit();
+
+                                if self.is_quit_pending {
+                                    // macOS is waiting to terminate; let it, so a logout
+                                    // goes on instead of being cancelled.
+                                    self.reply_to_quit(event_loop, true);
+                                } else {
+                                    event_loop.exit();
+                                }
                                 break;
+                            }
+                            Control::CancelQuit => {
+                                if self.is_quit_pending {
+                                    self.reply_to_quit(event_loop, false);
+                                }
                             }
                             Control::Crash(error) => {
                                 self.error = Some(error);
@@ -488,6 +541,7 @@ enum Control {
     },
     SetAutomaticWindowTabbing(bool),
     ListMonitors(oneshot::Sender<MonitorList>),
+    CancelQuit,
 }
 
 async fn run_instance<P>(
@@ -519,6 +573,8 @@ async fn run_instance<P>(
 
     let mut ui_caches = FxHashMap::default();
     let mut user_interfaces = ManuallyDrop::new(FxHashMap::default());
+    let mut native_menu = menu::Native::new();
+    let mut is_menu_synced = false;
     let mut clipboard = Clipboard::new();
 
     #[cfg(all(feature = "linux-theme-detection", target_os = "linux"))]
@@ -566,6 +622,14 @@ async fn run_instance<P>(
         let Some(event) = event else {
             break;
         };
+
+        // Events only arrive once the application has launched, after the
+        // windowing system installs its default menu; installing before that
+        // would be overwritten.
+        if !is_menu_synced {
+            native_menu.sync(program.menu(), &proxy);
+            is_menu_synced = true;
+        }
 
         match event {
             Event::WindowCreated {
@@ -741,6 +805,15 @@ async fn run_instance<P>(
                             ),
                         ));
                     }
+                    event::Event::PlatformSpecific(event::PlatformSpecific::MacOS(
+                        event::MacOS::TerminateRequested,
+                    )) => {
+                        runtime.broadcast(subscription::Event::PlatformSpecific(
+                            subscription::PlatformSpecific::MacOS(
+                                subscription::MacOS::QuitRequested,
+                            ),
+                        ));
+                    }
                     event::Event::UserEvent(action) => {
                         run_action(
                             action,
@@ -852,7 +925,13 @@ async fn run_instance<P>(
                                         .map(|(id, interface)| (id, interface.into_cache()))
                                         .collect();
 
-                                let actions = update(&mut program, &mut runtime, &mut messages);
+                                let actions = update(
+                                    &mut program,
+                                    &mut runtime,
+                                    &mut messages,
+                                    &mut native_menu,
+                                    &proxy,
+                                );
 
                                 user_interfaces = ManuallyDrop::new(build_user_interfaces(
                                     &program,
@@ -1193,7 +1272,13 @@ async fn run_instance<P>(
                                     .map(|(id, ui)| (id, ui.into_cache()))
                                     .collect();
 
-                            let actions = update(&mut program, &mut runtime, &mut messages);
+                            let actions = update(
+                                &mut program,
+                                &mut runtime,
+                                &mut messages,
+                                &mut native_menu,
+                                &proxy,
+                            );
 
                             user_interfaces = ManuallyDrop::new(build_user_interfaces(
                                 &program,
@@ -1271,6 +1356,8 @@ fn update<P: Program, E: Executor>(
     program: &mut program::Instance<P>,
     runtime: &mut Runtime<E, Proxy<P::Message>, Action<P::Message>>,
     messages: &mut shell::Bus<P::Message>,
+    native_menu: &mut menu::Native<P::Message>,
+    proxy: &Proxy<P::Message>,
 ) -> Vec<Action<P::Message>>
 where
     P::Theme: theme::Base,
@@ -1318,6 +1405,8 @@ where
     let recipes = subscription::into_recipes(subscription.map(Action::Output));
 
     runtime.track(recipes);
+
+    native_menu.sync(program.menu(), proxy);
 
     actions
 }
@@ -1694,6 +1783,9 @@ fn run_action<'a, P, C>(
             }
             system::Action::GetTheme(channel) => {
                 let _ = channel.send(*system_theme);
+            }
+            system::Action::CancelQuit => {
+                let _ = control_sender.start_send(Control::CancelQuit);
             }
             system::Action::NotifyTheme(mode) => {
                 if mode != *system_theme {
