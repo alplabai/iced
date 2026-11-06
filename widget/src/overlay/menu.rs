@@ -159,6 +159,9 @@ where
 pub struct State {
     tree: Tree,
     reveal: Option<usize>,
+    /// The offset the last reveal scrolled to, until a redraw updates the
+    /// translation the scrollable reports.
+    scrolled: Option<f32>,
 }
 
 impl State {
@@ -167,6 +170,7 @@ impl State {
         Self {
             tree: Tree::empty(),
             reveal: None,
+            scrolled: None,
         }
     }
 
@@ -190,6 +194,7 @@ where
     window: Size,
     layout: Layout,
     tree: &'a mut Tree,
+    scrolled: &'a mut Option<f32>,
     list: Scrollable<'a, Message, List<'a, 'b, T, Message, Theme>, Theme>,
     class: &'a <Theme as Catalog>::Class<'b>,
 }
@@ -276,22 +281,28 @@ where
             let option_height = f32::from(line_height.to_absolute(text_size)) + padding.y();
             let top = option_height * index as f32;
 
+            let mut reveal = Reveal {
+                top,
+                bottom: top + option_height,
+                scrolled: state.scrolled,
+            };
+
             list.operate(
                 &mut state.tree,
                 layout,
                 &layout.bounds(),
                 renderer,
-                &mut Reveal {
-                    top,
-                    bottom: top + option_height,
-                },
+                &mut reveal,
             );
+
+            state.scrolled = reveal.scrolled;
         }
 
         Self {
             layout,
             window,
             tree: &mut state.tree,
+            scrolled: &mut state.scrolled,
             list,
             class,
         }
@@ -321,6 +332,11 @@ where
             shell,
             &self.layout.bounds(),
         );
+
+        // The scrollable has now refreshed its translation
+        if let Event::Window(window::Event::RedrawRequested(_)) = event {
+            *self.scrolled = None;
+        }
     }
 
     fn mouse_interaction(&self, cursor: mouse::Cursor, renderer: &Renderer) -> mouse::Interaction {
@@ -389,6 +405,9 @@ where
 struct Reveal {
     top: f32,
     bottom: f32,
+    /// The offset an earlier reveal in this frame scrolled to; the scrollable
+    /// still reports the translation of the last redraw.
+    scrolled: Option<f32>,
 }
 
 impl Reveal {
@@ -414,7 +433,9 @@ impl crate::core::widget::Operation for Reveal {
         translation: Vector,
         state: &mut dyn crate::core::widget::operation::Scrollable,
     ) {
-        if let Some(y) = self.offset(translation.y, bounds.height) {
+        let current = self.scrolled.unwrap_or(translation.y);
+
+        if let Some(y) = self.offset(current, bounds.height) {
             state.scroll_to(
                 crate::core::widget::operation::scrollable::AbsoluteOffset {
                     x: None,
@@ -424,6 +445,8 @@ impl crate::core::widget::Operation for Reveal {
                 bounds,
                 content,
             );
+
+            self.scrolled = Some(y);
         }
     }
 }
@@ -783,7 +806,12 @@ mod tests {
     use super::Reveal;
 
     fn offset(top: f32, bottom: f32, scroll: f32) -> Option<f32> {
-        Reveal { top, bottom }.offset(scroll, 100.0)
+        Reveal {
+            top,
+            bottom,
+            scrolled: None,
+        }
+        .offset(scroll, 100.0)
     }
 
     #[test]

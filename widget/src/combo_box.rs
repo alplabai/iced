@@ -828,7 +828,9 @@ mod tests {
 
     #[test]
     fn non_ascii_symbols_are_matched() {
-        let options = ["10kΩ", "10k", "4.7µF", "Ärger"];
+        // "4.7F" and "Rger" are what the ASCII-only matcher left of
+        // "4.7µF" and "Ärger", so it matched them as well
+        let options = ["10kΩ", "10k", "4.7µF", "4.7F", "Ärger", "Rger"];
 
         assert_eq!(matches(&options, "kΩ"), ["10kΩ"]);
         assert_eq!(matches(&options, "µf"), ["4.7µF"]);
