@@ -158,6 +158,7 @@ where
 #[derive(Debug)]
 pub struct State {
     tree: Tree,
+    reveal: Option<usize>,
 }
 
 impl State {
@@ -165,7 +166,14 @@ impl State {
     pub fn new() -> Self {
         Self {
             tree: Tree::empty(),
+            reveal: None,
         }
+    }
+
+    /// Scrolls the option at `index` into view the next time the [`Menu`]
+    /// is shown, e.g. after moving the hovered option with the keyboard.
+    pub fn reveal(&mut self, index: usize) {
+        self.reveal = Some(index);
     }
 }
 
@@ -262,6 +270,24 @@ where
             position - Vector::new(0.0, state.tree.size.height)
         });
 
+        if let Some(index) = state.reveal.take() {
+            let text_size = text_size.unwrap_or_else(|| renderer.text_size());
+            let line_height = line_height.unwrap_or_else(|| renderer.line_height());
+            let option_height = f32::from(line_height.to_absolute(text_size)) + padding.y();
+            let top = option_height * index as f32;
+
+            list.operate(
+                &mut state.tree,
+                layout,
+                &layout.bounds(),
+                renderer,
+                &mut Reveal {
+                    top,
+                    bottom: top + option_height,
+                },
+            );
+        }
+
         Self {
             layout,
             window,
@@ -355,6 +381,50 @@ where
                 &bounds,
             );
         });
+    }
+}
+
+/// Scrolls the menu by the least amount that shows the span `top..bottom`.
+// shortcut: local copy of the `reveal_vertical` math in alplabai/iced#65; switch to it once that lands.
+struct Reveal {
+    top: f32,
+    bottom: f32,
+}
+
+impl Reveal {
+    fn offset(&self, offset: f32, viewport: f32) -> Option<f32> {
+        if self.top < offset {
+            Some(self.top)
+        } else if self.bottom > offset + viewport {
+            Some(self.bottom - viewport)
+        } else {
+            None
+        }
+    }
+}
+
+impl crate::core::widget::Operation for Reveal {
+    fn traverse(&mut self, _operate: &mut dyn FnMut(&mut dyn crate::core::widget::Operation<()>)) {}
+
+    fn scrollable(
+        &mut self,
+        _id: Option<&crate::core::widget::Id>,
+        bounds: Rectangle,
+        content: Size,
+        translation: Vector,
+        state: &mut dyn crate::core::widget::operation::Scrollable,
+    ) {
+        if let Some(y) = self.offset(translation.y, bounds.height) {
+            state.scroll_to(
+                crate::core::widget::operation::scrollable::AbsoluteOffset {
+                    x: None,
+                    y: Some(y),
+                },
+                crate::core::widget::operation::Animation::Instant,
+                bounds,
+                content,
+            );
+        }
     }
 }
 
@@ -705,5 +775,35 @@ pub fn default(theme: &Theme) -> Style {
         selected_text_color: palette.primary.strong.text,
         selected_background: palette.primary.strong.color.into(),
         shadow: Shadow::default(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Reveal;
+
+    fn offset(top: f32, bottom: f32, scroll: f32) -> Option<f32> {
+        Reveal { top, bottom }.offset(scroll, 100.0)
+    }
+
+    #[test]
+    fn visible_option_does_not_scroll() {
+        assert_eq!(offset(20.0, 40.0, 0.0), None);
+        assert_eq!(offset(100.0, 120.0, 20.0), None);
+    }
+
+    #[test]
+    fn option_below_scrolls_down_to_its_bottom() {
+        assert_eq!(offset(100.0, 120.0, 0.0), Some(20.0));
+    }
+
+    #[test]
+    fn option_above_scrolls_up_to_its_top() {
+        assert_eq!(offset(20.0, 40.0, 60.0), Some(20.0));
+    }
+
+    #[test]
+    fn wrap_to_first_option_scrolls_to_top() {
+        assert_eq!(offset(0.0, 20.0, 900.0), Some(0.0));
     }
 }
