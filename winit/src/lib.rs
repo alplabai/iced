@@ -1533,15 +1533,18 @@ fn run_action<'a, P, C>(
             }
             window::Action::Resize(id, size) => {
                 if let Some(window) = window_manager.get_mut(id) {
-                    // Some backends (Wayland, X11) resize at once and send no `Resized`;
-                    // inject one so the layout updates in the same frame (upstream #3157).
+                    // Wayland (and iOS/Android) return the size at once and send no
+                    // `Resized`; inject one so the layout updates in the same frame
+                    // (upstream #3157). They also return the current size when they
+                    // ignore the request, so inject only on a real change.
                     if let Some(size) = window.raw.request_inner_size(
                         winit::dpi::LogicalSize {
                             width: size.width,
                             height: size.height,
                         }
                         .to_physical::<f32>(f64::from(window.state.scale_factor())),
-                    ) {
+                    ) && Size::new(size.width, size.height) != window.state.physical_size()
+                    {
                         let _ = event_sender.unbounded_send(Event::EventLoopAwakened(
                             winit::event::Event::WindowEvent {
                                 window_id: window.raw.id(),
