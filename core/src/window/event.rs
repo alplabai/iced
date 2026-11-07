@@ -51,6 +51,8 @@ pub enum Event {
     ///   window manager.
     /// - **X11:** minimizing may not produce a window event of its own, so
     ///   it is detected through the focus change that usually accompanies it.
+    ///   A fullscreen change made by the window manager or the user, not
+    ///   through iced, is not reported.
     /// - **Wayland:** `minimized` is always `None`, and `maximized` changes
     ///   once the compositor acknowledges it.
     /// - **Windows:** maximize requests are applied asynchronously, so
