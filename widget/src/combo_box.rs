@@ -548,6 +548,8 @@ where
                             index.saturating_sub(1)
                         });
 
+                        internal.menu.reveal(internal.hovered_option());
+
                         if let Some(on_option_hovered) = &mut self.on_option_hovered
                             && let Some(option) = internal
                                 .hovered_option
@@ -571,6 +573,8 @@ where
                                     .min(internal.filtered_options.len().saturating_sub(1))
                             },
                         );
+
+                        internal.menu.reveal(internal.hovered_option());
 
                         if let Some(on_option_hovered) = &mut self.on_option_hovered
                             && let Some(option) = internal
@@ -777,7 +781,7 @@ where
 {
     let query: Vec<String> = query
         .to_lowercase()
-        .split(|c: char| !c.is_ascii_alphanumeric())
+        .split(|c: char| !c.is_alphanumeric())
         .map(String::from)
         .collect();
 
@@ -806,6 +810,31 @@ where
     T: Display,
 {
     let mut matcher = option.to_string();
-    matcher.retain(|c| c.is_ascii_alphanumeric());
+    matcher.retain(char::is_alphanumeric);
     matcher.to_lowercase()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn matches(options: &[&str], query: &str) -> Vec<String> {
+        let matchers = build_matchers(options.iter());
+
+        search(options.iter(), &matchers, query)
+            .map(ToString::to_string)
+            .collect()
+    }
+
+    #[test]
+    fn non_ascii_symbols_are_matched() {
+        // "4.7F" and "Rger" are what the ASCII-only matcher left of
+        // "4.7µF" and "Ärger", so it matched them as well
+        let options = ["10kΩ", "10k", "4.7µF", "4.7F", "Ärger", "Rger"];
+
+        assert_eq!(matches(&options, "kΩ"), ["10kΩ"]);
+        assert_eq!(matches(&options, "µf"), ["4.7µF"]);
+        assert_eq!(matches(&options, "är"), ["Ärger"]);
+        assert_eq!(matches(&options, "10k"), ["10kΩ", "10k"]);
+    }
 }
