@@ -98,7 +98,9 @@ pub struct Settings {
     ///
     /// - Windows: an owner window (`WS_POPUP` with an owner). The window stays
     ///   above its owner and has no taskbar entry.
-    /// - macOS: a child window of the parent.
+    /// - macOS: a child window of the parent. It moves with its parent; while
+    ///   the user drags the child itself it is detached, because AppKit drags
+    ///   attached child windows with a visible lag.
     /// - X11 and Wayland: unsupported. The window opens without a parent and
     ///   a warning is logged once.
     ///

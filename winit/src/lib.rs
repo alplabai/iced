@@ -420,6 +420,11 @@ where
                                     .expect("Create window");
 
                                 #[cfg(target_os = "macos")]
+                                if let Some(parent) = parent.as_deref() {
+                                    conversion::detach_while_dragged(&window, parent);
+                                }
+
+                                #[cfg(target_os = "macos")]
                                 if let Some(position) = position {
                                     window.set_outer_position(position);
                                 }
