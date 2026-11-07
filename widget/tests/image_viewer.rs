@@ -143,3 +143,40 @@ fn escape_is_ignored_after_zooming_in_and_out() {
     simulator.point_at(Point::new(-100.0, -100.0));
     assert_eq!(simulator.simulate([escape()]), [event::Status::Ignored]);
 }
+
+/// `min_scale` within half a step of 1.0 stays reachable: the zoom-out is
+/// clamped to it, not snapped back to 1.0, so the view is not default.
+#[test]
+fn min_scale_near_one_is_reachable() {
+    let mut simulator: Simulator<'_, ()> = Simulator::new(
+        Viewer::new(Handle::from_rgba(100, 100, vec![0; 100 * 100 * 4]))
+            .content_fit(ContentFit::Contain)
+            .min_scale(0.97)
+            .width(10)
+            .height(10),
+    );
+
+    simulator.point_at(Point::new(5.0, 5.0));
+    let _ = simulator.scroll(mouse::ScrollDelta::Lines { x: 0.0, y: -1.0 });
+
+    assert_eq!(simulator.simulate([escape()]), [event::Status::Captured]);
+}
+
+/// Zooming in and out over an image that overflows the viewer at scale 1.0
+/// leaves the pan offset a few ulps off zero; that is still the default view.
+#[test]
+fn escape_is_ignored_after_zooming_in_and_out_off_centre() {
+    let mut simulator: Simulator<'_, ()> = Simulator::new(
+        Viewer::new(Handle::from_rgba(100, 100, vec![0; 100 * 100 * 4]))
+            .content_fit(ContentFit::None)
+            .width(10)
+            .height(10),
+    );
+
+    simulator.point_at(Point::new(8.7, 8.7));
+    let _ = simulator.scroll(mouse::ScrollDelta::Lines { x: 0.0, y: 1.0 });
+    let _ = simulator.scroll(mouse::ScrollDelta::Lines { x: 0.0, y: -1.0 });
+
+    simulator.point_at(Point::new(-100.0, -100.0));
+    assert_eq!(simulator.simulate([escape()]), [event::Status::Ignored]);
+}
