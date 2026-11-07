@@ -240,9 +240,10 @@ where
     }
 
     pub fn remove(&mut self, id: Id) -> Option<Window<P, C>> {
-        self.family.forget(id);
-
+        // Forget the parent link only for a window that existed: a pending owned
+        // window keeps it, so closing its owner later still closes it.
         let window = self.entries.remove(&id)?;
+        self.family.forget(id);
         let _ = self.aliases.remove(&window.raw.id());
 
         Some(window)
