@@ -4,6 +4,7 @@ use crate::core::{Color, Size};
 use crate::core::{mouse, theme, window};
 use crate::graphics::Viewport;
 use crate::program::{self, Program};
+use crate::window::ModeFlags;
 
 use winit::event::{Touch, WindowEvent};
 use winit::window::Window;
@@ -24,6 +25,9 @@ where
     theme_mode: theme::Mode,
     default_theme: P::Theme,
     style: theme::Style,
+    mode_flags: ModeFlags,
+    maximized_hint: bool,
+    mode_dirty: bool,
 }
 
 impl<P: Program> Debug for State<P>
@@ -70,6 +74,8 @@ where
             )
         };
 
+        let maximized_hint = window.is_maximized();
+
         Self {
             title,
             viewport,
@@ -80,7 +86,52 @@ where
             theme_mode,
             default_theme,
             style,
+            mode_flags: ModeFlags::read(window, maximized_hint),
+            maximized_hint,
+            mode_dirty: false,
         }
+    }
+
+    /// Marks the mode flags as possibly changed, so that the next
+    /// [`State::poll_mode_change`] reads them.
+    pub fn mark_mode_dirty(&mut self) {
+        self.mode_dirty = true;
+    }
+
+    /// Whether the mode flags have to be read.
+    pub fn is_mode_dirty(&self) -> bool {
+        self.mode_dirty
+    }
+
+    /// Records the maximized state requested by the application, for the
+    /// windows whose flag cannot be read safely (see [`ModeFlags::read`]).
+    pub fn set_maximized_hint(&mut self, maximized: bool) {
+        self.maximized_hint = maximized;
+        self.mode_dirty = true;
+    }
+
+    /// Reads the maximized state of the `window` once and stores it as the
+    /// hint. Call it before a change that makes the window stop being read
+    /// directly (see [`ModeFlags::reads_maximized`]), so the hint is not stale.
+    pub fn sync_maximized_hint(&mut self, window: &Window) {
+        self.maximized_hint = window.is_maximized();
+        self.mode_dirty = true;
+    }
+
+    /// If the mode flags were marked dirty, reads them and returns a
+    /// [`window::Event::ModeChanged`] if they changed since the last read.
+    pub fn poll_mode_change(&mut self, window: &Window) -> Option<window::Event> {
+        if !std::mem::take(&mut self.mode_dirty) {
+            return None;
+        }
+
+        let current = ModeFlags::read(window, self.maximized_hint);
+
+        if ModeFlags::reads_maximized(window) {
+            self.maximized_hint = current.maximized();
+        }
+
+        self.mode_flags.update(current)
     }
 
     pub fn viewport(&self) -> &Viewport {

@@ -2,7 +2,10 @@
 use crate::core::theme;
 use crate::futures::futures::channel::oneshot;
 use crate::futures::subscription::{self, Subscription};
+use crate::futures::{BoxStream, boxed_stream};
 use crate::task::{self, Task};
+
+use std::sync::atomic;
 
 /// An operation to be performed on the system.
 #[derive(Debug)]
@@ -15,6 +18,9 @@ pub enum Action {
 
     /// Notify to the runtime that the system theme has changed.
     NotifyTheme(theme::Mode),
+
+    /// Cancel a pending quit request.
+    CancelQuit,
 }
 
 /// Contains information about the system (e.g. system name, processor, memory, graphics adapter).
@@ -69,4 +75,107 @@ pub fn theme_changes() -> Subscription<theme::Mode> {
 
         Some(mode)
     })
+}
+
+/// Subscribes to requests to quit the application.
+///
+/// On macOS a quit request is Command+Q, Dock ▸ Quit, logout or
+/// [`Predefined::Quit`](crate::core::menu::Predefined::Quit). It only reaches
+/// the application when `Settings::exit_on_quit_request` is `false`; the
+/// application must then answer every request, with [`exit`](crate::exit) to
+/// quit or [`cancel_quit`] to stay. While it has not answered, macOS waits;
+/// at logout it only waits a limited time before it reports that the
+/// application is blocking logout.
+///
+/// A request that arrives while no [`quit_requests`] subscription is running
+/// is answered at once with "quit", as if `exit_on_quit_request` were `true`,
+/// so a missing or conditional subscription cannot leave a quit unanswered.
+///
+/// Other platforms have no application-wide quit request; there, closing
+/// windows goes through `window::close_requests`.
+pub fn quit_requests() -> Subscription<()> {
+    subscription::from_recipe(QuitRequests)
+}
+
+/// Returns whether a [`quit_requests`] subscription is running.
+///
+/// The shell uses it to answer a quit request nobody would see.
+#[doc(hidden)]
+pub fn has_quit_listener() -> bool {
+    QUIT_LISTENERS.load(atomic::Ordering::SeqCst) > 0
+}
+
+static QUIT_LISTENERS: atomic::AtomicUsize = atomic::AtomicUsize::new(0);
+
+struct QuitRequests;
+
+/// Counts a running [`quit_requests`] stream for as long as it lives.
+struct QuitListener;
+
+impl QuitListener {
+    fn new() -> Self {
+        let _ = QUIT_LISTENERS.fetch_add(1, atomic::Ordering::SeqCst);
+        Self
+    }
+}
+
+impl Drop for QuitListener {
+    fn drop(&mut self) {
+        let _ = QUIT_LISTENERS.fetch_sub(1, atomic::Ordering::SeqCst);
+    }
+}
+
+impl subscription::Recipe for QuitRequests {
+    type Output = ();
+
+    fn hash(&self, state: &mut subscription::Hasher) {
+        use std::hash::Hash;
+
+        std::any::TypeId::of::<Self>().hash(state);
+    }
+
+    fn stream(self: Box<Self>, input: subscription::EventStream) -> BoxStream<()> {
+        use crate::futures::futures::{future, stream::StreamExt};
+
+        // Created here, not in `quit_requests`, so only a stream the runtime
+        // actually runs is counted.
+        let listener = QuitListener::new();
+
+        boxed_stream(input.filter_map(move |event| {
+            let _ = &listener;
+
+            future::ready(match event {
+                subscription::Event::PlatformSpecific(subscription::PlatformSpecific::MacOS(
+                    subscription::MacOS::QuitRequested,
+                )) => Some(()),
+                _ => None,
+            })
+        }))
+    }
+}
+
+/// Cancels a pending quit request (see [`quit_requests`]); the application
+/// keeps running. Does nothing when no request is pending.
+pub fn cancel_quit<T>() -> Task<T> {
+    task::effect(crate::Action::System(Action::CancelQuit))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quit_listener_counts_only_while_alive() {
+        // The counter is process-wide; other tests do not create listeners.
+        let before = QUIT_LISTENERS.load(atomic::Ordering::SeqCst);
+
+        let first = QuitListener::new();
+        let second = QuitListener::new();
+        assert!(has_quit_listener());
+        assert_eq!(QUIT_LISTENERS.load(atomic::Ordering::SeqCst), before + 2);
+
+        drop(first);
+        drop(second);
+        assert_eq!(QUIT_LISTENERS.load(atomic::Ordering::SeqCst), before);
+    }
 }
