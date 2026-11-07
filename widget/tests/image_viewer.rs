@@ -180,3 +180,21 @@ fn escape_is_ignored_after_zooming_in_and_out_off_centre() {
     simulator.point_at(Point::new(-100.0, -100.0));
     assert_eq!(simulator.simulate([escape()]), [event::Status::Ignored]);
 }
+
+/// With a step above 1.0 a zoom-out from 1.0 must still leave 1.0: the snap
+/// window is multiplicative and does not capture the 1/(1+s) step.
+#[test]
+fn large_scale_step_can_zoom_out_below_one() {
+    let mut simulator: Simulator<'_, ()> = Simulator::new(
+        Viewer::new(Handle::from_rgba(100, 100, vec![0; 100 * 100 * 4]))
+            .content_fit(ContentFit::Contain)
+            .scale_step(1.5)
+            .width(10)
+            .height(10),
+    );
+
+    simulator.point_at(Point::new(5.0, 5.0));
+    let _ = simulator.scroll(mouse::ScrollDelta::Lines { x: 0.0, y: -1.0 });
+
+    assert_eq!(simulator.simulate([escape()]), [event::Status::Captured]);
+}

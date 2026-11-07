@@ -12,7 +12,8 @@ use crate::core::{
 use crate::core::{keyboard, mouse};
 
 /// Offsets smaller than this (in pixels) count as no pan.
-const OFFSET_TOLERANCE: f32 = 1e-3;
+// Sub-pixel: invisible, but with headroom over f32 drift far from the centre.
+const OFFSET_TOLERANCE: f32 = 0.5;
 
 /// A frame that displays an image with the ability to zoom in/out and pan.
 pub struct Viewer<Handle> {
@@ -202,10 +203,12 @@ where
                             };
 
                             // Repeated steps in and out leave `scale` a few
-                            // ulps off 1.0; within half a step of 1.0 that
+                            // ulps off 1.0; within half a step (multiplicative,
+                            // so a 1/(1+s) step is never captured) of 1.0 that
                             // can only be drift, so snap back. This runs
                             // before the clamp so min/max stay reachable.
-                            let stepped = if (stepped - 1.0).abs() < self.scale_step / 2.0 {
+                            let half = (1.0 + self.scale_step).sqrt();
+                            let stepped = if stepped > 1.0 / half && stepped < half {
                                 1.0
                             } else {
                                 stepped
