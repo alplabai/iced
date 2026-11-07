@@ -1263,4 +1263,53 @@ mod tests {
 
         assert_eq!(pixel(50, 50), NONE, "skipped, not stretched or crashed");
     }
+
+    /// A [`Green`] that records whether it was prepared.
+    #[derive(Debug)]
+    struct Probe(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+    impl crate::Primitive for Probe {
+        type Pipeline = GreenPipeline;
+
+        fn prepare(
+            &self,
+            _pipeline: &mut GreenPipeline,
+            _device: &wgpu::Device,
+            _queue: &wgpu::Queue,
+            _bounds: &Rectangle,
+            _viewport: &crate::graphics::Viewport,
+        ) {
+            self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+
+        fn draw(&self, pipeline: &GreenPipeline, render_pass: &mut wgpu::RenderPass<'_>) -> bool {
+            crate::Primitive::draw(&Green, pipeline, render_pass)
+        }
+    }
+
+    #[test]
+    fn primitive_far_larger_than_the_device_limits_is_not_prepared() {
+        let prepared = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let probe = Probe(prepared.clone());
+
+        let geometry = primitive_frame(Size::new(100.0, 100.0), move |frame| {
+            DrawPrimitive::draw_primitive(
+                frame,
+                Rectangle::new(
+                    Point::new(-200_000.0, -200_000.0),
+                    Size::new(400_000.0, 400_000.0),
+                ),
+                probe,
+            );
+        });
+
+        if render(geometry).is_none() {
+            return skipped();
+        }
+
+        assert!(
+            !prepared.load(std::sync::atomic::Ordering::Relaxed),
+            "prepare must be skipped for a primitive the render pass skips"
+        );
+    }
 }

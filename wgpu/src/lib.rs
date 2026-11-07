@@ -347,7 +347,17 @@ impl Renderer {
                     .write()
                     .expect("Write primitive storage");
 
+                let scale = Transformation::scale(scale_factor);
+                let max_viewport = self.engine.device.limits().max_texture_dimension_2d;
+
                 for instance in &layer.primitives {
+                    // The render pass skips these, so do not let a primitive
+                    // allocate `bounds`-sized resources it never uses (and that
+                    // fail validation past the device limits).
+                    if !viewport_in_limits(instance.bounds * scale, max_viewport) {
+                        continue;
+                    }
+
                     instance.primitive.prepare(
                         &mut primitive_storage,
                         &self.engine.device,
@@ -525,15 +535,17 @@ impl Renderer {
                 for instance in &layer.primitives {
                     let bounds = instance.bounds * scale;
 
-                    if !viewport_in_limits(bounds, max_viewport) {
-                        warn_viewport_out_of_limits(bounds, max_viewport);
-                        continue;
-                    }
-
                     if let Some(clip_bounds) = (instance.clip_bounds * scale)
                         .intersection(&physical_bounds)
                         .and_then(nudge::snap)
                     {
+                        // Checked only for visible primitives, so the one-time
+                        // warning is not spent on one that is off screen anyway.
+                        if !viewport_in_limits(bounds, max_viewport) {
+                            warn_viewport_out_of_limits(bounds, max_viewport);
+                            continue;
+                        }
+
                         render_pass.set_viewport(
                             bounds.x,
                             bounds.y,
