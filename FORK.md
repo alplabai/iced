@@ -62,6 +62,7 @@ Numbers refer to the ranks in `TRIAGE.md`, which has the status of all 20.
 
 - #1, #2: zero-size image and surface guards (wgpu).
 - #8, #9: `keyed::Column` reconciles children by key; `from_vecs` asserts one key per child. Regression tests in `widget/tests/keyed_column.rs`.
+- #36: `window::Event::ModeChanged { maximized, minimized, fullscreen }`, emitted by `iced_winit` once per maximize, minimize or fullscreen change (pure flag diff in `winit/src/window/mode_flags.rs`), polled once per event-loop pass after `Resized`, `Occluded`, `Focused` or a mode action; `minimized` is an `Option<bool>` (`None` on Wayland/web). `window::Event` is not `#[non_exhaustive]`, so the new variant breaks exhaustive `match`es over it in downstream crates. Not run on a real macOS/Windows/X11/Wayland window yet.
 - #12: `window::Direction::at`/`at_with_corner` hit-testing and `Direction::interaction()` / `From<Direction> for mouse::Interaction` (core).
 - #15: pending events, including the final `Closed`, are flushed to subscriptions before exit (winit).
 - #16: pane_grid title bar padded width sign bug.
