@@ -11,6 +11,7 @@ mod time_machine;
 
 use crate::core::border;
 use crate::core::keyboard;
+use crate::core::menu;
 use crate::core::theme::{self, Theme};
 use crate::core::time::seconds;
 use crate::core::window;
@@ -103,6 +104,11 @@ where
     #[inline]
     fn subscription(&self, state: &Self::State) -> Subscription<Self::Message> {
         state.subscription(&self.program)
+    }
+
+    #[inline]
+    fn menu(&self, state: &Self::State) -> Option<menu::Menu<Self::Message>> {
+        state.menu(&self.program)
     }
 
     #[inline]
@@ -368,6 +374,12 @@ where
             });
 
         stack![view, setup, notification].width(Fill).height(Fill)
+    }
+
+    pub fn menu(&self, program: &P) -> Option<menu::Menu<Event<P::Message>>> {
+        program
+            .menu(&self.state)
+            .map(|menu| menu.map(Event::Program))
     }
 
     pub fn subscription(&self, program: &P) -> Subscription<Event<P::Message>> {
