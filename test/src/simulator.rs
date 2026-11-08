@@ -539,7 +539,12 @@ fn diff(expected: &[u8], actual: &[u8], tolerance: Tolerance) -> Option<Diff> {
     let mut pixels = 0;
     let mut image = Vec::with_capacity(actual.len());
 
-    for (expected, actual) in expected.chunks_exact(4).zip(actual.chunks_exact(4)) {
+    for (expected, actual) in expected
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(actual.as_chunks::<4>().0)
+    {
         let differs = expected
             .iter()
             .zip(actual)
