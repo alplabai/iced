@@ -682,14 +682,14 @@ mod tests {
     }
 
     #[test]
-    fn pending_owned_window_keeps_its_link_until_its_owner_closes() {
+    fn pending_owned_window_is_found_and_cancelled_by_its_owner() {
         let (root, pending) = (Id::unique(), Id::unique());
 
         let mut family = Family::default();
         family.set_parent(pending, root);
 
-        // Closing the pending window by its own id removes no entry, so
-        // `Manager::remove` never forgets the link: the owner still finds it.
+        // While no `forget` ran, the owner still lists the pending window.
+        // (`Manager::remove` is not covered: it needs a live window.)
         let descendants = family.descendants(root);
         assert_eq!(descendants, [pending]);
 

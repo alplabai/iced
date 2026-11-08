@@ -173,7 +173,9 @@ fn reattach_when_released(
 ///
 /// AppKit drags a child window (see [`with_parent`]) with a visible lag, even
 /// in a plain AppKit app, while a top-level window drags smoothly. So the
-/// window is detached from its parent when the user starts dragging it, and
+/// window is detached from its parent on `willMove` (posted when the user
+/// presses the title bar, and possibly for a programmatic move too, in which
+/// case it stays detached until the next poll tick or mouse release), and
 /// attached again once the mouse button is released: the last `didMove` of a
 /// drag reports no pressed button, and a short poll covers a title-bar press
 /// that never moved the window. Dragging the parent does not detach its
