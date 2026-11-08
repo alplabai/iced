@@ -621,6 +621,18 @@ where
         // `Animation::Auto` scroll operations resolve against this
         state.smooth_scroll = self.smooth_scroll;
 
+        // `reveal` operations convert translations with these
+        state.anchor_x = self
+            .direction
+            .horizontal()
+            .map(|p| p.alignment)
+            .unwrap_or_default();
+        state.anchor_y = self
+            .direction
+            .vertical()
+            .map(|p| p.alignment)
+            .unwrap_or_default();
+
         let translation = state.last_translation;
         let viewport = viewport.intersection(&bounds).unwrap_or_default() + translation;
 
@@ -1228,6 +1240,8 @@ struct State {
     offset_y: Offset,
     offset_x: Offset,
     smooth_scroll: bool,
+    anchor_x: Anchor,
+    anchor_y: Anchor,
     target: Option<Target>,
     source: Option<Source>,
     segment: Segment,
@@ -1386,6 +1400,8 @@ impl Default for State {
             offset_y: Offset::Absolute(0.0),
             offset_x: Offset::Absolute(0.0),
             smooth_scroll: true,
+            anchor_x: Anchor::Start,
+            anchor_y: Anchor::Start,
             target: None,
             source: None,
             segment: Segment {
@@ -1436,6 +1452,30 @@ impl operation::Scrollable for State {
         content: Size,
     ) {
         State::scroll_by(self, offset, animation, bounds, content);
+    }
+
+    fn scroll_to_translation(
+        &mut self,
+        translation: AbsoluteOffset<Option<f32>>,
+        animation: Animation,
+        bounds: Rectangle,
+        content: Size,
+    ) {
+        // Absolute offsets are measured from the end on an `Anchor::End`
+        // axis, while a translation is always measured from the start
+        let mirror = |translation: Option<f32>, anchor: Anchor, viewport: f32, content: f32| {
+            translation.map(|translation| match anchor {
+                Anchor::Start => translation,
+                Anchor::End => (content - viewport).max(0.0) - translation,
+            })
+        };
+
+        let offset = AbsoluteOffset {
+            x: mirror(translation.x, self.anchor_x, bounds.width, content.width),
+            y: mirror(translation.y, self.anchor_y, bounds.height, content.height),
+        };
+
+        State::scroll_to(self, offset, animation, bounds, content, Source::Operation);
     }
 }
 
