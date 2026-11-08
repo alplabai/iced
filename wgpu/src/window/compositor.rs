@@ -20,7 +20,7 @@ pub struct Compositor {
     settings: Settings,
 }
 
-/// Tracks whether the `wgpu` device of a [`Compositor`] is still usable.
+/// Tracks whether the `wgpu` device of an [`Engine`] is still usable.
 ///
 /// It is updated from the callbacks `wgpu` invokes when the device is lost
 /// (for example after a driver reset) or reports an error that no error scope
@@ -591,6 +591,16 @@ mod tests {
         })
     }
 
+    /// Fails when `ICED_REQUIRE_GPU_TESTS` is set, so CI cannot skip silently.
+    fn skip_gpu_test(reason: &str) {
+        assert!(
+            std::env::var_os("ICED_REQUIRE_GPU_TESTS").is_none(),
+            "ICED_REQUIRE_GPU_TESTS is set but: {reason}"
+        );
+
+        eprintln!("{reason}; skipping");
+    }
+
     #[test]
     fn starts_healthy() {
         let health = DeviceHealth::default();
@@ -611,7 +621,7 @@ mod tests {
     #[test]
     fn destroying_the_device_marks_it_lost() {
         let Some((device, _queue)) = device() else {
-            eprintln!("no graphics adapter available; skipping");
+            skip_gpu_test("no graphics adapter available");
             return;
         };
 
@@ -642,13 +652,14 @@ mod tests {
         let _instance = instance;
 
         let Some(adapter) = adapter else {
-            eprintln!("no graphics adapter available; skipping");
+            skip_gpu_test("no graphics adapter available");
             return;
         };
 
         let Ok((device, queue)) =
             futures::executor::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
         else {
+            skip_gpu_test("the adapter could not provide a device");
             return;
         };
 
@@ -686,6 +697,94 @@ mod tests {
                     .is_err()
             );
         }
+    }
+
+    #[cfg(all(feature = "image", not(target_arch = "wasm32")))]
+    #[test]
+    fn allocate_image_resolves_with_an_error_on_a_lost_device() {
+        use crate::graphics::shell::Notifier;
+        use std::sync::atomic::AtomicUsize;
+        use std::time::{Duration, Instant};
+
+        struct Counter(Arc<AtomicUsize>);
+
+        impl Notifier for Counter {
+            fn tick(&self) {
+                let _ = self.0.fetch_add(1, Ordering::SeqCst);
+            }
+            fn request_redraw(&self) {}
+            fn invalidate_layout(&self) {}
+        }
+
+        let (instance, adapter) = futures::executor::block_on(async {
+            let instance =
+                wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions::default())
+                .await
+                .ok();
+
+            (instance, adapter)
+        });
+
+        let _instance = instance;
+
+        let Some(adapter) = adapter else {
+            skip_gpu_test("no graphics adapter available");
+            return;
+        };
+
+        let Ok((device, queue)) =
+            futures::executor::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+        else {
+            skip_gpu_test("the adapter could not provide a device");
+            return;
+        };
+
+        let ticks = Arc::new(AtomicUsize::new(0));
+
+        let engine = Engine::new(
+            &adapter,
+            device,
+            queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            None,
+            Shell::new(Counter(Arc::clone(&ticks))),
+        );
+
+        let mut renderer =
+            Renderer::new(engine.clone(), crate::core::renderer::Settings::default());
+
+        engine
+            .health
+            .mark_lost(wgpu::DeviceLostReason::Unknown, "test");
+
+        let (sender, receiver) = std::sync::mpsc::channel();
+
+        use crate::core::Renderer as _;
+
+        renderer.allocate_image(
+            &crate::core::image::Handle::from_rgba(1, 1, vec![0; 4]),
+            move |result| {
+                let _ = sender.send(result);
+            },
+        );
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+
+        while ticks.load(Ordering::SeqCst) == 0 {
+            assert!(Instant::now() < deadline, "the shell was never ticked");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        renderer.tick();
+
+        assert!(
+            receiver
+                .try_recv()
+                .expect("callback should have fired")
+                .is_err()
+        );
     }
 
     fn error_source() -> wgpu::ErrorSource {

@@ -573,6 +573,10 @@ mod worker {
                     ))),
                 });
 
+                // Wake the shell so `Renderer::tick` drains the error; nothing
+                // else runs on a lost device.
+                callback(&self.shell);
+
                 return;
             }
 
