@@ -29,6 +29,15 @@ pub enum Error {
     /// The encoding of some PNG image failed.
     #[error("the encoding of some PNG image failed: {0}")]
     PngEncodingFailed(Arc<png::EncodingError>),
+    /// The physical size of a snapshot is zero in at least one dimension, e.g. because
+    /// the scale factor is too small for the size of the simulator.
+    #[error("the snapshot has an empty physical size ({width}x{height} px)")]
+    EmptySnapshot {
+        /// The physical width, in pixels.
+        width: u32,
+        /// The physical height, in pixels.
+        height: u32,
+    },
     /// The parsing of an [`Ice`](crate::Ice) test failed.
     #[error("the ice test ({file}) is invalid: {error}")]
     IceParsingFailed {
