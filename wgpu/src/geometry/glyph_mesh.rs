@@ -38,6 +38,10 @@ const MAX_MESH_BYTES: usize = 64 * 1024 * 1024;
 /// real zoom.
 const MAX_BUCKET: i32 = 160;
 
+/// The smallest tolerance bucket. Below it the glyph-local tolerance overflows
+/// `f32`; such scales are far past any real zoom.
+const MIN_BUCKET: i32 = -160;
+
 #[derive(Default)]
 struct Cache {
     meshes: HashMap<(GlyphKey, i32), Rc<LocalMesh>>,
@@ -49,13 +53,21 @@ impl Cache {
     fn insert(&mut self, key: (GlyphKey, i32), mesh: Rc<LocalMesh>) {
         let bytes = size_of_mesh(&mesh);
 
+        // A mesh over the whole budget is the caller's alone, never cached.
+        if bytes > MAX_MESH_BYTES {
+            return;
+        }
+
         if self.meshes.len() >= MAX_MESHES || self.bytes + bytes > MAX_MESH_BYTES {
             // Replace rather than `clear`, so the table's memory goes too.
             *self = Cache::default();
         }
 
         self.bytes += bytes;
-        let _ = self.meshes.insert(key, mesh);
+
+        if let Some(replaced) = self.meshes.insert(key, mesh) {
+            self.bytes -= size_of_mesh(&replaced);
+        }
     }
 }
 
@@ -70,7 +82,7 @@ thread_local! {
 /// The tolerance bucket of a frame transform: its largest stretch rounded up
 /// to a quarter octave, so one mesh serves every transform in the bucket.
 /// `None` when the transform collapses entirely, is not finite, or stretches
-/// past `MAX_BUCKET`.
+/// outside `MIN_BUCKET..=MAX_BUCKET`; the caller then tessellates per frame.
 pub(super) fn bucket(transform: &Transform) -> Option<i32> {
     // The largest singular value of the linear part is its largest stretch,
     // so a mesh flattened for it is fine enough in every direction. This
@@ -81,7 +93,7 @@ pub(super) fn bucket(transform: &Transform) -> Option<i32> {
 
     (scale.is_finite() && scale > 0.0)
         .then(|| (scale.log2() * BUCKETS_PER_OCTAVE).ceil() as i32)
-        .filter(|&bucket| bucket <= MAX_BUCKET)
+        .filter(|bucket| (MIN_BUCKET..=MAX_BUCKET).contains(bucket))
 }
 
 /// The mesh of `outline` for transforms in `bucket`, tessellated on the first
@@ -95,7 +107,8 @@ pub(super) fn mesh(
 
     let cached = MESHES.try_with(|cache| cache.borrow().meshes.get(&key).map(Rc::clone));
 
-    // An `Err` is thread-local teardown: the mesh is then not cached.
+    // An `Err` is thread-local teardown of this cache (the shared swash cache
+    // in `Text::visit_glyphs` still uses `with`): the mesh is then not cached.
     if let Ok(Some(mesh)) = cached {
         return Some(mesh);
     }
@@ -133,6 +146,10 @@ fn tessellate(
         )
         .ok()?;
 
+    // The cache counts bytes by length, so drop the builders' spare capacity.
+    mesh.vertices.shrink_to_fit();
+    mesh.indices.shrink_to_fit();
+
     Some(mesh)
 }
 
@@ -146,6 +163,26 @@ mod tests {
 
     fn cached() -> usize {
         MESHES.with_borrow(|cache| cache.meshes.len())
+    }
+
+    fn assert_bytes_consistent() {
+        MESHES.with_borrow(|cache| {
+            let counted: usize = cache.meshes.values().map(|m| size_of_mesh(m)).sum();
+            assert_eq!(cache.bytes, counted, "the byte count drifted");
+        });
+    }
+
+    /// A cache key of the label's first outline.
+    fn label_key() -> (GlyphKey, i32) {
+        let mut key = None;
+
+        label().visit_glyphs(|glyph| {
+            if let geometry::Glyph::Outline(outline) = glyph {
+                let _ = key.get_or_insert((outline.key, 0));
+            }
+        });
+
+        key.expect("the label has an outline")
     }
 
     fn label() -> geometry::Text {
@@ -460,9 +497,12 @@ mod tests {
             });
 
             // Bucket -1 is not among the filled ones, and its tolerance is sane.
+            assert_bytes_consistent();
+
             let _ = mesh(&outline, -1, &mut FillTessellator::new());
 
             assert_eq!(cached(), 1, "a full cache is emptied before it grows");
+            assert_bytes_consistent();
         });
 
         assert!(checked, "the label has an outline");
@@ -490,22 +530,95 @@ mod tests {
                 cache.insert((outline.key, 1000), Rc::new(big));
             });
             assert_eq!(cached(), 1);
+            assert_bytes_consistent();
 
-            let _ = mesh(&outline, 0, &mut FillTessellator::new());
+            let mut tessellator = FillTessellator::new();
+            let _ = mesh(&outline, 0, &mut tessellator);
 
             assert_eq!(
                 cached(),
                 1,
                 "a cache full of bytes is emptied before it grows"
             );
+            assert_bytes_consistent();
+
+            let _ = mesh(&outline, 1, &mut tessellator);
+
+            assert_eq!(cached(), 2, "the emptied cache grows again");
+            assert_bytes_consistent();
         });
 
         assert!(checked, "the label has an outline");
     }
 
     #[test]
+    fn a_cached_mesh_holds_no_spare_capacity() {
+        let mut checked = false;
+
+        label().visit_glyphs(|glyph| {
+            let geometry::Glyph::Outline(outline) = glyph else {
+                return;
+            };
+            if checked {
+                return;
+            }
+            checked = true;
+
+            let mesh = mesh(&outline, 0, &mut FillTessellator::new()).expect("it tessellates");
+
+            assert!(!mesh.vertices.is_empty());
+            assert_eq!(mesh.vertices.capacity(), mesh.vertices.len());
+            assert_eq!(mesh.indices.capacity(), mesh.indices.len());
+        });
+
+        assert!(checked, "the label has an outline");
+    }
+
+    #[test]
+    fn a_mesh_over_the_whole_budget_is_not_cached() {
+        MESHES.with_borrow_mut(|cache| *cache = Cache::default());
+
+        let key = label_key();
+        let oversize = LocalMesh {
+            vertices: vec![[0.0, 0.0]; MAX_MESH_BYTES / size_of::<[f32; 2]>() + 1],
+            indices: vec![],
+        };
+
+        MESHES.with_borrow_mut(|cache| cache.insert(key, Rc::new(oversize)));
+
+        assert_eq!(cached(), 0);
+        assert_eq!(MESHES.with_borrow(|cache| cache.bytes), 0);
+    }
+
+    #[test]
+    fn inserting_a_key_twice_counts_one_mesh() {
+        MESHES.with_borrow_mut(|cache| *cache = Cache::default());
+
+        let key = label_key();
+        let small = || {
+            Rc::new(LocalMesh {
+                vertices: vec![[0.0, 0.0]; 3],
+                indices: vec![0, 1, 2],
+            })
+        };
+
+        MESHES.with_borrow_mut(|cache| {
+            cache.insert(key, small());
+            cache.insert(key, small());
+        });
+
+        assert_eq!(cached(), 1);
+        assert_eq!(
+            MESHES.with_borrow(|cache| cache.bytes),
+            size_of_mesh(&small())
+        );
+        assert_bytes_consistent();
+    }
+
+    #[test]
     fn a_transform_stretched_past_any_real_zoom_gets_no_bucket() {
         assert_eq!(bucket(&Transform::scale(1e13, 1e13)), None);
+        assert_eq!(bucket(&Transform::scale(1e-13, 1e-13)), None);
     }
 
     #[test]
