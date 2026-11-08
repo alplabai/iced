@@ -531,6 +531,7 @@ pub use crate::core::animation;
 pub use crate::core::border;
 pub use crate::core::color;
 pub use crate::core::gradient;
+pub use crate::core::menu;
 pub use crate::core::padding;
 pub use crate::core::theme;
 pub use crate::core::{
@@ -605,7 +606,7 @@ pub mod mouse {
 
 pub mod system {
     //! Retrieve system information.
-    pub use crate::runtime::system::{theme, theme_changes};
+    pub use crate::runtime::system::{cancel_quit, quit_requests, theme, theme_changes};
 
     #[cfg(feature = "sysinfo")]
     pub use crate::runtime::system::{Information, information};

@@ -1,6 +1,7 @@
 //! Create and run daemons that run in the background.
 use crate::application;
 use crate::core;
+use crate::core::menu;
 use crate::message;
 use crate::program::{self, Program};
 use crate::shell;
@@ -199,6 +200,22 @@ impl<P: Program> Daemon<P> {
         }
     }
 
+    /// Sets the native menu bar of the [`Daemon`].
+    ///
+    /// The menu is built from the state after every update, like a view, and
+    /// the native menu is only touched when it changed. Only macOS has a
+    /// native menu bar; elsewhere it is ignored.
+    pub fn menu(
+        self,
+        f: impl Fn(&P::State) -> menu::Menu<P::Message>,
+    ) -> Daemon<impl Program<State = P::State, Message = P::Message, Theme = P::Theme>> {
+        Daemon {
+            raw: program::with_menu(self.raw, f),
+            settings: self.settings,
+            presets: self.presets,
+        }
+    }
+
     /// Sets the subscription logic of the [`Daemon`].
     pub fn subscription(
         self,
@@ -325,6 +342,11 @@ impl<P: Program> Program for Daemon<P> {
     #[inline]
     fn subscription(&self, state: &Self::State) -> Subscription<Self::Message> {
         self.raw.subscription(state)
+    }
+
+    #[inline]
+    fn menu(&self, state: &Self::State) -> Option<menu::Menu<Self::Message>> {
+        self.raw.menu(state)
     }
 
     #[inline]
@@ -499,6 +521,11 @@ where
     }
 
     #[inline]
+    fn menu(&self, state: &Self::State) -> Option<menu::Menu<Self::Message>> {
+        self.program.menu(state)
+    }
+
+    #[inline]
     fn theme(&self, state: &Self::State, window: window::Id) -> Option<Self::Theme> {
         self.program.theme(state, window)
     }
@@ -575,6 +602,11 @@ where
     }
 
     #[inline]
+    fn menu(&self, state: &Self::State) -> Option<menu::Menu<Self::Message>> {
+        self.program.menu(state)
+    }
+
+    #[inline]
     fn theme(&self, state: &Self::State, window: window::Id) -> Option<Self::Theme> {
         self.theme.theme(state, window)
     }
@@ -648,6 +680,11 @@ where
     #[inline]
     fn subscription(&self, state: &Self::State) -> Subscription<Self::Message> {
         self.program.subscription(state)
+    }
+
+    #[inline]
+    fn menu(&self, state: &Self::State) -> Option<menu::Menu<Self::Message>> {
+        self.program.menu(state)
     }
 
     #[inline]
