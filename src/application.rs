@@ -32,6 +32,7 @@
 //! ```
 use crate::backend;
 use crate::core::Widget;
+use crate::core::menu;
 use crate::message;
 use crate::program::{self, Program};
 use crate::shell;
@@ -406,6 +407,23 @@ impl<P: Program> Application<P> {
         }
     }
 
+    /// Sets the native menu bar of the [`Application`].
+    ///
+    /// The menu is built from the state after every update, like a view, and
+    /// the native menu is only touched when it changed. Only macOS has a
+    /// native menu bar; elsewhere it is ignored.
+    pub fn menu(
+        self,
+        f: impl Fn(&P::State) -> menu::Menu<P::Message>,
+    ) -> Application<impl Program<State = P::State, Message = P::Message, Theme = P::Theme>> {
+        Application {
+            raw: program::with_menu(self.raw, f),
+            settings: self.settings,
+            window: self.window,
+            presets: self.presets,
+        }
+    }
+
     /// Sets the theme logic of the [`Application`].
     pub fn theme(
         self,
@@ -519,6 +537,11 @@ impl<P: Program> Program for Application<P> {
     #[inline]
     fn subscription(&self, state: &Self::State) -> Subscription<Self::Message> {
         self.raw.subscription(state)
+    }
+
+    #[inline]
+    fn menu(&self, state: &Self::State) -> Option<menu::Menu<Self::Message>> {
+        self.raw.menu(state)
     }
 
     #[inline]
@@ -772,6 +795,11 @@ fn with_title<P: Program>(
         }
 
         #[inline]
+        fn menu(&self, state: &Self::State) -> Option<menu::Menu<Self::Message>> {
+            self.program.menu(state)
+        }
+
+        #[inline]
         fn style(&self, state: &Self::State, theme: &Self::Theme) -> theme::Style {
             self.program.style(state, theme)
         }
@@ -855,6 +883,11 @@ fn with_theme<P: Program>(
         }
 
         #[inline]
+        fn menu(&self, state: &Self::State) -> Option<menu::Menu<Self::Message>> {
+            self.program.menu(state)
+        }
+
+        #[inline]
         fn style(&self, state: &Self::State, theme: &Self::Theme) -> theme::Style {
             self.program.style(state, theme)
         }
@@ -931,6 +964,11 @@ fn with_scale_factor<P: Program>(
         #[inline]
         fn subscription(&self, state: &Self::State) -> Subscription<Self::Message> {
             self.program.subscription(state)
+        }
+
+        #[inline]
+        fn menu(&self, state: &Self::State) -> Option<menu::Menu<Self::Message>> {
+            self.program.menu(state)
         }
 
         #[inline]
