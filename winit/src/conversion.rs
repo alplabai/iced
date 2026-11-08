@@ -103,13 +103,80 @@ fn ns_window(
     view.window()
 }
 
+/// Makes `child` a child of `parent` again once no mouse button is down.
+///
+/// Returns whether the window is attached (or gone) and needs no more work.
+#[cfg(target_os = "macos")]
+fn reattach_if_released(child: &objc2_app_kit::NSWindow, parent: &objc2_app_kit::NSWindow) -> bool {
+    use objc2_app_kit::{NSEvent, NSWindowOrderingMode};
+
+    if child.parentWindow().is_some() {
+        return true;
+    }
+
+    if NSEvent::pressedMouseButtons() != 0 {
+        return false;
+    }
+
+    // SAFETY: `child` was a child of `parent` before the drag and has no
+    // parent now, so this cannot create a cycle.
+    #[allow(unsafe_code)]
+    unsafe {
+        parent.addChildWindow_ordered(child, NSWindowOrderingMode::Above);
+    }
+
+    true
+}
+
+/// Re-attaches `child` once the mouse is released, even if the window never
+/// moved: `willMove` is posted as soon as the title bar is pressed, but
+/// `didMove` only follows a real move. The timer runs in the default run loop
+/// mode, so it stays idle during the drag itself.
+#[cfg(target_os = "macos")]
+fn reattach_when_released(
+    child: &objc2::rc::Retained<objc2_app_kit::NSWindow>,
+    parent: &objc2::rc::Retained<objc2_app_kit::NSWindow>,
+) {
+    use block2::RcBlock;
+    use objc2::rc::{Retained, Weak};
+    use objc2_foundation::NSTimer;
+    use std::ptr::NonNull;
+
+    const POLL_INTERVAL_SECONDS: f64 = 0.1;
+
+    let (child, parent) = (Weak::from_retained(child), Weak::from_retained(parent));
+
+    let poll = RcBlock::new(move |timer: NonNull<NSTimer>| {
+        let done = match (child.load(), parent.load()) {
+            (Some(child), Some(parent)) => reattach_if_released(&child, &parent),
+            _ => true,
+        };
+
+        if done {
+            // SAFETY: AppKit passes the live timer that is firing.
+            #[allow(unsafe_code)]
+            unsafe {
+                timer.as_ref().invalidate();
+            }
+        }
+    });
+
+    // SAFETY: the block only touches AppKit on the main thread, where the
+    // current run loop fires it; the run loop retains the timer.
+    #[allow(unsafe_code)]
+    let _timer: Retained<NSTimer> = unsafe {
+        NSTimer::scheduledTimerWithTimeInterval_repeats_block(POLL_INTERVAL_SECONDS, true, &poll)
+    };
+}
+
 /// Keeps an owned macOS window smooth to drag.
 ///
 /// AppKit drags a child window (see [`with_parent`]) with a visible lag, even
 /// in a plain AppKit app, while a top-level window drags smoothly. So the
 /// window is detached from its parent when the user starts dragging it, and
 /// attached again once the mouse button is released: the last `didMove` of a
-/// drag reports no pressed button. Dragging the parent does not detach its
+/// drag reports no pressed button, and a short poll covers a title-bar press
+/// that never moved the window. Dragging the parent does not detach its
 /// children, so they still move with it. The observers remove themselves
 /// when the window closes.
 #[cfg(target_os = "macos")]
@@ -118,8 +185,7 @@ pub fn detach_while_dragged(window: &winit::window::Window, parent: &winit::wind
     use objc2::rc::{Retained, Weak};
     use objc2::runtime::ProtocolObject;
     use objc2_app_kit::{
-        NSEvent, NSWindowDidMoveNotification, NSWindowOrderingMode, NSWindowWillCloseNotification,
-        NSWindowWillMoveNotification,
+        NSWindowDidMoveNotification, NSWindowWillCloseNotification, NSWindowWillMoveNotification,
     };
     use objc2_foundation::NSObjectProtocol;
     use objc2_foundation::{NSNotification, NSNotificationCenter};
@@ -141,6 +207,7 @@ pub fn detach_while_dragged(window: &winit::window::Window, parent: &winit::wind
                 && child.parentWindow().is_some()
             {
                 parent.removeChildWindow(&child);
+                reattach_when_released(&child, &parent);
             }
         })
     };
@@ -149,16 +216,8 @@ pub fn detach_while_dragged(window: &winit::window::Window, parent: &winit::wind
         let (child, parent) = weak();
 
         RcBlock::new(move |_| {
-            if let (Some(child), Some(parent)) = (child.load(), parent.load())
-                && child.parentWindow().is_none()
-                && NSEvent::pressedMouseButtons() == 0
-            {
-                // SAFETY: `child` was a child of `parent` before the drag and
-                // has no parent now, so this cannot create a cycle.
-                #[allow(unsafe_code)]
-                unsafe {
-                    parent.addChildWindow_ordered(&child, NSWindowOrderingMode::Above);
-                }
+            if let (Some(child), Some(parent)) = (child.load(), parent.load()) {
+                let _attached = reattach_if_released(&child, &parent);
             }
         })
     };
