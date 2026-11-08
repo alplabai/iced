@@ -3,14 +3,14 @@
 use iced_test::{Simulator, simulator::release_key};
 use iced_widget::core::event;
 use iced_widget::core::keyboard::{self, key::Named};
-use iced_widget::core::{Point, mouse};
+use iced_widget::core::{ContentFit, Event, Point, mouse};
 use iced_widget::image::{Handle, Viewer};
 
 fn viewer<'a>() -> Simulator<'a, ()> {
     Simulator::new(Viewer::new(Handle::from_rgba(1, 1, vec![0; 4])))
 }
 
-fn escape() -> iced_widget::core::Event {
+fn escape() -> Event {
     release_key(keyboard::Key::Named(Named::Escape))
 }
 
@@ -45,6 +45,156 @@ fn escape_resets_a_zoomed_viewer_with_cursor_away() {
     simulator.point_at(Point::new(0.5, 0.5));
     let _ = simulator.scroll(mouse::ScrollDelta::Lines { x: 0.0, y: 1.0 });
     simulator.point_at(Point::new(-100.0, -100.0));
+
+    assert_eq!(simulator.simulate([escape()]), [event::Status::Captured]);
+}
+
+/// A hovered viewer in its default state has nothing to reset, so Escape is
+/// left to the application (for example a modal that closes on Escape).
+#[test]
+fn escape_is_ignored_when_default_and_hovered() {
+    let mut simulator = viewer();
+    simulator.point_at(Point::new(0.5, 0.5));
+
+    assert_eq!(simulator.simulate([escape()]), [event::Status::Ignored]);
+}
+
+/// A viewer that was only panned (scale is still 1.0) is not in its default
+/// state: Escape resets it and is captured, even with the cursor away.
+#[test]
+fn escape_resets_a_panned_viewer_with_cursor_away() {
+    let mut simulator: Simulator<'_, ()> = Simulator::new(
+        Viewer::new(Handle::from_rgba(100, 100, vec![0; 100 * 100 * 4]))
+            .content_fit(ContentFit::None)
+            .width(10)
+            .height(10),
+    );
+
+    simulator.point_at(Point::new(5.0, 5.0));
+
+    let _ = simulator.simulate([
+        Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+        Event::Mouse(mouse::Event::CursorMoved {
+            position: Point::new(1.0, 1.0),
+        }),
+        Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+    ]);
+
+    simulator.point_at(Point::new(-100.0, -100.0));
+    assert_eq!(simulator.simulate([escape()]), [event::Status::Captured]);
+
+    // The pan was reset, so a second Escape is left to the application.
+    assert_eq!(simulator.simulate([escape()]), [event::Status::Ignored]);
+}
+
+/// Panning away and dragging back leaves the view at its default, even though
+/// the drag start offset is stale: Escape is left to the application.
+#[test]
+fn escape_is_ignored_after_panning_back_to_default() {
+    let mut simulator: Simulator<'_, ()> = Simulator::new(
+        Viewer::new(Handle::from_rgba(100, 100, vec![0; 100 * 100 * 4]))
+            .content_fit(ContentFit::None)
+            .width(10)
+            .height(10),
+    );
+
+    simulator.point_at(Point::new(5.0, 5.0));
+
+    let drag = |to: Point| {
+        [
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+            Event::Mouse(mouse::Event::CursorMoved { position: to }),
+            Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+        ]
+    };
+
+    let _ = simulator.simulate(drag(Point::new(1.0, 1.0)));
+
+    simulator.point_at(Point::new(1.0, 1.0));
+    let _ = simulator.simulate(drag(Point::new(5.0, 5.0)));
+
+    simulator.point_at(Point::new(-100.0, -100.0));
+    assert_eq!(simulator.simulate([escape()]), [event::Status::Ignored]);
+}
+
+/// Zooming in and out by the same number of notches returns the view to its
+/// default, even though the repeated f32 steps leave the scale a few ulps
+/// away from 1.0.
+#[test]
+fn escape_is_ignored_after_zooming_in_and_out() {
+    let mut simulator: Simulator<'_, ()> = Simulator::new(
+        Viewer::new(Handle::from_rgba(100, 100, vec![0; 100 * 100 * 4]))
+            .content_fit(ContentFit::Contain)
+            .width(10)
+            .height(10),
+    );
+
+    simulator.point_at(Point::new(5.0, 5.0));
+
+    let wheel = |y: f32| {
+        Event::Mouse(mouse::Event::WheelScrolled {
+            delta: mouse::ScrollDelta::Lines { x: 0.0, y },
+        })
+    };
+
+    let _ = simulator.simulate((0..15).map(|_| wheel(1.0)));
+    let _ = simulator.simulate((0..15).map(|_| wheel(-1.0)));
+
+    simulator.point_at(Point::new(-100.0, -100.0));
+    assert_eq!(simulator.simulate([escape()]), [event::Status::Ignored]);
+}
+
+/// `min_scale` within half a step of 1.0 stays reachable: the zoom-out is
+/// clamped to it, not snapped back to 1.0, so the view is not default.
+#[test]
+fn min_scale_near_one_is_reachable() {
+    let mut simulator: Simulator<'_, ()> = Simulator::new(
+        Viewer::new(Handle::from_rgba(100, 100, vec![0; 100 * 100 * 4]))
+            .content_fit(ContentFit::Contain)
+            .min_scale(0.97)
+            .width(10)
+            .height(10),
+    );
+
+    simulator.point_at(Point::new(5.0, 5.0));
+    let _ = simulator.scroll(mouse::ScrollDelta::Lines { x: 0.0, y: -1.0 });
+
+    assert_eq!(simulator.simulate([escape()]), [event::Status::Captured]);
+}
+
+/// Zooming in and out over an image that overflows the viewer at scale 1.0
+/// leaves the pan offset a few ulps off zero; that is still the default view.
+#[test]
+fn escape_is_ignored_after_zooming_in_and_out_off_centre() {
+    let mut simulator: Simulator<'_, ()> = Simulator::new(
+        Viewer::new(Handle::from_rgba(100, 100, vec![0; 100 * 100 * 4]))
+            .content_fit(ContentFit::None)
+            .width(10)
+            .height(10),
+    );
+
+    simulator.point_at(Point::new(8.7, 8.7));
+    let _ = simulator.scroll(mouse::ScrollDelta::Lines { x: 0.0, y: 1.0 });
+    let _ = simulator.scroll(mouse::ScrollDelta::Lines { x: 0.0, y: -1.0 });
+
+    simulator.point_at(Point::new(-100.0, -100.0));
+    assert_eq!(simulator.simulate([escape()]), [event::Status::Ignored]);
+}
+
+/// With a step above 1.0 a zoom-out from 1.0 must still leave 1.0: the snap
+/// window is multiplicative and does not capture the 1/(1+s) step.
+#[test]
+fn large_scale_step_can_zoom_out_below_one() {
+    let mut simulator: Simulator<'_, ()> = Simulator::new(
+        Viewer::new(Handle::from_rgba(100, 100, vec![0; 100 * 100 * 4]))
+            .content_fit(ContentFit::Contain)
+            .scale_step(1.5)
+            .width(10)
+            .height(10),
+    );
+
+    simulator.point_at(Point::new(5.0, 5.0));
+    let _ = simulator.scroll(mouse::ScrollDelta::Lines { x: 0.0, y: -1.0 });
 
     assert_eq!(simulator.simulate([escape()]), [event::Status::Captured]);
 }
