@@ -46,6 +46,7 @@ Verification (this batch):
 - [#3359](https://github.com/iced-rs/iced/pull/3359): fix culling of shadowed quads in tiny_skia (clean merge).
 - [#2770](https://github.com/iced-rs/iced/pull/2770): radio dot animation (hand-ported to the current `Widget` API; animated only with the `animations` feature).
 - [#2779](https://github.com/iced-rs/iced/pull/2779): toggler animation (hand-ported; `Status`/`Style` public API left unchanged, background colors are mixed and the knob position interpolated inside the widget; animated only with the `animations` feature; its `animations` example was not added). Also adds `Animation::force`/`force_mut` in core.
+- [#3282](https://github.com/iced-rs/iced/pull/3282): `text_input` `on_focus`/`on_blur` (hand-ported onto the `text::Input`-based widget; the upstream blur/focus message swap and `on_blur_maybe` bug are not carried over; operation-driven focus changes are reported on the next event; disabling a focused input counts as a blur and a disabled input is skipped by Tab navigation; no blur on removal from the view or window focus loss).
 
 ## Skipped
 
