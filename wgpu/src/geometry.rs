@@ -19,6 +19,8 @@ use std::borrow::Cow;
 use std::mem;
 use std::sync::Arc;
 
+mod glyph_mesh;
+
 /// A part of a [`Geometry`] that can be drawn in a single layer, because
 /// its contents are already in the order in which a layer draws them:
 /// meshes first, then custom primitives, then images, and text last.
@@ -199,6 +201,64 @@ impl Frame {
         let meshes = mem::replace(&mut self.buffers, BufferStack::new()).into_meshes(clip_bounds);
 
         self.sections.current_mut().meshes.extend(meshes);
+    }
+
+    /// Fills `text` as vector outlines from the glyph mesh cache: an outline
+    /// is tessellated once per tolerance bucket of the transform. Every draw
+    /// still lays the text out (shaping), then places the cached vertices.
+    fn fill_glyphs(&mut self, text: &geometry::Text) {
+        use geometry::frame::Backend as _;
+
+        let transform = self.transforms.current.0;
+
+        let Some(bucket) = glyph_mesh::bucket(&transform) else {
+            text.draw_with(|path, color| self.fill(&path, color));
+            return;
+        };
+
+        text.visit_glyphs(|glyph| match glyph {
+            geometry::Glyph::Outline(outline) => {
+                match glyph_mesh::mesh(&outline, bucket, &mut self.fill_tessellator) {
+                    Some(mesh) => self.place_glyph_mesh(
+                        &mesh,
+                        &transform
+                            .pre_translate(lyon::math::vector(outline.offset.x, outline.offset.y)),
+                        outline.color,
+                    ),
+                    None => self.fill(&outline.path(), outline.color),
+                }
+            }
+            geometry::Glyph::Pixel(path, color) => self.fill(&path, color),
+        });
+    }
+
+    /// Appends a glyph-local `mesh`, moved by `transform`, in a solid `color`.
+    fn place_glyph_mesh(
+        &mut self,
+        mesh: &glyph_mesh::LocalMesh,
+        transform: &lyon::math::Transform,
+        color: core::Color,
+    ) {
+        self.begin(Kind::Shape);
+
+        let Buffer::Solid(buffer) = self.buffers.get_mut(&Style::Solid(color)) else {
+            unreachable!("a solid style gets a solid buffer");
+        };
+
+        let color = color::pack(color);
+        let base = buffer.vertices.len() as u32;
+
+        buffer.vertices.extend(mesh.vertices.iter().map(|&[x, y]| {
+            let position = transform.transform_point(lyon::math::point(x, y));
+
+            mesh::SolidVertex2D {
+                position: [position.x, position.y],
+                color,
+            }
+        }));
+        buffer
+            .indices
+            .extend(mesh.indices.iter().map(|index| base + index));
     }
 
     /// Finishes the [`Frame`] returning its sections in draw order.
@@ -419,7 +479,7 @@ impl geometry::frame::Backend for Frame {
                 clip_bounds: self.clip_bounds,
             });
         } else {
-            text.draw_with(|path, color| self.fill(&path, color));
+            self.fill_glyphs(&text);
         }
     }
 

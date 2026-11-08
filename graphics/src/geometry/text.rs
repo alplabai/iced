@@ -48,9 +48,9 @@ pub struct Text {
 
 /// The largest size, in logical pixels after the frame transform, that
 /// `fill_text` draws from the glyph atlas (wgpu) or the glyph cache
-/// (tiny_skia); bigger text is drawn as vector outlines through
-/// [`Text::draw_with`], filled by the geometry backend, and stays sharp at any
-/// size.
+/// (tiny_skia); bigger text is drawn as vector outlines
+/// ([`Text::visit_glyphs`]), filled by the geometry backend, and stays sharp at
+/// any size.
 ///
 /// wgpu: one glyph bitmap this size takes a large share of an atlas texture.
 /// The value assumes a desktop device whose `max_texture_dimension_2d` is at
@@ -171,6 +171,22 @@ impl Text {
     /// Computes the [`Path`]s of the [`Text`] and draws them using
     /// the given closure.
     pub fn draw_with(&self, mut f: impl FnMut(Path, Color)) {
+        self.visit_glyphs(|glyph| match glyph {
+            Glyph::Outline(outline) => f(outline.path(), outline.color),
+            Glyph::Pixel(path, color) => f(path, color),
+        });
+    }
+
+    /// Lays the [`Text`] out and hands every glyph to the given closure, in
+    /// draw order: an outline with its cache key and position, or the pixels
+    /// of an outline-less (bitmap) glyph.
+    ///
+    /// A backend can keep what it builds from an outline (a mesh, say) by
+    /// [`GlyphKey`], since one key always has the same outline.
+    ///
+    /// The closure runs while the global font system's write lock is held, so
+    /// it must not lay out text itself.
+    pub fn visit_glyphs(&self, mut f: impl FnMut(Glyph<'_>)) {
         let paragraph = self.paragraph();
 
         let translation_x = match self.align_x {
@@ -210,38 +226,12 @@ impl Text {
                 if let Some(commands) =
                     swash_cache.get_outline_commands(font_system.raw(), outline_key)
                 {
-                    let glyph = Path::new(|path| {
-                        use cosmic_text::Command;
-
-                        for command in commands {
-                            match command {
-                                Command::MoveTo(p) => {
-                                    path.move_to(Point::new(p.x, -p.y) + offset);
-                                }
-                                Command::LineTo(p) => {
-                                    path.line_to(Point::new(p.x, -p.y) + offset);
-                                }
-                                Command::CurveTo(control_a, control_b, to) => {
-                                    path.bezier_curve_to(
-                                        Point::new(control_a.x, -control_a.y) + offset,
-                                        Point::new(control_b.x, -control_b.y) + offset,
-                                        Point::new(to.x, -to.y) + offset,
-                                    );
-                                }
-                                Command::QuadTo(control, to) => {
-                                    path.quadratic_curve_to(
-                                        Point::new(control.x, -control.y) + offset,
-                                        Point::new(to.x, -to.y) + offset,
-                                    );
-                                }
-                                Command::Close => {
-                                    path.close();
-                                }
-                            }
-                        }
-                    });
-
-                    f(glyph, self.color);
+                    f(Glyph::Outline(GlyphOutline {
+                        key: GlyphKey(outline_key),
+                        offset,
+                        color: self.color,
+                        commands,
+                    }));
                 } else {
                     if !bitmap_fallback_allowed(f32::from_bits(
                         physical_glyph.cache_key.font_size_bits,
@@ -256,7 +246,7 @@ impl Text {
                         physical_glyph.cache_key,
                         cosmic_text::Color::rgba(r, g, b, a),
                         |x, y, color| {
-                            f(
+                            f(Glyph::Pixel(
                                 Path::rectangle(
                                     Point::new(x as f32, y as f32) + offset,
                                     Size::new(1.0, 1.0),
@@ -267,12 +257,86 @@ impl Text {
                                     color.b(),
                                     color.a() as f32 / 255.0,
                                 ),
-                            );
+                            ));
                         },
                     );
                 }
             }
         }
+    }
+}
+
+/// A glyph of a [`Text`], as [`Text::visit_glyphs`] hands it out.
+#[derive(Debug)]
+pub enum Glyph<'a> {
+    /// A glyph with a vector outline.
+    Outline(GlyphOutline<'a>),
+    /// One pixel of an outline-less (bitmap) glyph, as a unit square.
+    Pixel(Path, Color),
+}
+
+/// Identifies a glyph outline: the key covers font, glyph, size, weight and
+/// synthesis/hinting flags. Two glyphs with one key have the same outline in
+/// glyph-local coordinates. It is valid only within the process-global font
+/// system.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct GlyphKey(cosmic_text::CacheKey);
+
+/// The vector outline of one glyph of a [`Text`].
+#[derive(Debug)]
+pub struct GlyphOutline<'a> {
+    /// The key of the outline.
+    pub key: GlyphKey,
+    /// Where the glyph-local origin (the pen position) lands in the frame.
+    pub offset: Vector,
+    /// The color of the glyph.
+    pub color: Color,
+    commands: &'a [cosmic_text::Command],
+}
+
+impl GlyphOutline<'_> {
+    /// The outline placed at its position in the frame.
+    pub fn path(&self) -> Path {
+        self.path_at(self.offset)
+    }
+
+    /// The outline in glyph-local coordinates, y down, origin at the pen
+    /// position; the same for every glyph with this key.
+    pub fn local_path(&self) -> Path {
+        self.path_at(Vector::ZERO)
+    }
+
+    fn path_at(&self, offset: Vector) -> Path {
+        Path::new(|path| {
+            use cosmic_text::Command;
+
+            for command in self.commands {
+                match command {
+                    Command::MoveTo(p) => {
+                        path.move_to(Point::new(p.x, -p.y) + offset);
+                    }
+                    Command::LineTo(p) => {
+                        path.line_to(Point::new(p.x, -p.y) + offset);
+                    }
+                    Command::CurveTo(control_a, control_b, to) => {
+                        path.bezier_curve_to(
+                            Point::new(control_a.x, -control_a.y) + offset,
+                            Point::new(control_b.x, -control_b.y) + offset,
+                            Point::new(to.x, -to.y) + offset,
+                        );
+                    }
+                    Command::QuadTo(control, to) => {
+                        path.quadratic_curve_to(
+                            Point::new(control.x, -control.y) + offset,
+                            Point::new(to.x, -to.y) + offset,
+                        );
+                    }
+                    Command::Close => {
+                        path.close();
+                    }
+                }
+            }
+        })
     }
 }
 
