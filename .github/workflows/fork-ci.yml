@@ -55,10 +55,14 @@ jobs:
       - name: Install Linux dependencies
         uses: ./.github/actions/linux-deps
         with:
-          packages: libxkbcommon-dev libgtk-3-dev
+          packages: libxkbcommon-dev libgtk-3-dev mesa-vulkan-drivers
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
       - name: Tests (all features)
+        # mesa-vulkan-drivers provides lavapipe (software Vulkan), so the
+        # offscreen render tests run; they fail instead of skipping without it.
+        env:
+          ICED_REQUIRE_GPU_TESTS: 1
         run: cargo nextest run --workspace --all-features --no-fail-fast
       - name: Doc tests
         run: cargo test --workspace --all-features --doc
