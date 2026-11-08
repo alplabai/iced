@@ -175,7 +175,8 @@ impl Renderer {
 
     /// Renders the current surface to an offscreen buffer.
     ///
-    /// Returns RGBA bytes of the texture data.
+    /// Returns RGBA bytes of the texture data. The `Vec` is empty if the
+    /// viewport has no area or the device was lost.
     pub fn screenshot(&mut self, viewport: &Viewport, background_color: Color) -> Vec<u8> {
         #[derive(Clone, Copy, Debug)]
         struct BufferDimensions {
@@ -204,7 +205,8 @@ impl Renderer {
 
         let physical_size = viewport.physical_size();
 
-        if physical_size.width == 0 || physical_size.height == 0 {
+        // The blocking poll below panics on a lost device.
+        if physical_size.width == 0 || physical_size.height == 0 || self.engine.health.is_lost() {
             return Vec::new();
         }
 
@@ -275,6 +277,10 @@ impl Renderer {
             submission_index: Some(index),
             timeout: None,
         });
+
+        if self.engine.health.is_lost() {
+            return Vec::new();
+        }
 
         let mapped_buffer = slice.get_mapped_range().unwrap();
 
@@ -790,6 +796,13 @@ impl core::image::Renderer for Renderer {
         &self,
         handle: &Self::Handle,
     ) -> Result<core::image::Allocation, core::image::Error> {
+        // Loading blocks on `Device::poll`, which panics on a lost device.
+        if self.engine.health.is_lost() {
+            return Err(core::image::Error::Invalid(std::sync::Arc::new(
+                std::io::Error::other("the graphics device was lost"),
+            )));
+        }
+
         self.image_cache
             .borrow_mut()
             .load_image(&self.engine.device, &self.engine.queue, handle)

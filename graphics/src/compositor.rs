@@ -128,6 +128,10 @@ pub enum SurfaceError {
     /// The swap chain has been lost and needs to be recreated.
     #[error("The surface has been lost and needs to be recreated")]
     Lost,
+    /// The graphics device was lost (e.g. after a driver reset) and cannot be
+    /// used anymore. Every resource created from it must be recreated.
+    #[error("The graphics device was lost and cannot be used anymore")]
+    DeviceLost,
     /// There is no more memory left to allocate a new frame.
     #[error("There is no more memory left to allocate a new frame")]
     OutOfMemory,
