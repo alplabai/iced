@@ -186,6 +186,7 @@ impl Instance {
     /// Clips the [`Instance`] to the given region, never past its bounds.
     ///
     /// Returns `None` if nothing of the [`Instance`] is left to draw.
+    #[cfg(feature = "geometry")]
     pub(crate) fn clipped(mut self, clip_bounds: Rectangle) -> Option<Self> {
         self.clip_bounds = self.bounds.intersection(&clip_bounds)?;
         Some(self)
