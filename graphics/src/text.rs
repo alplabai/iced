@@ -342,6 +342,40 @@ pub fn to_attributes(font: Font) -> cosmic_text::Attrs<'static> {
         .weight(to_weight(font.weight))
         .stretch(to_stretch(font.stretch))
         .style(to_style(font.style))
+        .font_features(to_features(font.features))
+}
+
+fn to_features(features: font::Features) -> cosmic_text::FontFeatures {
+    use cosmic_text::FeatureTag;
+
+    let mut result = cosmic_text::FontFeatures::new();
+
+    if features.contains(font::Features::TNUM) {
+        let _ = result.enable(FeatureTag::new(b"tnum"));
+    }
+
+    if features.contains(font::Features::ZERO) {
+        let _ = result.enable(FeatureTag::new(b"zero"));
+    }
+
+    if features.contains(font::Features::LIGA_OFF) {
+        let _ = result.disable(FeatureTag::STANDARD_LIGATURES);
+        let _ = result.disable(FeatureTag::CONTEXTUAL_LIGATURES);
+    }
+
+    if features.contains(font::Features::CALT_OFF) {
+        let _ = result.disable(FeatureTag::CONTEXTUAL_ALTERNATES);
+    }
+
+    if features.contains(font::Features::SMCP) {
+        let _ = result.enable(FeatureTag::SMALL_CAPS);
+    }
+
+    if features.contains(font::Features::SS01) {
+        let _ = result.enable(FeatureTag::STYLISTIC_SET_1);
+    }
+
+    result
 }
 
 fn to_family(family: font::Family) -> cosmic_text::Family<'static> {
@@ -402,10 +436,13 @@ fn to_align(alignment: Alignment) -> Option<cosmic_text::Align> {
 }
 
 /// Converts some [`Shaping`] strategy to a [`cosmic_text::Shaping`] strategy.
-pub fn to_shaping(shaping: Shaping, text: &str) -> cosmic_text::Shaping {
+///
+/// [`Shaping::Auto`] is promoted to advanced shaping when the [`Font`] requests
+/// OpenType features, since basic shaping ignores them.
+pub fn to_shaping(shaping: Shaping, text: &str, font: Font) -> cosmic_text::Shaping {
     match shaping {
         Shaping::Auto => {
-            if text.is_ascii() {
+            if text.is_ascii() && font.features.is_empty() {
                 cosmic_text::Shaping::Basic
             } else {
                 cosmic_text::Shaping::Advanced
