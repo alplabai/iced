@@ -473,6 +473,16 @@ mod geometry {
         Secondary(B),
     }
 
+    impl<A, B, P> geometry::frame::DrawPrimitive<P> for Frame<A, B>
+    where
+        A: geometry::frame::DrawPrimitive<P>,
+        B: geometry::frame::DrawPrimitive<P>,
+    {
+        fn draw_primitive(&mut self, bounds: Rectangle, primitive: P) {
+            delegate!(self, frame, frame.draw_primitive(bounds, primitive));
+        }
+    }
+
     impl<A, B> geometry::frame::Backend for Frame<A, B>
     where
         A: geometry::frame::Backend,

@@ -1,0 +1,9 @@
+[package]
+name = "native_menu"
+version = "0.1.0"
+authors = ["Alp Lab"]
+edition = "2024"
+publish = false
+
+[dependencies]
+iced.workspace = true
