@@ -13,7 +13,7 @@ use crate::core::mouse;
 use crate::core::theme;
 use crate::core::touch;
 use crate::core::window;
-use crate::core::{Event, Point, Size};
+use crate::core::{Event, Point, Size, Vector};
 
 /// Makes `parent` the owner of the window described by `attributes`.
 ///
@@ -606,6 +606,20 @@ pub fn window_event(
     }
 }
 
+/// Converts a winit device event into an iced event, if it maps to one.
+///
+/// Only raw mouse motion is converted, into [`mouse::Event::RawMotion`].
+pub fn device_event(event: &winit::event::DeviceEvent) -> Option<Event> {
+    match event {
+        winit::event::DeviceEvent::MouseMotion { delta: (x, y) } => {
+            Some(Event::Mouse(mouse::Event::RawMotion {
+                delta: Vector::new(*x as f32, *y as f32),
+            }))
+        }
+        _ => None,
+    }
+}
+
 /// Converts a [`window::Level`] into a [`winit`] window level.
 ///
 /// [`winit`]: https://github.com/rust-windowing/winit
@@ -614,6 +628,17 @@ pub fn window_level(level: window::Level) -> winit::window::WindowLevel {
         window::Level::Normal => winit::window::WindowLevel::Normal,
         window::Level::AlwaysOnBottom => winit::window::WindowLevel::AlwaysOnBottom,
         window::Level::AlwaysOnTop => winit::window::WindowLevel::AlwaysOnTop,
+    }
+}
+
+/// Converts a [`window::CursorGrab`] into its [`winit`] equivalent.
+///
+/// [`winit`]: https://github.com/rust-windowing/winit
+pub fn cursor_grab(grab: window::CursorGrab) -> winit::window::CursorGrabMode {
+    match grab {
+        window::CursorGrab::None => winit::window::CursorGrabMode::None,
+        window::CursorGrab::Confined => winit::window::CursorGrabMode::Confined,
+        window::CursorGrab::Locked => winit::window::CursorGrabMode::Locked,
     }
 }
 
@@ -1493,9 +1518,33 @@ fn is_private_use(c: char) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_monitor_list, is_primary_monitor};
+    use super::{build_monitor_list, device_event, is_primary_monitor};
     use crate::core::Size;
     use crate::core::window::MonitorData;
+
+    #[test]
+    fn raw_mouse_motion_converts_to_raw_motion() {
+        use crate::core::{Event, Vector, mouse};
+
+        let event = winit::event::DeviceEvent::MouseMotion { delta: (1.5, -2.0) };
+
+        assert_eq!(
+            device_event(&event),
+            Some(Event::Mouse(mouse::Event::RawMotion {
+                delta: Vector::new(1.5, -2.0),
+            }))
+        );
+    }
+
+    #[test]
+    fn other_device_events_are_ignored() {
+        let event = winit::event::DeviceEvent::Motion {
+            axis: 0,
+            value: 1.0,
+        };
+
+        assert_eq!(device_event(&event), None);
+    }
 
     fn named(id: u32) -> MonitorData {
         MonitorData::new(Size::new(1, 1), 1.0, Some(id.to_string()), None)

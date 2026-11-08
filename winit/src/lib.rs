@@ -246,6 +246,18 @@ where
             }
         }
 
+        fn device_event(
+            &mut self,
+            event_loop: &winit::event_loop::ActiveEventLoop,
+            device_id: winit::event::DeviceId,
+            event: winit::event::DeviceEvent,
+        ) {
+            self.process_event(
+                event_loop,
+                Event::EventLoopAwakened(winit::event::Event::DeviceEvent { device_id, event }),
+            );
+        }
+
         fn user_event(
             &mut self,
             event_loop: &winit::event_loop::ActiveEventLoop,
@@ -844,6 +856,17 @@ async fn run_instance<P>(
                             ),
                         ));
                     }
+                    event::Event::DeviceEvent { event, .. } => {
+                        if let Some(event) = conversion::device_event(&event) {
+                            for (id, window) in window_manager.iter_mut() {
+                                if window::forwards_raw_motion(window.cursor_grab(), || {
+                                    window.raw.has_focus()
+                                }) {
+                                    events.push((id, event.clone()));
+                                }
+                            }
+                        }
+                    }
                     event::Event::PlatformSpecific(event::PlatformSpecific::MacOS(
                         event::MacOS::TerminateRequested,
                     )) => {
@@ -1224,6 +1247,16 @@ async fn run_instance<P>(
                                 &mut renderer_settings,
                             );
                         } else {
+                            if window.releases_grab(&window_event) {
+                                let _ =
+                                    window.set_cursor_grab(crate::core::window::CursorGrab::None);
+
+                                events.push((
+                                    id,
+                                    core::Event::Window(core::window::Event::CursorGrabReleased),
+                                ));
+                            }
+
                             window.state.update(&program, &window.raw, &window_event);
 
                             if matches!(
@@ -1810,6 +1843,16 @@ fn run_action<'a, P, C>(
                         x: point.x,
                         y: point.y,
                     });
+                }
+            }
+            window::Action::SetCursorGrab(id, grab, channel) => {
+                if let Some(window) = window_manager.get_mut(id) {
+                    let _ = channel.send(window.set_cursor_grab(grab));
+                }
+            }
+            window::Action::SetCursorGrabReleaseOnEscape(id, enabled) => {
+                if let Some(window) = window_manager.get_mut(id) {
+                    window.set_release_grab_on_escape(enabled);
                 }
             }
             window::Action::GetRawId(id, channel) => {

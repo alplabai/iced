@@ -82,6 +82,16 @@ pub enum Event {
     /// A window was unfocused.
     Unfocused,
 
+    /// The runtime released the cursor grab of the window on its own, so the
+    /// application can update its state.
+    ///
+    /// This is emitted when the window loses focus (macOS only, where the
+    /// grab is global to the system) or when Escape is pressed while the
+    /// application has opted in with `window::release_cursor_grab_on_escape`
+    /// in `iced_runtime`. It is not emitted for a release the application
+    /// requested itself.
+    CursorGrabReleased,
+
     /// A file is being hovered over the window.
     ///
     /// When the user hovers multiple files at once, this event will be emitted
