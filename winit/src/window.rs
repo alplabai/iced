@@ -1,5 +1,7 @@
+mod mode_flags;
 mod state;
 
+use mode_flags::ModeFlags;
 use state::State;
 
 pub use crate::core::window::{CursorGrab, Event, Id, RedrawRequest, Settings};
@@ -22,7 +24,7 @@ use crate::program::{self, Program};
 use winit::dpi::{LogicalPosition, LogicalSize};
 use winit::monitor::MonitorHandle;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 pub struct Manager<P, C>
@@ -33,6 +35,66 @@ where
 {
     aliases: BTreeMap<winit::window::WindowId, Id>,
     entries: BTreeMap<Id, Window<P, C>>,
+    family: Family,
+}
+
+/// The owner relation between windows.
+#[derive(Debug, Default)]
+struct Family {
+    parents: BTreeMap<Id, Id>,
+    /// Windows whose creation was requested but whose owner closed before
+    /// they were created.
+    cancelled: BTreeSet<Id>,
+}
+
+impl Family {
+    fn set_parent(&mut self, id: Id, parent: Id) {
+        let _ = self.parents.insert(id, parent);
+    }
+
+    fn cancel(&mut self, id: Id) {
+        let _ = self.cancelled.insert(id);
+        self.forget(id);
+    }
+
+    /// Cancels the ids in `ids` that have a parent and are not `is_open`.
+    fn cancel_pending(&mut self, ids: &[Id], is_open: impl Fn(Id) -> bool) -> Vec<Id> {
+        let pending: Vec<Id> = ids
+            .iter()
+            .copied()
+            .filter(|id| self.parents.contains_key(id) && !is_open(*id))
+            .collect();
+
+        for &id in &pending {
+            self.cancel(id);
+        }
+
+        pending
+    }
+
+    /// Returns whether the creation of `id` was cancelled, and clears it.
+    fn take_cancelled(&mut self, id: Id) -> bool {
+        self.cancelled.remove(&id)
+    }
+
+    fn forget(&mut self, id: Id) {
+        let _ = self.parents.remove(&id);
+    }
+
+    /// Returns every window owned by `id`, directly or not, children
+    /// before their own parents.
+    fn descendants(&self, id: Id) -> Vec<Id> {
+        let mut result = Vec::new();
+
+        for (&child, &parent) in &self.parents {
+            if parent == id {
+                result.extend(self.descendants(child));
+                result.push(child);
+            }
+        }
+
+        result
+    }
 }
 
 impl<P, C> Manager<P, C>
@@ -45,7 +107,34 @@ where
         Self {
             aliases: BTreeMap::new(),
             entries: BTreeMap::new(),
+            family: Family::default(),
         }
+    }
+
+    /// Records that `parent` owns the window `id`.
+    pub fn set_parent(&mut self, id: Id, parent: Id) {
+        self.family.set_parent(id, parent);
+    }
+
+    /// Returns the windows owned by `id`, directly or not, children first.
+    pub fn descendants(&self, id: Id) -> Vec<Id> {
+        self.family.descendants(id)
+    }
+
+    /// Cancels the creation of every window in `ids` that is owned by a
+    /// window but is not open yet, and returns the cancelled ids.
+    ///
+    /// Only ids with a recorded parent are considered, so closing an
+    /// unrelated or already closed id records nothing.
+    pub fn cancel_pending(&mut self, ids: &[Id]) -> Vec<Id> {
+        self.family
+            .cancel_pending(ids, |id| self.entries.contains_key(&id))
+    }
+
+    /// Returns whether the creation of `id` was cancelled by
+    /// [`Manager::cancel_pending`]. A cancelled id is reported once.
+    pub fn take_cancelled(&mut self, id: Id) -> bool {
+        self.family.take_cancelled(id)
     }
 
     pub fn insert(
@@ -155,7 +244,10 @@ where
     }
 
     pub fn remove(&mut self, id: Id) -> Option<Window<P, C>> {
+        // Forget the parent link only for a window that existed: a pending owned
+        // window keeps it, so closing its owner later still closes it.
         let window = self.entries.remove(&id)?;
+        self.family.forget(id);
         let _ = self.aliases.remove(&window.raw.id());
 
         Some(window)
@@ -865,5 +957,79 @@ mod tests {
             cursor_visibility_after_grab(false, CursorGrab::None, false, true),
             None
         );
+    }
+
+    #[test]
+    fn descendants_are_children_first_and_exclude_unrelated_windows() {
+        let (root, child, grandchild, other) =
+            (Id::unique(), Id::unique(), Id::unique(), Id::unique());
+
+        let mut family = Family::default();
+        family.set_parent(child, root);
+        family.set_parent(grandchild, child);
+
+        assert_eq!(family.descendants(root), [grandchild, child]);
+        assert_eq!(family.descendants(child), [grandchild]);
+        assert!(family.descendants(other).is_empty());
+    }
+
+    #[test]
+    fn cancelled_windows_are_reported_once_and_forgotten() {
+        let (root, child) = (Id::unique(), Id::unique());
+
+        let mut family = Family::default();
+        family.set_parent(child, root);
+        family.cancel(child);
+
+        assert!(family.descendants(root).is_empty());
+        assert!(family.take_cancelled(child));
+        assert!(!family.take_cancelled(child));
+        assert!(!family.take_cancelled(root));
+    }
+
+    #[test]
+    fn only_pending_owned_windows_are_cancelled() {
+        let (root, open, pending, stray) = (Id::unique(), Id::unique(), Id::unique(), Id::unique());
+
+        let mut family = Family::default();
+        family.set_parent(open, root);
+        family.set_parent(pending, root);
+
+        let cancelled = family.cancel_pending(&[open, pending, stray, root], |id| id == open);
+
+        assert_eq!(cancelled, [pending]);
+        assert!(family.take_cancelled(pending));
+        assert!(!family.take_cancelled(stray));
+        assert!(!family.take_cancelled(root));
+        assert!(!family.take_cancelled(open));
+    }
+
+    #[test]
+    fn pending_owned_window_is_found_and_cancelled_by_its_owner() {
+        let (root, pending) = (Id::unique(), Id::unique());
+
+        let mut family = Family::default();
+        family.set_parent(pending, root);
+
+        // While no `forget` ran, the owner still lists the pending window.
+        // (`Manager::remove` is not covered: it needs a live window.)
+        let descendants = family.descendants(root);
+        assert_eq!(descendants, [pending]);
+
+        let cancelled = family.cancel_pending(&descendants, |_| false);
+
+        assert_eq!(cancelled, [pending]);
+        assert!(family.take_cancelled(pending));
+    }
+
+    #[test]
+    fn forgotten_windows_are_no_longer_descendants() {
+        let (root, child) = (Id::unique(), Id::unique());
+
+        let mut family = Family::default();
+        family.set_parent(child, root);
+        family.forget(child);
+
+        assert!(family.descendants(root).is_empty());
     }
 }

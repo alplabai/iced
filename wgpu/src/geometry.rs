@@ -9,6 +9,7 @@ use crate::graphics::geometry::{self, LineCap, LineDash, LineJoin, Path, Stroke,
 use crate::graphics::gradient::{self, Gradient};
 use crate::graphics::mesh::{self, Mesh};
 use crate::graphics::{Image, Text};
+use crate::primitive;
 use crate::text;
 
 use lyon::geom::euclid;
@@ -20,10 +21,11 @@ use std::sync::Arc;
 
 /// A part of a [`Geometry`] that can be drawn in a single layer, because
 /// its contents are already in the order in which a layer draws them:
-/// meshes first, then images, and text last.
+/// meshes first, then custom primitives, then images, and text last.
 #[derive(Debug, Default)]
 pub struct Section {
     pub meshes: Vec<Mesh>,
+    pub primitives: Vec<primitive::Instance>,
     pub images: Vec<Image>,
     pub text: Vec<Text>,
 }
@@ -47,6 +49,7 @@ pub struct Cache {
 #[derive(Debug, Clone, Default)]
 pub struct CachedSection {
     pub meshes: Option<mesh::Cache>,
+    pub primitives: Option<Arc<[primitive::Instance]>>,
     pub images: Option<Arc<[Image]>>,
     pub text: Option<text::Cache>,
 }
@@ -89,9 +92,16 @@ fn cache_section(
 ) -> CachedSection {
     let Section {
         meshes,
+        primitives,
         images,
         text,
     } = section;
+
+    let primitives = if primitives.is_empty() {
+        None
+    } else {
+        Some(Arc::from(primitives))
+    };
 
     let images = if images.is_empty() {
         None
@@ -118,6 +128,7 @@ fn cache_section(
             previous.text = text::Cache::new(group, text);
         }
 
+        previous.primitives = primitives;
         previous.images = images;
 
         previous
@@ -128,6 +139,7 @@ fn cache_section(
             } else {
                 Some(mesh::Cache::new(meshes))
             },
+            primitives,
             images,
             text: text::Cache::new(group, text),
         }
@@ -457,6 +469,7 @@ impl geometry::frame::Backend for Frame {
         for section in frame.into_sections() {
             let Section {
                 meshes,
+                primitives,
                 images,
                 text,
             } = section;
@@ -469,6 +482,11 @@ impl geometry::frame::Backend for Frame {
                 self.seal();
 
                 self.sections.current_mut().meshes.extend(meshes);
+            }
+
+            if !primitives.is_empty() {
+                self.begin(Kind::Primitive);
+                self.sections.current_mut().primitives.extend(primitives);
             }
 
             if !images.is_empty() {
@@ -524,6 +542,25 @@ impl geometry::frame::Backend for Frame {
             bounds,
             clip_bounds,
         });
+    }
+}
+
+impl<P: crate::Primitive> geometry::frame::DrawPrimitive<P> for Frame {
+    fn draw_primitive(&mut self, bounds: Rectangle, primitive: P) {
+        // A primitive cannot be rotated, so it covers the axis-aligned
+        // bounding box of the transformed rectangle (which also handles
+        // mirrored transforms, unlike `transform_rectangle`).
+        let bounds = self.transforms.current.bounding_box(bounds);
+
+        // Nothing to draw if the primitive is clipped away entirely.
+        let Some(instance) = primitive::Instance::new(bounds, primitive).clipped(self.clip_bounds)
+        else {
+            return;
+        };
+
+        self.begin(Kind::Primitive);
+
+        self.sections.current_mut().primitives.push(instance);
     }
 }
 
@@ -688,6 +725,29 @@ impl Transform {
         gradient
     }
 
+    /// The axis-aligned bounding box of the transformed `rectangle`.
+    fn bounding_box(&self, rectangle: Rectangle) -> Rectangle {
+        let corners = [
+            Vector::new(0.0, 0.0),
+            Vector::new(rectangle.width, 0.0),
+            Vector::new(0.0, rectangle.height),
+            Vector::new(rectangle.width, rectangle.height),
+        ]
+        .map(|corner| self.transform_point(rectangle.position() + corner));
+
+        let (min_x, max_x) = corners.iter().fold((f32::MAX, f32::MIN), |(min, max), p| {
+            (min.min(p.x), max.max(p.x))
+        });
+        let (min_y, max_y) = corners.iter().fold((f32::MAX, f32::MIN), |(min, max), p| {
+            (min.min(p.y), max.max(p.y))
+        });
+
+        Rectangle::new(
+            Point::new(min_x, min_y),
+            Size::new(max_x - min_x, max_y - min_y),
+        )
+    }
+
     fn transform_rectangle(&self, rectangle: Rectangle) -> (Rectangle, Radians) {
         let top_left = self.transform_point(rectangle.position());
         let top_right =
@@ -814,7 +874,8 @@ pub(super) fn dashed(path: &Path, line_dash: LineDash<'_>) -> Path {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graphics::geometry::frame::Backend as _;
+    use crate::core::Color;
+    use crate::graphics::geometry::frame::{Backend as _, DrawPrimitive};
 
     /// (meshes, atlas text runs) a frame holds after drawing `"R1"` at `size`.
     fn drawn(size: f32) -> (usize, usize) {
@@ -839,5 +900,416 @@ mod tests {
         assert!(meshes > 0 && text == 0, "{meshes} meshes, {text} text");
         let (meshes, text) = drawn(16.0);
         assert!(meshes == 0 && text > 0, "{meshes} meshes, {text} text");
+    }
+
+    /// A primitive that paints its bounds solid green.
+    #[derive(Debug)]
+    struct Green;
+
+    struct GreenPipeline(wgpu::RenderPipeline);
+
+    impl crate::primitive::Pipeline for GreenPipeline {
+        fn new(device: &wgpu::Device, _queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
+            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("green"),
+                source: wgpu::ShaderSource::Wgsl(
+                    "@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
+                        let p = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
+                        return vec4<f32>(p * 2.0 - 1.0, 0.0, 1.0);
+                    }
+                    @fragment fn fs() -> @location(0) vec4<f32> {
+                        return vec4<f32>(0.0, 1.0, 0.0, 1.0);
+                    }"
+                    .into(),
+                ),
+            });
+
+            GreenPipeline(
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some("green"),
+                    layout: None,
+                    vertex: wgpu::VertexState {
+                        module: &shader,
+                        entry_point: Some("vs"),
+                        compilation_options: wgpu::PipelineCompilationOptions::default(),
+                        buffers: &[],
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module: &shader,
+                        entry_point: Some("fs"),
+                        compilation_options: wgpu::PipelineCompilationOptions::default(),
+                        targets: &[Some(format.into())],
+                    }),
+                    primitive: wgpu::PrimitiveState::default(),
+                    depth_stencil: None,
+                    multisample: wgpu::MultisampleState::default(),
+                    multiview_mask: None,
+                    cache: None,
+                }),
+            )
+        }
+    }
+
+    impl crate::Primitive for Green {
+        type Pipeline = GreenPipeline;
+
+        fn prepare(
+            &self,
+            _pipeline: &mut GreenPipeline,
+            _device: &wgpu::Device,
+            _queue: &wgpu::Queue,
+            _bounds: &Rectangle,
+            _viewport: &crate::graphics::Viewport,
+        ) {
+        }
+
+        fn draw(&self, pipeline: &GreenPipeline, render_pass: &mut wgpu::RenderPass<'_>) -> bool {
+            render_pass.set_pipeline(&pipeline.0);
+            render_pass.draw(0..3, 0..1);
+
+            true
+        }
+    }
+
+    fn rectangle(frame: &mut Frame, x: f32, y: f32, color: Color) {
+        frame.fill_rectangle(Point::new(x, y), Size::new(40.0, 40.0), color);
+    }
+
+    #[test]
+    fn primitives_split_sections_in_draw_order() {
+        let bounds = Rectangle::new(Point::ORIGIN, Size::new(10.0, 10.0));
+        let mut frame = Frame::new(bounds);
+
+        rectangle(&mut frame, 0.0, 0.0, Color::BLACK);
+        DrawPrimitive::draw_primitive(&mut frame, bounds, Green);
+        DrawPrimitive::draw_primitive(&mut frame, bounds, Green);
+        rectangle(&mut frame, 0.0, 0.0, Color::BLACK);
+
+        let Geometry::Live { sections } = frame.into_geometry() else {
+            unreachable!("a new frame is live");
+        };
+
+        // Shapes, then primitives, then shapes again cannot share a layer.
+        let counts: Vec<_> = sections
+            .iter()
+            .map(|s| (s.meshes.len(), s.primitives.len()))
+            .collect();
+
+        assert_eq!(counts, vec![(1, 2), (1, 0)]);
+    }
+
+    /// Renders `geometry` offscreen and returns the RGBA pixel at `(x, y)`
+    /// of a 100x100 image, or `None` if there is no GPU adapter.
+    fn render(geometry: impl Fn() -> Geometry) -> Option<impl Fn(usize, usize) -> [u8; 4]> {
+        use crate::graphics::geometry::Renderer as _;
+
+        let mut renderer =
+            futures::executor::block_on(<crate::Renderer as crate::renderer::Headless>::new(
+                core::renderer::Settings::default(),
+                None,
+            ))?;
+
+        renderer.draw_geometry(geometry());
+
+        let size = Size::new(100, 100);
+        let pixels = renderer.screenshot(
+            &crate::graphics::Viewport::with_physical_size(
+                size,
+                core::renderer::Scale {
+                    window: 1.0,
+                    application: 1.0,
+                },
+            ),
+            Color::TRANSPARENT,
+        );
+
+        Some(move |x: usize, y: usize| {
+            let i = (y * 100 + x) * 4;
+            [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
+        })
+    }
+
+    /// Reports a GPU test that could not run. Set `ICED_REQUIRE_GPU_TESTS` to
+    /// make it fail instead of passing silently.
+    fn skipped() {
+        assert!(
+            std::env::var_os("ICED_REQUIRE_GPU_TESTS").is_none(),
+            "no GPU adapter available, but ICED_REQUIRE_GPU_TESTS is set"
+        );
+
+        eprintln!("SKIPPED: no GPU adapter available (set ICED_REQUIRE_GPU_TESTS=1 to fail)");
+    }
+
+    /// A red square, a green primitive on top of it, and a blue square on top
+    /// of the primitive, all drawn in a single frame.
+    fn sandwich() -> Geometry {
+        let mut frame = Frame::new(Rectangle::with_size(Size::new(100.0, 100.0)));
+
+        rectangle(&mut frame, 10.0, 10.0, Color::from_rgb(1.0, 0.0, 0.0));
+        DrawPrimitive::draw_primitive(
+            &mut frame,
+            Rectangle::new(Point::new(30.0, 30.0), Size::new(40.0, 40.0)),
+            Green,
+        );
+        rectangle(&mut frame, 50.0, 50.0, Color::from_rgb(0.0, 0.0, 1.0));
+
+        frame.into_geometry()
+    }
+
+    const RED: [u8; 4] = [255, 0, 0, 255];
+    const GREEN: [u8; 4] = [0, 255, 0, 255];
+    const BLUE: [u8; 4] = [0, 0, 255, 255];
+
+    #[test]
+    fn primitive_renders_between_geometry() {
+        let Some(pixel) = render(sandwich) else {
+            return skipped();
+        };
+
+        assert_eq!(pixel(15, 15), RED, "red only");
+        assert_eq!(
+            pixel(35, 35),
+            GREEN,
+            "the primitive is above earlier shapes"
+        );
+        assert_eq!(pixel(65, 65), BLUE, "later shapes are above the primitive");
+        assert_eq!(pixel(55, 35), GREEN, "primitive only");
+        assert_eq!(pixel(95, 95), [0, 0, 0, 0], "background");
+    }
+
+    #[test]
+    fn cached_primitive_renders_between_geometry() {
+        let cached = || {
+            let cache = sandwich().cache(cache::Group::unique(), None);
+
+            Geometry::load(&cache)
+        };
+
+        let Some(pixel) = render(cached) else {
+            return skipped();
+        };
+
+        assert_eq!(pixel(15, 15), RED, "red only");
+        assert_eq!(
+            pixel(35, 35),
+            GREEN,
+            "the primitive is above earlier shapes"
+        );
+        assert_eq!(pixel(65, 65), BLUE, "later shapes are above the primitive");
+    }
+
+    /// Geometry of a frame of the given size, filled in by `draw`.
+    fn primitive_frame(frame_size: Size, draw: impl FnOnce(&mut Frame)) -> impl Fn() -> Geometry {
+        let mut frame = Frame::new(Rectangle::with_size(frame_size));
+        draw(&mut frame);
+        let geometry = std::cell::RefCell::new(Some(frame.into_geometry()));
+
+        move || geometry.borrow_mut().take().expect("rendered once")
+    }
+
+    const NONE: [u8; 4] = [0, 0, 0, 0];
+
+    #[test]
+    fn primitive_is_clipped_to_the_frame() {
+        let geometry = primitive_frame(Size::new(50.0, 50.0), |frame| {
+            DrawPrimitive::draw_primitive(
+                frame,
+                Rectangle::new(Point::new(30.0, 30.0), Size::new(60.0, 60.0)),
+                Green,
+            );
+        });
+
+        let Some(pixel) = render(geometry) else {
+            return skipped();
+        };
+
+        assert_eq!(pixel(40, 40), GREEN, "inside the frame");
+        assert_eq!(pixel(60, 60), NONE, "past the frame");
+        assert_eq!(pixel(85, 85), NONE, "past the frame, inside the bounds");
+    }
+
+    #[test]
+    fn primitive_is_clipped_to_with_clip_region() {
+        let geometry = primitive_frame(Size::new(100.0, 100.0), |frame| {
+            let mut clipped = frame.draft(Rectangle::new(
+                Point::new(20.0, 20.0),
+                Size::new(40.0, 40.0),
+            ));
+
+            DrawPrimitive::draw_primitive(
+                &mut clipped,
+                Rectangle::new(Point::new(10.0, 10.0), Size::new(80.0, 80.0)),
+                Green,
+            );
+
+            frame.paste(clipped);
+        });
+
+        let Some(pixel) = render(geometry) else {
+            return skipped();
+        };
+
+        assert_eq!(pixel(15, 15), NONE, "before the region");
+        assert_eq!(pixel(30, 30), GREEN, "inside the region");
+        assert_eq!(pixel(70, 70), NONE, "after the region");
+    }
+
+    #[test]
+    fn primitive_follows_a_flipped_transform() {
+        let geometry = primitive_frame(Size::new(100.0, 100.0), |frame| {
+            frame.translate(Vector::new(0.0, 80.0));
+            frame.scale_nonuniform(Vector::new(1.0, -1.0));
+
+            // Y-up: covers x in [10, 40] and y in [30, 70] on screen.
+            DrawPrimitive::draw_primitive(
+                frame,
+                Rectangle::new(Point::new(10.0, 10.0), Size::new(30.0, 40.0)),
+                Green,
+            );
+        });
+
+        let Some(pixel) = render(geometry) else {
+            return skipped();
+        };
+
+        assert_eq!(pixel(20, 50), GREEN, "where the flipped rectangle is");
+        assert_eq!(pixel(20, 20), NONE, "above it");
+        assert_eq!(pixel(20, 75), NONE, "below it");
+        assert_eq!(pixel(60, 50), NONE, "beside it");
+    }
+
+    #[test]
+    fn primitive_bounds_are_the_bounding_box_of_a_rotation() {
+        let mut frame = Frame::new(Rectangle::with_size(Size::new(100.0, 100.0)));
+
+        frame.translate(Vector::new(50.0, 50.0));
+        frame.rotate(Radians(std::f32::consts::FRAC_PI_2));
+
+        // A 20x10 rectangle turned a quarter turn is 10x20.
+        DrawPrimitive::draw_primitive(
+            &mut frame,
+            Rectangle::new(Point::ORIGIN, Size::new(20.0, 10.0)),
+            Green,
+        );
+
+        let Geometry::Live { sections } = frame.into_geometry() else {
+            unreachable!("a new frame is live");
+        };
+
+        let bounds = sections[0].primitives[0].bounds;
+
+        assert!((bounds.x - 40.0).abs() < 1e-3, "{bounds:?}");
+        assert!((bounds.y - 50.0).abs() < 1e-3, "{bounds:?}");
+        assert!((bounds.width - 10.0).abs() < 1e-3, "{bounds:?}");
+        assert!((bounds.height - 20.0).abs() < 1e-3, "{bounds:?}");
+    }
+
+    #[test]
+    fn primitive_outside_the_frame_is_not_drawn() {
+        let mut frame = Frame::new(Rectangle::with_size(Size::new(50.0, 50.0)));
+
+        DrawPrimitive::draw_primitive(
+            &mut frame,
+            Rectangle::new(Point::new(200.0, 200.0), Size::new(40.0, 40.0)),
+            Green,
+        );
+
+        let Geometry::Live { sections } = frame.into_geometry() else {
+            unreachable!("a new frame is live");
+        };
+
+        assert!(sections.iter().all(|s| s.primitives.is_empty()));
+    }
+
+    #[test]
+    fn primitive_clip_is_inside_its_bounds() {
+        let mut frame = Frame::new(Rectangle::with_size(Size::new(50.0, 50.0)));
+
+        DrawPrimitive::draw_primitive(
+            &mut frame,
+            Rectangle::new(Point::new(30.0, 30.0), Size::new(60.0, 60.0)),
+            Green,
+        );
+
+        let Geometry::Live { sections } = frame.into_geometry() else {
+            unreachable!("a new frame is live");
+        };
+
+        let instance = &sections[0].primitives[0];
+
+        assert_eq!(
+            instance.clip_bounds,
+            Rectangle::new(Point::new(30.0, 30.0), Size::new(20.0, 20.0))
+        );
+        assert_eq!(instance.bounds.width, 60.0);
+    }
+
+    #[test]
+    fn primitive_far_larger_than_the_device_limits_does_not_panic() {
+        let geometry = primitive_frame(Size::new(100.0, 100.0), |frame| {
+            DrawPrimitive::draw_primitive(
+                frame,
+                Rectangle::new(
+                    Point::new(-200_000.0, -200_000.0),
+                    Size::new(400_000.0, 400_000.0),
+                ),
+                Green,
+            );
+        });
+
+        let Some(pixel) = render(geometry) else {
+            return skipped();
+        };
+
+        assert_eq!(pixel(50, 50), NONE, "skipped, not stretched or crashed");
+    }
+
+    /// A [`Green`] that records whether it was prepared.
+    #[derive(Debug)]
+    struct Probe(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+    impl crate::Primitive for Probe {
+        type Pipeline = GreenPipeline;
+
+        fn prepare(
+            &self,
+            _pipeline: &mut GreenPipeline,
+            _device: &wgpu::Device,
+            _queue: &wgpu::Queue,
+            _bounds: &Rectangle,
+            _viewport: &crate::graphics::Viewport,
+        ) {
+            self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+
+        fn draw(&self, pipeline: &GreenPipeline, render_pass: &mut wgpu::RenderPass<'_>) -> bool {
+            crate::Primitive::draw(&Green, pipeline, render_pass)
+        }
+    }
+
+    #[test]
+    fn primitive_far_larger_than_the_device_limits_is_not_prepared() {
+        let prepared = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let probe = Probe(prepared.clone());
+
+        let geometry = primitive_frame(Size::new(100.0, 100.0), move |frame| {
+            DrawPrimitive::draw_primitive(
+                frame,
+                Rectangle::new(
+                    Point::new(-200_000.0, -200_000.0),
+                    Size::new(400_000.0, 400_000.0),
+                ),
+                probe,
+            );
+        });
+
+        if render(geometry).is_none() {
+            return skipped();
+        }
+
+        assert!(
+            !prepared.load(std::sync::atomic::Ordering::Relaxed),
+            "prepare must be skipped for a primitive the render pass skips"
+        );
     }
 }

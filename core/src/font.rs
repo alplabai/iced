@@ -1,4 +1,5 @@
 //! Load and use fonts.
+use bitflags::bitflags;
 use std::hash::Hash;
 
 /// A font.
@@ -12,6 +13,8 @@ pub struct Font {
     pub stretch: Stretch,
     /// The [`Style`] of the [`Font`].
     pub style: Style,
+    /// The OpenType [`Features`] of the [`Font`].
+    pub features: Features,
 }
 
 impl Font {
@@ -21,6 +24,7 @@ impl Font {
         weight: Weight::Normal,
         stretch: Stretch::Normal,
         style: Style::Normal,
+        features: Features::empty(),
     };
 
     /// A monospaced font with normal [`Weight`].
@@ -58,6 +62,38 @@ impl Font {
     /// Sets the [`Style`] of the [`Font`].
     pub const fn style(self, style: Style) -> Self {
         Self { style, ..self }
+    }
+
+    /// Sets the OpenType [`Features`] of the [`Font`].
+    ///
+    /// A feature only has an effect if the font face supports it.
+    pub const fn features(self, features: Features) -> Self {
+        Self { features, ..self }
+    }
+}
+
+bitflags! {
+    /// A set of OpenType features to toggle when shaping text.
+    ///
+    /// A feature only has an effect if the font face supports it, and only
+    /// when text is shaped with [`Shaping::Advanced`](crate::text::Shaping::Advanced).
+    /// [`Shaping::Auto`](crate::text::Shaping::Auto) is promoted to advanced
+    /// shaping for a font that requests features, even for ASCII text; an
+    /// explicit [`Shaping::Basic`](crate::text::Shaping::Basic) ignores them.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+    pub struct Features: u8 {
+        /// Tabular figures (`tnum`): all digits have the same advance.
+        const TNUM = 1 << 0;
+        /// Slashed zero (`zero`).
+        const ZERO = 1 << 1;
+        /// Disables standard and contextual ligatures (`liga` and `clig`).
+        const LIGA_OFF = 1 << 2;
+        /// Disables contextual alternates (`calt`).
+        const CALT_OFF = 1 << 3;
+        /// Small capitals (`smcp`).
+        const SMCP = 1 << 4;
+        /// Stylistic set 1 (`ss01`).
+        const SS01 = 1 << 5;
     }
 }
 
@@ -198,3 +234,39 @@ pub enum Style {
 /// A font error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::Hasher;
+
+    fn hash(font: Font) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        font.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    #[test]
+    fn features_default_to_empty() {
+        assert_eq!(Font::DEFAULT.features, Features::empty());
+        assert_eq!(Font::default(), Font::DEFAULT);
+    }
+
+    #[test]
+    fn features_builder_sets_features() {
+        let font = Font::MONOSPACE.features(Features::TNUM | Features::ZERO);
+
+        assert_eq!(font.family, Family::Monospace);
+        assert_eq!(font.features, Features::TNUM | Features::ZERO);
+    }
+
+    #[test]
+    fn fonts_differing_only_in_features_are_distinct() {
+        let plain = Font::DEFAULT;
+        let tabular = Font::DEFAULT.features(Features::TNUM);
+
+        assert_ne!(plain, tabular);
+        assert_ne!(hash(plain), hash(tabular));
+    }
+}
