@@ -334,3 +334,72 @@ fn focus_ring_is_drawn_inside_the_button() {
         let _ = std::fs::remove_file(directory.join(format!("button_ring_{name}-tiny-skia.png")));
     }
 }
+
+/// The ring must not paint outside a clipping ancestor (a short scrollable).
+#[test]
+fn focus_ring_is_clipped_by_the_viewport() {
+    use iced_widget::core::{Color, Length};
+    use iced_widget::scrollable;
+
+    let directory = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let theme = Theme::Light;
+
+    let render = |focus: bool| {
+        let mut simulator = Simulator::new(column![
+            scrollable(
+                button(text(""))
+                    .width(Length::Fixed(40.0))
+                    .height(Length::Fixed(20.0))
+                    .padding(0)
+                    .style(|_, _| button::Style {
+                        background: Some(Color::WHITE.into()),
+                        focus_ring: Some(
+                            iced_widget::core::border::rounded(0)
+                                .color(Color::BLACK)
+                                .width(2),
+                        ),
+                        ..button::Style::default()
+                    })
+                    .on_press(Message::First),
+            )
+            .height(Length::Fixed(10.0))
+        ]);
+
+        if focus {
+            next(&mut simulator);
+        }
+
+        let name = if focus {
+            "clip_ring_on"
+        } else {
+            "clip_ring_off"
+        };
+        let path = directory.join(format!("{name}.png"));
+        let tiny = directory.join(format!("{name}-tiny-skia.png"));
+        let _ = std::fs::remove_file(&tiny);
+
+        let _ = simulator
+            .snapshot(&theme)
+            .unwrap()
+            .matches_image(&path)
+            .unwrap();
+
+        let mut reader =
+            png::Decoder::new(std::io::BufReader::new(std::fs::File::open(&tiny).unwrap()))
+                .read_info()
+                .unwrap();
+        let mut bytes = vec![0; reader.output_buffer_size().unwrap()];
+        let info = reader.next_frame(&mut bytes).unwrap();
+        let _ = std::fs::remove_file(&tiny);
+
+        // Bottom ring band (y 18..20 at 2x), below the 10px clip.
+        let i = (38 * info.width as usize + 30) * 4;
+        [bytes[i], bytes[i + 1], bytes[i + 2]]
+    };
+
+    assert_eq!(
+        render(true),
+        render(false),
+        "the ring is clipped to the viewport"
+    );
+}

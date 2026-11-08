@@ -455,6 +455,9 @@ where
             );
         }
 
+        // Layers replace the parent clip, so the ring is clipped by hand.
+        let ring_clip = bounds.intersection(viewport);
+
         let viewport = if self.clip {
             bounds.intersection(viewport).unwrap_or(*viewport)
         } else {
@@ -476,8 +479,11 @@ where
         // The ring is drawn inside the bounds, in a layer of its own so it
         // is composited above every kind of content (images, SVGs, text,
         // meshes), and never depends on space outside the layout.
-        if is_focused && let Some(ring) = style.focus_ring {
-            renderer.with_layer(bounds, |renderer| {
+        if is_focused
+            && let Some(ring) = style.focus_ring
+            && let Some(ring_clip) = ring_clip
+        {
+            renderer.with_layer(ring_clip, |renderer| {
                 renderer.fill_quad(
                     renderer::Quad {
                         bounds,
