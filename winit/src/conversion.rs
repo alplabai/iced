@@ -187,7 +187,8 @@ pub fn detach_while_dragged(window: &winit::window::Window, parent: &winit::wind
     use objc2::rc::{Retained, Weak};
     use objc2::runtime::ProtocolObject;
     use objc2_app_kit::{
-        NSWindowDidMoveNotification, NSWindowWillCloseNotification, NSWindowWillMoveNotification,
+        NSWindowDidMoveNotification, NSWindowOrderingMode, NSWindowWillCloseNotification,
+        NSWindowWillMoveNotification,
     };
     use objc2_foundation::NSObjectProtocol;
     use objc2_foundation::{NSNotification, NSNotificationCenter};
@@ -209,6 +210,8 @@ pub fn detach_while_dragged(window: &winit::window::Window, parent: &winit::wind
                 && child.parentWindow().is_some()
             {
                 parent.removeChildWindow(&child);
+                // Detaching drops the window behind its parent; keep it above.
+                child.orderWindow_relativeTo(NSWindowOrderingMode::Above, parent.windowNumber());
                 reattach_when_released(&child, &parent);
             }
         })
