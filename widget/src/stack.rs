@@ -107,6 +107,65 @@ impl<W> Stack<W> {
     }
 }
 
+impl<'a, Message, Theme, Renderer> Stack<crate::core::Element<'a, Message, Theme, Renderer>> {
+    /// Adds any [`Widget`] to the [`Stack`], boxing it into an
+    /// [`Element`](crate::core::Element) first.
+    ///
+    /// `None` children are skipped before boxing, so they cost no heap
+    /// allocation.
+    ///
+    /// This is a shorthand for `push(child._boxed())`, useful when the
+    /// children have different types.
+    ///
+    /// ```
+    /// # use iced_widget::core::Element;
+    /// # use iced_widget::{button, text, Stack};
+    /// let view: Stack<Element<'_, (), iced_widget::Theme, iced_widget::Renderer>> = Stack::new()
+    ///     .push_boxed(text("Hello"))
+    ///     .push_boxed(button("Click"))
+    ///     .push_boxed(None::<iced_widget::Text<'_>>);
+    /// ```
+    pub fn push_boxed(self, child: impl Widget<Message, Theme, Renderer> + 'a) -> Self {
+        if child.is_void() {
+            return self;
+        }
+
+        self.push(child._boxed())
+    }
+
+    /// Adds any [`Widget`] under the [`Stack`], boxing it into an
+    /// [`Element`](crate::core::Element) first.
+    ///
+    /// Like [`push_boxed`](Self::push_boxed), a void child (such as `None`)
+    /// is skipped.
+    ///
+    /// ```
+    /// # use iced_widget::core::Element;
+    /// # use iced_widget::{button, text, Stack};
+    /// let view: Stack<Element<'_, (), iced_widget::Theme, iced_widget::Renderer>> = Stack::new()
+    ///     .push_boxed(text("Hello"))
+    ///     .push_under_boxed(button("Click"))
+    ///     .push_under_boxed(None::<iced_widget::Text<'_>>);
+    /// ```
+    pub fn push_under_boxed(self, child: impl Widget<Message, Theme, Renderer> + 'a) -> Self {
+        if child.is_void() {
+            return self;
+        }
+
+        self.push_under(child._boxed())
+    }
+
+    /// Extends the [`Stack`] with the given children, boxing each of them
+    /// into an [`Element`](crate::core::Element) first.
+    pub fn extend_boxed<I>(self, children: I) -> Self
+    where
+        I: IntoIterator,
+        I::Item: Widget<Message, Theme, Renderer> + 'a,
+    {
+        children.into_iter().fold(self, Self::push_boxed)
+    }
+}
+
 impl<W> Default for Stack<W> {
     fn default() -> Self {
         Self::new()

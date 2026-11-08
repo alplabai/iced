@@ -1096,6 +1096,24 @@ async fn run_instance<P>(
                                     // This is an unrecoverable error.
                                     panic!("{error:?}");
                                 }
+                                compositor::SurfaceError::DeviceLost => {
+                                    present_span.finish();
+
+                                    // The device cannot recover and recreating the surface
+                                    // will not help. Skip the frame without requesting a
+                                    // redraw, so the loop does not spin.
+                                    if window
+                                        .surface_error_at
+                                        .is_none_or(|at| at.elapsed() > Duration::from_secs(1))
+                                    {
+                                        window.surface_error_at = Some(Instant::now());
+
+                                        log::error!(
+                                            "The graphics device was lost; the window \
+                                             will not be redrawn anymore."
+                                        );
+                                    }
+                                }
                                 compositor::SurfaceError::Occluded => {
                                     present_span.finish();
 
@@ -1814,9 +1832,17 @@ fn run_action<'a, P, C>(
                         window.state.background_color(),
                     );
 
+                    // Empty bytes mean there is nothing to show (for example
+                    // a lost device), so do not claim a size for them.
+                    let size = if bytes.is_empty() {
+                        Size::new(0, 0)
+                    } else {
+                        window.state.physical_size()
+                    };
+
                     let _ = channel.send(core::window::Screenshot::new(
                         bytes,
-                        window.state.physical_size(),
+                        size,
                         window.state.scale_factor(),
                     ));
                 }

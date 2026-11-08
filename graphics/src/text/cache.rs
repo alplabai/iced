@@ -54,7 +54,7 @@ impl Cache {
             buffer.set_text(
                 key.content,
                 &text::to_attributes(key.font),
-                text::to_shaping(key.shaping, key.content),
+                text::to_shaping(key.shaping, key.content, key.font),
                 None,
             );
             buffer.shape_until_scroll(font_system, false);
@@ -148,4 +148,32 @@ pub struct Entry {
     pub buffer: cosmic_text::Buffer,
     /// The minimum bounds of the text.
     pub min_bounds: Size,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::font;
+
+    fn key(font: Font) -> Key<'static> {
+        Key {
+            content: "1.00",
+            size: 16.0,
+            line_height: 20.0,
+            font,
+            bounds: Size::new(100.0, 20.0),
+            shaping: text::Shaping::Basic,
+            align_x: text::Alignment::Default,
+            wrapping: text::Wrapping::default(),
+            ellipsis: text::Ellipsis::default(),
+        }
+    }
+
+    #[test]
+    fn fonts_differing_only_in_features_do_not_collide() {
+        let plain = key(Font::DEFAULT).hash(FxHasher::default());
+        let tabular = key(Font::DEFAULT.features(font::Features::TNUM)).hash(FxHasher::default());
+
+        assert_ne!(plain, tabular);
+    }
 }
