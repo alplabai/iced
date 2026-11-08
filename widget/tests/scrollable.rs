@@ -1963,3 +1963,28 @@ fn on_scroll_action_can_scroll() {
     assert_eq!(offsets, vec![1000.0]);
     assert!(sources.into_iter().all(|source| source == Source::Action));
 }
+
+#[test]
+fn reveal_on_an_end_anchored_scrollable_targets_the_content_position() {
+    let mut simulator = simulate(element(3000, 200).anchor_bottom());
+
+    // Let the widget lay out and settle at the bottom first
+    let mut instant = Instant::now();
+    step_frames(&mut simulator, &mut instant, 1);
+
+    // Starts at the bottom, so the span at 1000 is far above the viewport
+    let mut operation = operation::scrollable::reveal(
+        ELEMENT_ID,
+        Rectangle::new(Point::new(0.0, 1000.0), Size::new(10.0, 20.0)),
+        operation::Animation::Instant,
+    );
+
+    simulator.operate(&mut operation);
+    step_frames(&mut simulator, &mut instant, 2);
+
+    let scroll = simulator.into_messages().last().expect("a scroll");
+
+    // The top of the viewport is at 1000, measured from the top of the
+    // content, and not mirrored to 1800
+    assert_eq!(scroll.viewport.absolute_offset_reversed().y, 1000.0);
+}
