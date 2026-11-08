@@ -27,6 +27,7 @@ pub mod float;
 pub mod grid;
 pub mod keyed;
 pub mod lazy;
+pub mod list;
 pub mod overlay;
 pub mod pane_grid;
 pub mod pick_list;
@@ -53,6 +54,9 @@ mod helpers;
 pub use helpers::*;
 
 #[doc(no_inline)]
+pub use list::virtual_list;
+
+#[doc(no_inline)]
 pub use button::Button;
 #[doc(no_inline)]
 pub use checkbox::Checkbox;
@@ -72,6 +76,8 @@ pub use grid::Grid;
 pub use hover::Hover;
 #[doc(no_inline)]
 pub use lazy::Lazy;
+#[doc(no_inline)]
+pub use list::VirtualList;
 #[doc(no_inline)]
 pub use mouse_area::MouseArea;
 #[doc(no_inline)]
