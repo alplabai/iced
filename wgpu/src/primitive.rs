@@ -49,6 +49,9 @@ pub trait Primitive: Debug + MaybeSend + MaybeSync + 'static {
     /// handled. The key `0` is reserved for the default [`Pipeline`], which is
     /// never evicted; do not derive it from data.
     ///
+    /// Every new key compiles a pipeline, so keys should come from a small,
+    /// stable set rather than from per-frame data.
+    ///
     /// The key is read once, when the [`Primitive`] is submitted for
     /// drawing, and used for the whole frame. It should still be stable for
     /// the life of the value.
@@ -111,8 +114,11 @@ pub trait Primitive: Debug + MaybeSend + MaybeSync + 'static {
 pub trait Pipeline: Any + MaybeSend + MaybeSync {
     /// Creates the [`Pipeline`] of a [`Primitive`].
     ///
-    /// This will only be called once, when the first [`Primitive`] with this kind
-    /// of [`Pipeline`] is encountered.
+    /// This is called once per [`Primitive::pipeline_key`] (through the default
+    /// [`new_keyed`](Self::new_keyed)), when the first [`Primitive`] with this
+    /// kind of [`Pipeline`] and key is encountered. For a non-zero key it is
+    /// called again after the pipeline has been dropped by [`Storage::trim`];
+    /// do not do one-time global work here.
     fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self
     where
         Self: Sized;
@@ -120,8 +126,10 @@ pub trait Pipeline: Any + MaybeSend + MaybeSync {
     /// Creates the [`Pipeline`] of a [`Primitive`] for the given
     /// [`Primitive::pipeline_key`].
     ///
-    /// This will only be called once per key. By default, it ignores the key
-    /// and delegates to [`new`](Self::new).
+    /// This is called the first time a key is encountered, and again if that
+    /// keyed pipeline was dropped by [`Storage::trim`] (key `0` is never
+    /// dropped). By default, it ignores the key and delegates to
+    /// [`new`](Self::new).
     fn new_keyed(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
