@@ -51,6 +51,10 @@ pub enum MacOS {
     ///
     /// [bundled]: https://developer.apple.com/library/archive/documentation/CoreFoundation/Conceptual/CFBundles/BundleTypes/BundleTypes.html#//apple_ref/doc/uid/10000123i-CH101-SW19
     ReceivedUrl(String),
+
+    /// Triggered when the application is asked to quit (Command+Q, Dock ▸ Quit,
+    /// logout) and `Settings::exit_on_quit_request` is `false`.
+    QuitRequested,
 }
 
 /// A stream of runtime events.
