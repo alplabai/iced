@@ -1208,6 +1208,15 @@ async fn run_instance<P>(
                         } else {
                             window.state.update(&program, &window.raw, &window_event);
 
+                            if matches!(
+                                window_event,
+                                winit::event::WindowEvent::Resized(_)
+                                    | winit::event::WindowEvent::Occluded(_)
+                                    | winit::event::WindowEvent::Focused(_)
+                            ) {
+                                window.state.mark_mode_dirty();
+                            }
+
                             if let Some(event) = conversion::window_event(
                                 window_event,
                                 window.state.scale_factor(),
@@ -1221,6 +1230,12 @@ async fn run_instance<P>(
                         if actions > 0 {
                             proxy.free_slots(actions);
                             actions = 0;
+                        }
+
+                        for (id, window) in window_manager.iter_mut() {
+                            if let Some(event) = window.state.poll_mode_change(&window.raw) {
+                                events.push((id, core::Event::Window(event)));
+                            }
                         }
 
                         if events.is_empty() && messages.is_empty() && window_manager.is_idle() {
@@ -1626,6 +1641,7 @@ fn run_action<'a, P, C>(
             }
             window::Action::SetResizable(id, resizable) => {
                 if let Some(window) = window_manager.get_mut(id) {
+                    window.state.sync_maximized_hint(&window.raw);
                     window.raw.set_resizable(resizable);
                 }
             }
@@ -1643,6 +1659,7 @@ fn run_action<'a, P, C>(
             window::Action::Maximize(id, maximized) => {
                 if let Some(window) = window_manager.get_mut(id) {
                     window.raw.set_maximized(maximized);
+                    window.state.set_maximized_hint(maximized);
                 }
             }
             window::Action::GetMinimized(id, channel) => {
@@ -1653,6 +1670,7 @@ fn run_action<'a, P, C>(
             window::Action::Minimize(id, minimized) => {
                 if let Some(window) = window_manager.get_mut(id) {
                     window.raw.set_minimized(minimized);
+                    window.state.mark_mode_dirty();
                 }
             }
             window::Action::GetPosition(id, channel) => {
@@ -1715,6 +1733,8 @@ fn run_action<'a, P, C>(
                     window
                         .raw
                         .set_fullscreen(conversion::fullscreen(window.raw.current_monitor(), mode));
+
+                    window.state.mark_mode_dirty();
                 }
             }
             window::Action::SetIcon(id, icon) => {
@@ -1735,11 +1755,15 @@ fn run_action<'a, P, C>(
             }
             window::Action::ToggleMaximize(id) => {
                 if let Some(window) = window_manager.get_mut(id) {
-                    window.raw.set_maximized(!window.raw.is_maximized());
+                    let maximized = !window.raw.is_maximized();
+
+                    window.raw.set_maximized(maximized);
+                    window.state.set_maximized_hint(maximized);
                 }
             }
             window::Action::ToggleDecorations(id) => {
                 if let Some(window) = window_manager.get_mut(id) {
+                    window.state.sync_maximized_hint(&window.raw);
                     window.raw.set_decorations(!window.raw.is_decorated());
                 }
             }
