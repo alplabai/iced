@@ -28,25 +28,60 @@ const BUCKETS_PER_OCTAVE: f32 = 4.0;
 /// grow with every glyph, size and zoom level ever drawn as outlines.
 const MAX_MESHES: usize = 16 * 1024;
 
-thread_local! {
-    static MESHES: RefCell<HashMap<(GlyphKey, i32), Rc<LocalMesh>>> =
-        RefCell::new(HashMap::new());
+/// The most mesh data, in bytes, the cache holds before it is emptied. Large
+/// glyphs at high zoom have far more vertices than small ones, so the entry
+/// count alone does not bound memory.
+const MAX_MESH_BYTES: usize = 64 * 1024 * 1024;
+
+/// The largest tolerance bucket. Beyond it the glyph-local tolerance nears
+/// lyon's `f32` epsilon-squared debug assertion; such scales are far past any
+/// real zoom.
+const MAX_BUCKET: i32 = 160;
+
+#[derive(Default)]
+struct Cache {
+    meshes: HashMap<(GlyphKey, i32), Rc<LocalMesh>>,
+    /// The bytes of mesh data in `meshes`.
+    bytes: usize,
 }
 
-/// The tolerance bucket of a frame transform: its scale rounded up to a
-/// quarter octave, so one mesh serves every transform in the bucket. `None`
-/// when the transform collapses or blows up the outline.
+impl Cache {
+    fn insert(&mut self, key: (GlyphKey, i32), mesh: Rc<LocalMesh>) {
+        let bytes = size_of_mesh(&mesh);
+
+        if self.meshes.len() >= MAX_MESHES || self.bytes + bytes > MAX_MESH_BYTES {
+            // Replace rather than `clear`, so the table's memory goes too.
+            *self = Cache::default();
+        }
+
+        self.bytes += bytes;
+        let _ = self.meshes.insert(key, mesh);
+    }
+}
+
+fn size_of_mesh(mesh: &LocalMesh) -> usize {
+    mesh.vertices.len() * size_of::<[f32; 2]>() + mesh.indices.len() * size_of::<u32>()
+}
+
+thread_local! {
+    static MESHES: RefCell<Cache> = RefCell::new(Cache::default());
+}
+
+/// The tolerance bucket of a frame transform: its largest stretch rounded up
+/// to a quarter octave, so one mesh serves every transform in the bucket.
+/// `None` when the transform collapses entirely, is not finite, or stretches
+/// past `MAX_BUCKET`.
 pub(super) fn bucket(transform: &Transform) -> Option<i32> {
     // The largest singular value of the linear part is its largest stretch,
-    // so a mesh flattened for it is fine enough in every direction.
-    let f2 = transform.m11.powi(2)
-        + transform.m12.powi(2)
-        + transform.m21.powi(2)
-        + transform.m22.powi(2);
-    let det = transform.m11 * transform.m22 - transform.m12 * transform.m21;
-    let scale = ((f2 + (f2 * f2 - 4.0 * det * det).max(0.0).sqrt()) / 2.0).sqrt();
+    // so a mesh flattened for it is fine enough in every direction. This
+    // closed form has no cancellation, unlike the root of the characteristic
+    // polynomial.
+    let (a, b, c, d) = (transform.m11, transform.m12, transform.m21, transform.m22);
+    let scale = (f32::hypot(a + d, b - c) + f32::hypot(a - d, b + c)) / 2.0;
 
-    (scale.is_finite() && scale > 0.0).then(|| (scale.log2() * BUCKETS_PER_OCTAVE).ceil() as i32)
+    (scale.is_finite() && scale > 0.0)
+        .then(|| (scale.log2() * BUCKETS_PER_OCTAVE).ceil() as i32)
+        .filter(|&bucket| bucket <= MAX_BUCKET)
 }
 
 /// The mesh of `outline` for transforms in `bucket`, tessellated on the first
@@ -56,21 +91,20 @@ pub(super) fn mesh(
     bucket: i32,
     tessellator: &mut FillTessellator,
 ) -> Option<Rc<LocalMesh>> {
-    MESHES.with_borrow_mut(|meshes| {
-        if let Some(mesh) = meshes.get(&(outline.key, bucket)) {
-            return Some(Rc::clone(mesh));
-        }
+    let key = (outline.key, bucket);
 
-        if meshes.len() >= MAX_MESHES {
-            // Replace rather than `clear`, so the table's memory goes too.
-            *meshes = HashMap::new();
-        }
+    let cached = MESHES.try_with(|cache| cache.borrow().meshes.get(&key).map(Rc::clone));
 
-        let mesh = Rc::new(tessellate(outline, bucket, tessellator)?);
-        let _ = meshes.insert((outline.key, bucket), Rc::clone(&mesh));
+    // An `Err` is thread-local teardown: the mesh is then not cached.
+    if let Ok(Some(mesh)) = cached {
+        return Some(mesh);
+    }
 
-        Some(mesh)
-    })
+    let mesh = Rc::new(tessellate(outline, bucket, tessellator)?);
+
+    let _ = MESHES.try_with(|cache| cache.borrow_mut().insert(key, Rc::clone(&mesh)));
+
+    Some(mesh)
 }
 
 /// The device-space tolerance of every canvas fill, divided by the largest
@@ -111,7 +145,7 @@ mod tests {
     use crate::graphics::mesh::Mesh;
 
     fn cached() -> usize {
-        MESHES.with_borrow(HashMap::len)
+        MESHES.with_borrow(|cache| cache.meshes.len())
     }
 
     fn label() -> geometry::Text {
@@ -207,12 +241,67 @@ mod tests {
     }
 
     #[test]
-    fn a_zoomed_skewed_angle_label_from_the_cache_matches_one_tessellated_each_frame() {
+    fn a_zoomed_odd_angle_label_from_the_cache_matches_one_tessellated_each_frame() {
         assert_same_glyphs(|frame| {
             frame.translate(Vector::new(300.0, 900.0));
             frame.rotate(Radians(0.6));
             frame.scale(5.3);
         });
+    }
+
+    #[test]
+    fn an_anisotropic_label_from_the_cache_matches_one_tessellated_each_frame() {
+        assert_same_glyphs(|frame| {
+            frame.translate(Vector::new(200.0, 700.0));
+            frame.rotate(Radians(0.4));
+            frame.scale_nonuniform(Vector::new(3.0, 1.0));
+            frame.rotate(Radians(0.9));
+        });
+    }
+
+    #[test]
+    fn a_rotated_label_keeps_its_color() {
+        let color = crate::core::Color::from_rgb(0.2, 0.6, 0.9);
+        let mut rotated = frame(|frame| frame.rotate(Radians(std::f32::consts::FRAC_PI_2)));
+        rotated.fill_text(geometry::Text { color, ..label() });
+
+        let Geometry::Live { sections } = rotated.into_geometry() else {
+            unreachable!("a new frame is live");
+        };
+        let packed = crate::graphics::color::pack(color);
+        let mut vertices = 0;
+
+        for mesh in sections.iter().flat_map(|s| &s.meshes) {
+            let Mesh::Solid { buffers, .. } = mesh else {
+                panic!("glyphs are solid meshes");
+            };
+            vertices += buffers.vertices.len();
+            assert!(buffers.vertices.iter().all(|v| v.color == packed));
+        }
+
+        assert!(vertices > 0, "the label draws nothing");
+    }
+
+    #[test]
+    fn glyphs_after_atlas_text_start_a_new_section() {
+        let mut frame = frame(|_| {});
+        frame.fill_text(geometry::Text {
+            size: Pixels(16.0),
+            ..label()
+        });
+        frame.rotate(Radians(std::f32::consts::FRAC_PI_2));
+        frame.fill_text(label());
+
+        let Geometry::Live { sections } = frame.into_geometry() else {
+            unreachable!("a new frame is live");
+        };
+
+        let counts: Vec<_> = sections
+            .iter()
+            .map(|s| (!s.text.is_empty(), !s.meshes.is_empty()))
+            .collect();
+
+        assert_eq!(counts, vec![(true, false), (false, true)]);
     }
 
     #[test]
@@ -257,6 +346,22 @@ mod tests {
             Some(0),
             "a pure rotation buckets like the identity"
         );
+
+        for angle in [
+            0.0,
+            0.3,
+            std::f32::consts::FRAC_PI_2,
+            std::f32::consts::PI,
+            4.0,
+        ] {
+            let angle = lyon::math::Angle::radians(angle);
+
+            assert_eq!(bucket(&Transform::rotation(angle)), Some(0));
+            assert_eq!(
+                bucket(&Transform::scale(2.0, 2.0).then_rotate(angle)),
+                Some(4)
+            );
+        }
     }
 
     #[test]
@@ -346,11 +451,12 @@ mod tests {
             }
             checked = true;
 
-            MESHES.with_borrow_mut(|meshes| {
-                meshes.clear();
-                meshes.extend(
-                    (0..MAX_MESHES as i32).map(|i| ((outline.key, i), Rc::new(LocalMesh::new()))),
-                );
+            MESHES.with_borrow_mut(|cache| {
+                *cache = Cache::default();
+
+                for i in 0..MAX_MESHES as i32 {
+                    cache.insert((outline.key, i), Rc::new(LocalMesh::new()));
+                }
             });
 
             // Bucket -1 is not among the filled ones, and its tolerance is sane.
@@ -360,6 +466,46 @@ mod tests {
         });
 
         assert!(checked, "the label has an outline");
+    }
+
+    #[test]
+    fn the_glyph_mesh_cache_is_bounded_by_bytes() {
+        let mut checked = false;
+
+        label().visit_glyphs(|glyph| {
+            let geometry::Glyph::Outline(outline) = glyph else {
+                return;
+            };
+            if checked {
+                return;
+            }
+            checked = true;
+
+            MESHES.with_borrow_mut(|cache| {
+                *cache = Cache::default();
+
+                // One huge mesh: far under the entry limit, one vertex under the byte one.
+                let mut big = LocalMesh::new();
+                big.vertices = vec![[0.0, 0.0]; MAX_MESH_BYTES / size_of::<[f32; 2]>() - 1];
+                cache.insert((outline.key, 1000), Rc::new(big));
+            });
+            assert_eq!(cached(), 1);
+
+            let _ = mesh(&outline, 0, &mut FillTessellator::new());
+
+            assert_eq!(
+                cached(),
+                1,
+                "a cache full of bytes is emptied before it grows"
+            );
+        });
+
+        assert!(checked, "the label has an outline");
+    }
+
+    #[test]
+    fn a_transform_stretched_past_any_real_zoom_gets_no_bucket() {
+        assert_eq!(bucket(&Transform::scale(1e13, 1e13)), None);
     }
 
     #[test]
