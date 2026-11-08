@@ -7,6 +7,9 @@ use crate::graphics::compositor;
 use crate::graphics::{self, Antialiasing, Shell, Viewport};
 use crate::{Engine, Renderer};
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
 /// A window graphics backend for iced powered by `wgpu`.
 pub struct Compositor {
     instance: wgpu::Instance,
@@ -15,6 +18,89 @@ pub struct Compositor {
     alpha_mode: wgpu::CompositeAlphaMode,
     engine: Engine,
     settings: Settings,
+}
+
+/// Tracks whether the `wgpu` device of an [`Engine`] is still usable.
+///
+/// It is updated from the callbacks `wgpu` invokes when the device is lost
+/// (for example after a driver reset) or reports an error that no error scope
+/// captured. Shared through an [`Arc`] because those callbacks may run on any
+/// thread.
+#[derive(Debug, Default)]
+pub(crate) struct DeviceHealth {
+    lost: AtomicBool,
+    uncaptured_errors: AtomicU64,
+}
+
+impl DeviceHealth {
+    /// Returns `true` once the device has been lost.
+    ///
+    /// A lost device never recovers: everything created from it must be
+    /// recreated, so callers should stop rendering with it.
+    pub(crate) fn is_lost(&self) -> bool {
+        self.lost.load(Ordering::Acquire)
+    }
+
+    /// Returns how many errors the device reported outside of any error scope.
+    #[allow(dead_code)] // Only read by tests until an app-facing hook lands.
+    pub(crate) fn uncaptured_errors(&self) -> u64 {
+        self.uncaptured_errors.load(Ordering::Relaxed)
+    }
+
+    fn mark_lost(&self, reason: wgpu::DeviceLostReason, message: &str) {
+        log::error!("wgpu device lost ({reason:?}): {message}");
+
+        self.lost.store(true, Ordering::Release);
+    }
+
+    fn record_error(&self, error: &wgpu::Error) {
+        let count = self.uncaptured_errors.fetch_add(1, Ordering::Relaxed);
+
+        // A broken pipeline can fail every frame, so only the first few
+        // errors and then exponentially rarer ones are logged. Counting
+        // stays exact.
+        if should_log(count) {
+            log::error!("wgpu uncaptured error (#{}): {error}", count + 1);
+        }
+
+        if panics_on(error) {
+            panic!("wgpu validation error: {error}");
+        }
+    }
+
+    /// Installs the lost and uncaptured error callbacks on the given device.
+    ///
+    /// Without them, `wgpu` panics on any uncaptured error.
+    pub(crate) fn install(self: &Arc<Self>, device: &wgpu::Device) {
+        let health = Arc::clone(self);
+
+        device.set_device_lost_callback(move |reason, message| {
+            health.mark_lost(reason, &message);
+        });
+
+        let health = Arc::clone(self);
+
+        device.on_uncaptured_error(Arc::new(move |error: wgpu::Error| {
+            health.record_error(&error);
+        }));
+    }
+}
+
+/// Returns whether the uncaptured error with the given zero-based index is
+/// logged: the first few, then exponentially rarer ones.
+fn should_log(count: u64) -> bool {
+    count < 8 || (count + 1).is_power_of_two()
+}
+
+/// Returns whether an uncaptured error must panic.
+///
+/// A validation error is a bug in the code or data given to `wgpu` (for example
+/// a broken custom shader pipeline), so it keeps panicking in debug builds, or
+/// when the `ICED_WGPU_PANIC_ON_ERROR` environment variable is set. Out of
+/// memory and internal errors are only logged and counted.
+fn panics_on(error: &wgpu::Error) -> bool {
+    matches!(error, wgpu::Error::Validation { .. })
+        && (cfg!(debug_assertions) || std::env::var_os("ICED_WGPU_PANIC_ON_ERROR").is_some())
 }
 
 /// A compositor error.
@@ -27,7 +113,10 @@ pub enum Error {
     #[error("the surface is not compatible")]
     IncompatibleSurface,
     /// No adapter was found for the options requested.
-    #[error("no adapter was found for the options requested: {0:?}")]
+    ///
+    /// The message lists the options that were tried and, where the platform
+    /// can enumerate them, the adapters that were available.
+    #[error("no adapter was found for the options requested: {0}")]
     NoAdapterFound(String),
     /// No device request succeeded.
     #[error("no device request succeeded: {0:?}")]
@@ -44,6 +133,12 @@ impl From<Error> for backend::Error {
 }
 
 impl Compositor {
+    /// Returns the [`DeviceHealth`] of the device of this [`Compositor`].
+    #[allow(dead_code)] // Only read by tests until an app-facing hook lands.
+    pub(crate) fn health(&self) -> &Arc<DeviceHealth> {
+        &self.engine.health
+    }
+
     /// Requests a new [`Compositor`] with the given [`Settings`].
     ///
     /// Returns `None` if no compatible graphics adapter could be found.
@@ -91,14 +186,39 @@ impl Compositor {
         let adapter_options = wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::from_env().unwrap_or(power_preference),
             compatible_surface: compatible_surface.as_ref(),
-            force_fallback_adapter: false,
+            force_fallback_adapter: settings.software_fallback.force_fallback_adapter(),
             apply_limit_buckets: false,
         };
 
-        let adapter = instance
-            .request_adapter(&adapter_options)
-            .await
-            .map_err(|_error| Error::NoAdapterFound(format!("{adapter_options:?}")))?;
+        let adapter = match instance.request_adapter(&adapter_options).await {
+            Ok(adapter) => adapter,
+            Err(error) => {
+                log::warn!("Adapter request failed: {error}");
+
+                #[cfg(not(target_arch = "wasm32"))]
+                let available: Vec<_> = instance
+                    .enumerate_adapters(settings.backends)
+                    .await
+                    .iter()
+                    .map(wgpu::Adapter::get_info)
+                    .collect();
+
+                #[cfg(target_arch = "wasm32")]
+                let available = Vec::new();
+
+                return Err(Error::NoAdapterFound(adapter_report(
+                    settings.backends,
+                    &adapter_options,
+                    &available,
+                )));
+            }
+        };
+
+        if let Some(warning) =
+            degraded_warning(settings.software_fallback, adapter.get_info().device_type)
+        {
+            log::warn!("{warning}");
+        }
 
         log::info!("Selected: {:#?}", adapter.get_info());
 
@@ -297,6 +417,10 @@ impl graphics::Compositor for Compositor {
             settings.backends = backends;
         }
 
+        if let Some(software_fallback) = SoftwareFallback::from_env() {
+            settings.software_fallback = software_fallback;
+        }
+
         if let Some(present_mode) = present_mode_from_env() {
             settings.present_mode = present_mode;
         }
@@ -315,7 +439,7 @@ impl graphics::Compositor for Compositor {
     }
 
     fn configure_surface(&mut self, surface: &mut Self::Surface, width: u32, height: u32) {
-        if width == 0 || height == 0 {
+        if width == 0 || height == 0 || self.engine.health.is_lost() {
             return;
         }
 
@@ -360,6 +484,10 @@ impl graphics::Compositor for Compositor {
         background_color: Color,
         on_pre_present: impl FnOnce(),
     ) -> Result<(), compositor::SurfaceError> {
+        if self.engine.health.is_lost() {
+            return Err(compositor::SurfaceError::DeviceLost);
+        }
+
         present(
             renderer,
             surface,
@@ -375,6 +503,10 @@ impl graphics::Compositor for Compositor {
         viewport: &Viewport,
         background_color: Color,
     ) -> Vec<u8> {
+        if self.engine.health.is_lost() {
+            return Vec::new();
+        }
+
         renderer.screenshot(viewport, background_color)
     }
 }
@@ -399,6 +531,103 @@ pub struct Settings {
     ///
     /// By default, it is `None`.
     pub antialiasing: Option<Antialiasing>,
+
+    /// Whether only software (CPU) adapters may be used.
+    ///
+    /// By default, it is [`SoftwareFallback::Allow`].
+    ///
+    /// Apps started through `iced::application` build their [`Settings`] from
+    /// [`backend::Settings`], which does not carry this policy; for them it can
+    /// only be set with the `ICED_SOFTWARE_FALLBACK` environment variable.
+    pub software_fallback: SoftwareFallback,
+}
+
+/// The policy for using a software (CPU) graphics adapter, such as `llvmpipe`
+/// or WARP.
+///
+/// It can be overridden with the `ICED_SOFTWARE_FALLBACK` environment variable
+/// (`allow` or `always`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SoftwareFallback {
+    /// Do not restrict the adapter selection.
+    ///
+    /// `wgpu` ranks software adapters last, so one is still picked when it is
+    /// the only candidate; [`Compositor`] then logs a warning.
+    #[default]
+    Allow,
+    /// Only consider software (CPU) adapters, even if hardware adapters are
+    /// available.
+    Always,
+}
+
+impl SoftwareFallback {
+    /// Parses a policy from the value of `ICED_SOFTWARE_FALLBACK`.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "allow" | "auto" | "0" | "false" => Some(Self::Allow),
+            "always" | "1" | "true" => Some(Self::Always),
+            _ => None,
+        }
+    }
+
+    /// Reads the policy from the `ICED_SOFTWARE_FALLBACK` environment variable.
+    pub fn from_env() -> Option<Self> {
+        Self::parse(&std::env::var("ICED_SOFTWARE_FALLBACK").ok()?)
+    }
+
+    /// The value of `force_fallback_adapter` for the adapter request.
+    fn force_fallback_adapter(self) -> bool {
+        matches!(self, Self::Always)
+    }
+}
+
+/// The warning to log for the selected adapter, if it is running in degraded
+/// mode (a software adapter).
+fn degraded_warning(
+    policy: SoftwareFallback,
+    device_type: wgpu::DeviceType,
+) -> Option<&'static str> {
+    if device_type != wgpu::DeviceType::Cpu {
+        return None;
+    }
+
+    Some(match policy {
+        SoftwareFallback::Always => {
+            "Using a software adapter as requested \
+             (ICED_SOFTWARE_FALLBACK=always). Rendering will be slow."
+        }
+        SoftwareFallback::Allow => {
+            "No hardware adapter available; using a software adapter. \
+             Rendering will be slow."
+        }
+    })
+}
+
+/// Describes a failed adapter selection, listing the backends and options
+/// requested and the adapters that were available.
+fn adapter_report(
+    backends: wgpu::Backends,
+    options: &wgpu::RequestAdapterOptions<'_, '_>,
+    available: &[wgpu::AdapterInfo],
+) -> String {
+    let available = if available.is_empty() {
+        "none".to_owned()
+    } else {
+        available
+            .iter()
+            .map(|info| format!("{} ({:?}, {:?})", info.name, info.backend, info.device_type))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
+    format!(
+        "backends: {backends:?}; power preference: {:?}; force fallback adapter: {}; \
+         surface given: {}; available adapters: {available}. Set WGPU_BACKEND=gl to try the \
+         OpenGL backend, or install a Vulkan driver such as Mesa lavapipe",
+        options.power_preference,
+        options.force_fallback_adapter,
+        options.compatible_surface.is_some(),
+    )
 }
 
 impl Default for Settings {
@@ -408,6 +637,7 @@ impl Default for Settings {
             backends: wgpu::Backends::all(),
             power_preference: backend::PowerPreference::None,
             antialiasing: None,
+            software_fallback: SoftwareFallback::default(),
         }
     }
 }
@@ -436,6 +666,7 @@ impl From<backend::Settings> for Settings {
             antialiasing: settings.antialiasing.then_some(Antialiasing::MSAAx4),
             backends,
             power_preference: settings.power_preference,
+            software_fallback: SoftwareFallback::default(),
         }
     }
 }
@@ -463,5 +694,343 @@ pub fn present_mode_from_env() -> Option<wgpu::PresentMode> {
         "fifo_relaxed" => Some(wgpu::PresentMode::FifoRelaxed),
         "mailbox" => Some(wgpu::PresentMode::Mailbox),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Creates a device with an adapter, if the machine has one.
+    fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
+        futures::executor::block_on(async {
+            let instance =
+                wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    force_fallback_adapter: false,
+                    ..wgpu::RequestAdapterOptions::default()
+                })
+                .await
+                .ok()?;
+
+            adapter
+                .request_device(&wgpu::DeviceDescriptor::default())
+                .await
+                .ok()
+        })
+    }
+
+    /// Fails when `ICED_REQUIRE_GPU_TESTS` is set, so CI cannot skip silently.
+    fn skip_gpu_test(reason: &str) {
+        assert!(
+            std::env::var_os("ICED_REQUIRE_GPU_TESTS").is_none(),
+            "ICED_REQUIRE_GPU_TESTS is set but: {reason}"
+        );
+
+        eprintln!("{reason}; skipping");
+    }
+
+    #[test]
+    fn starts_healthy() {
+        let health = DeviceHealth::default();
+
+        assert!(!health.is_lost());
+        assert_eq!(health.uncaptured_errors(), 0);
+    }
+
+    #[test]
+    fn lost_device_is_flagged() {
+        let health = DeviceHealth::default();
+
+        health.mark_lost(wgpu::DeviceLostReason::Unknown, "driver reset");
+
+        assert!(health.is_lost());
+    }
+
+    #[test]
+    fn destroying_the_device_marks_it_lost() {
+        let Some((device, _queue)) = device() else {
+            skip_gpu_test("no graphics adapter available");
+            return;
+        };
+
+        let health = Arc::new(DeviceHealth::default());
+        health.install(&device);
+
+        assert!(!health.is_lost());
+
+        device.destroy();
+        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+
+        assert!(health.is_lost());
+    }
+
+    #[test]
+    fn screenshot_returns_early_on_a_lost_device() {
+        let (instance, adapter) = futures::executor::block_on(async {
+            let instance =
+                wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions::default())
+                .await
+                .ok();
+
+            (instance, adapter)
+        });
+
+        let _instance = instance;
+
+        let Some(adapter) = adapter else {
+            skip_gpu_test("no graphics adapter available");
+            return;
+        };
+
+        let Ok((device, queue)) =
+            futures::executor::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+        else {
+            skip_gpu_test("the adapter could not provide a device");
+            return;
+        };
+
+        let engine = Engine::new(
+            &adapter,
+            device,
+            queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            None,
+            Shell::headless(),
+        );
+
+        let mut renderer =
+            Renderer::new(engine.clone(), crate::core::renderer::Settings::default());
+        let viewport = Viewport::with_physical_size(
+            crate::core::Size::new(8, 8),
+            crate::core::renderer::Scale::default(),
+        );
+
+        assert!(!renderer.screenshot(&viewport, Color::BLACK).is_empty());
+
+        engine
+            .health
+            .mark_lost(wgpu::DeviceLostReason::Unknown, "test");
+
+        assert!(renderer.screenshot(&viewport, Color::BLACK).is_empty());
+
+        #[cfg(feature = "image")]
+        {
+            use crate::core::image::Renderer as _;
+
+            assert!(
+                renderer
+                    .load_image(&crate::core::image::Handle::from_rgba(1, 1, vec![0; 4]))
+                    .is_err()
+            );
+        }
+    }
+
+    #[cfg(all(feature = "image", not(target_arch = "wasm32")))]
+    #[test]
+    fn allocate_image_resolves_with_an_error_on_a_lost_device() {
+        use crate::graphics::shell::Notifier;
+        use std::sync::atomic::AtomicUsize;
+        use std::time::{Duration, Instant};
+
+        struct Counter(Arc<AtomicUsize>);
+
+        impl Notifier for Counter {
+            fn tick(&self) {
+                let _ = self.0.fetch_add(1, Ordering::SeqCst);
+            }
+            fn request_redraw(&self) {}
+            fn invalidate_layout(&self) {}
+        }
+
+        let (instance, adapter) = futures::executor::block_on(async {
+            let instance =
+                wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions::default())
+                .await
+                .ok();
+
+            (instance, adapter)
+        });
+
+        let _instance = instance;
+
+        let Some(adapter) = adapter else {
+            skip_gpu_test("no graphics adapter available");
+            return;
+        };
+
+        let Ok((device, queue)) =
+            futures::executor::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+        else {
+            skip_gpu_test("the adapter could not provide a device");
+            return;
+        };
+
+        let ticks = Arc::new(AtomicUsize::new(0));
+
+        let engine = Engine::new(
+            &adapter,
+            device,
+            queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            None,
+            Shell::new(Counter(Arc::clone(&ticks))),
+        );
+
+        let mut renderer =
+            Renderer::new(engine.clone(), crate::core::renderer::Settings::default());
+
+        engine
+            .health
+            .mark_lost(wgpu::DeviceLostReason::Unknown, "test");
+
+        let (sender, receiver) = std::sync::mpsc::channel();
+
+        use crate::core::Renderer as _;
+
+        renderer.allocate_image(
+            &crate::core::image::Handle::from_rgba(1, 1, vec![0; 4]),
+            move |result| {
+                let _ = sender.send(result);
+            },
+        );
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+
+        while ticks.load(Ordering::SeqCst) == 0 {
+            assert!(Instant::now() < deadline, "the shell was never ticked");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        renderer.tick();
+
+        assert!(
+            receiver
+                .try_recv()
+                .expect("callback should have fired")
+                .is_err()
+        );
+    }
+
+    fn error_source() -> wgpu::ErrorSource {
+        "test".into()
+    }
+
+    #[test]
+    fn out_of_memory_and_internal_errors_are_counted_without_panicking() {
+        let health = DeviceHealth::default();
+
+        health.record_error(&wgpu::Error::OutOfMemory {
+            source: error_source(),
+        });
+        health.record_error(&wgpu::Error::Internal {
+            source: error_source(),
+            description: "internal".to_owned(),
+        });
+
+        assert_eq!(health.uncaptured_errors(), 2);
+        assert!(!health.is_lost());
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "wgpu validation error")]
+    fn validation_errors_panic_in_debug_builds() {
+        let health = DeviceHealth::default();
+
+        health.record_error(&wgpu::Error::Validation {
+            source: error_source(),
+            description: "broken pipeline".to_owned(),
+        });
+    }
+
+    #[test]
+    fn error_logging_is_rate_limited() {
+        let logged = (0..1000).filter(|&n| should_log(n)).count();
+
+        assert!(should_log(0) && should_log(7));
+        assert!(!should_log(8) && !should_log(100));
+        assert!(logged < 20, "logged {logged} of 1000");
+    }
+
+    #[test]
+    fn only_validation_errors_may_panic() {
+        assert!(!panics_on(&wgpu::Error::OutOfMemory {
+            source: error_source(),
+        }));
+        assert!(!panics_on(&wgpu::Error::Internal {
+            source: error_source(),
+            description: String::new(),
+        }));
+    }
+
+    #[test]
+    fn warning_follows_adapter_and_policy() {
+        use wgpu::DeviceType;
+
+        for policy in [SoftwareFallback::Allow, SoftwareFallback::Always] {
+            assert_eq!(degraded_warning(policy, DeviceType::DiscreteGpu), None);
+            assert_eq!(degraded_warning(policy, DeviceType::IntegratedGpu), None);
+        }
+
+        let allow = degraded_warning(SoftwareFallback::Allow, DeviceType::Cpu).unwrap();
+        let always = degraded_warning(SoftwareFallback::Always, DeviceType::Cpu).unwrap();
+
+        assert!(allow.contains("No hardware adapter"));
+        assert!(always.contains("as requested"));
+        assert!(!always.contains("No hardware adapter"));
+        assert_eq!(SoftwareFallback::default(), SoftwareFallback::Allow);
+        assert!(!SoftwareFallback::Allow.force_fallback_adapter());
+        assert!(SoftwareFallback::Always.force_fallback_adapter());
+    }
+
+    #[test]
+    fn parses_policy() {
+        assert_eq!(
+            SoftwareFallback::parse("allow"),
+            Some(SoftwareFallback::Allow)
+        );
+        assert_eq!(
+            SoftwareFallback::parse(" Allow "),
+            Some(SoftwareFallback::Allow)
+        );
+        assert_eq!(
+            SoftwareFallback::parse("ALWAYS"),
+            Some(SoftwareFallback::Always)
+        );
+        assert_eq!(SoftwareFallback::parse("1"), Some(SoftwareFallback::Always));
+        assert_eq!(SoftwareFallback::parse("0"), Some(SoftwareFallback::Allow));
+        assert_eq!(
+            SoftwareFallback::parse("auto"),
+            Some(SoftwareFallback::Allow)
+        );
+        assert_eq!(SoftwareFallback::parse("never"), None);
+        assert_eq!(SoftwareFallback::parse("sometimes"), None);
+    }
+
+    #[test]
+    fn report_lists_adapters() {
+        let options = wgpu::RequestAdapterOptions::default();
+
+        let empty = adapter_report(wgpu::Backends::VULKAN, &options, &[]);
+        assert!(empty.starts_with("backends: "));
+        assert!(empty.contains("VULKAN"));
+        assert!(empty.contains("WGPU_BACKEND=gl"));
+        assert!(!empty.contains("ICED_SOFTWARE_FALLBACK"));
+        assert!(empty.contains("force fallback adapter: false"));
+        assert!(empty.contains("surface given: false"));
+        assert!(empty.contains("available adapters: none"));
+        assert!(!empty.contains("Surface"));
+
+        let mut info = wgpu::AdapterInfo::new(wgpu::DeviceType::Cpu, wgpu::Backend::Vulkan);
+        info.name = "llvmpipe".to_owned();
+        let report = adapter_report(wgpu::Backends::all(), &options, &[info]);
+        assert!(report.contains("llvmpipe (Vulkan, Cpu)"));
     }
 }

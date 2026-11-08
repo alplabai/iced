@@ -1,7 +1,7 @@
 //! Keep the draw order of the contents of a [`Frame`].
 //!
 //! A [`Layer`] of a renderer draws its contents grouped by kind in a fixed
-//! order: shapes first, then images, and text last. A [`Frame`], however,
+//! order: shapes first, then custom primitives, then images, and text last. A [`Frame`], however,
 //! lets users interleave these kinds freely.
 //!
 //! To preserve the order in which things were drawn, a [`Frame`] splits its
@@ -25,6 +25,8 @@ use std::mem;
 pub enum Kind {
     /// Filled or stroked shapes (meshes or vector primitives).
     Shape,
+    /// Custom renderer-specific primitives, like shaders.
+    Primitive,
     /// Raster or vector images.
     Image,
     /// Text.
@@ -121,7 +123,7 @@ mod tests {
         }
     }
 
-    use Kind::{Image, Shape, Text};
+    use Kind::{Image, Primitive, Shape, Text};
 
     #[test]
     fn empty_has_a_single_empty_section() {
@@ -159,6 +161,42 @@ mod tests {
         assert_eq!(
             sections.finish(|_| {}),
             vec![Section(vec![Shape, Shape, Image, Text, Text])]
+        );
+    }
+
+    #[test]
+    fn primitive_sits_between_shapes_and_images() {
+        let mut sections = Sections::new();
+        draw(&mut sections, &[Shape, Primitive, Image, Text]);
+
+        assert_eq!(
+            sections.finish(|_| {}),
+            vec![Section(vec![Shape, Primitive, Image, Text])]
+        );
+    }
+
+    #[test]
+    fn shape_after_primitive_starts_a_section() {
+        let mut sections = Sections::new();
+        draw(&mut sections, &[Shape, Primitive, Shape, Primitive]);
+
+        assert_eq!(
+            sections.finish(|_| {}),
+            vec![
+                Section(vec![Shape, Primitive]),
+                Section(vec![Shape, Primitive])
+            ]
+        );
+    }
+
+    #[test]
+    fn primitive_after_image_starts_a_section() {
+        let mut sections = Sections::new();
+        draw(&mut sections, &[Image, Primitive]);
+
+        assert_eq!(
+            sections.finish(|_| {}),
+            vec![Section(vec![Image]), Section(vec![Primitive])]
         );
     }
 

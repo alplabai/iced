@@ -1,6 +1,7 @@
 use crate::core::{self, Size};
 use crate::graphics::Shell;
 use crate::image::atlas::{self, Atlas};
+use crate::window::compositor::DeviceHealth;
 
 #[cfg(all(feature = "image", not(target_arch = "wasm32")))]
 use worker::Worker;
@@ -21,15 +22,16 @@ pub struct Cache {
 }
 
 impl Cache {
-    pub fn new(
+    pub(crate) fn new(
         device: &wgpu::Device,
         _queue: &wgpu::Queue,
         backend: wgpu::Backend,
         layout: wgpu::BindGroupLayout,
         _shell: &Shell,
+        _health: &Arc<DeviceHealth>,
     ) -> Self {
         #[cfg(all(feature = "image", not(target_arch = "wasm32")))]
-        let worker = Worker::new(device, _queue, backend, layout.clone(), _shell);
+        let worker = Worker::new(device, _queue, backend, layout.clone(), _shell, _health);
 
         Self {
             atlas: Atlas::new(device, backend, layout),
@@ -385,6 +387,7 @@ mod worker {
     use crate::graphics::Shell;
     use crate::image::atlas::{self, Atlas};
     use crate::image::raster;
+    use crate::window::compositor::DeviceHealth;
 
     use std::sync::Arc;
     use std::sync::mpsc;
@@ -404,6 +407,7 @@ mod worker {
             backend: wgpu::Backend,
             texture_layout: wgpu::BindGroupLayout,
             shell: &Shell,
+            health: &Arc<DeviceHealth>,
         ) -> Self {
             let (jobs_sender, jobs_receiver) = mpsc::sync_channel(1_000);
             let (quit_sender, quit_receiver) = mpsc::sync_channel(1);
@@ -415,6 +419,7 @@ mod worker {
                 backend,
                 texture_layout,
                 shell: shell.clone(),
+                health: Arc::clone(health),
                 belt: wgpu::util::StagingBelt::new(device.clone(), 4 * 1024 * 1024),
                 jobs: jobs_receiver,
                 output: work_sender,
@@ -468,6 +473,7 @@ mod worker {
         backend: wgpu::Backend,
         texture_layout: wgpu::BindGroupLayout,
         shell: Shell,
+        health: Arc<DeviceHealth>,
         belt: wgpu::util::StagingBelt,
         jobs: mpsc::Receiver<Job>,
         output: mpsc::SyncSender<Work>,
@@ -557,6 +563,23 @@ mod worker {
             rgba: Bytes,
             callback: fn(&Shell),
         ) {
+            // `Device::poll` panics on a lost device, so do not reach it.
+            if self.health.is_lost() {
+                // Resolve the entry (and its callbacks) instead of leaving it loading.
+                let _ = self.output.send(Work::Error {
+                    handle,
+                    error: image::Error::Invalid(Arc::new(std::io::Error::other(
+                        "the graphics device was lost",
+                    ))),
+                });
+
+                // Wake the shell so `Renderer::tick` drains the error; nothing
+                // else runs on a lost device.
+                callback(&self.shell);
+
+                return;
+            }
+
             let mut encoder = self
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
