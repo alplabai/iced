@@ -103,7 +103,7 @@ pub use error::Error;
 pub use ice::Ice;
 pub use instruction::Instruction;
 pub use selector::Selector;
-pub use simulator::{Simulator, simulator};
+pub use simulator::{Simulator, Snapshot, Tolerance, simulator};
 
 use crate::core::Size;
 use crate::core::theme;

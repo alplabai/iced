@@ -25,6 +25,7 @@ geometry = ["iced_graphics/geometry", "iced_tiny_skia?/geometry", "iced_wgpu?/ge
 web-colors = ["iced_wgpu?/web-colors"]
 webgl = ["iced_wgpu?/webgl"]
 fira-sans = ["iced_graphics/fira-sans"]
+font-cache = ["iced_graphics/font-cache"]
 strict-assertions = ["iced_wgpu?/strict-assertions"]
 x11 = ["iced_tiny_skia?/x11"]
 wayland = ["iced_tiny_skia?/wayland"]
