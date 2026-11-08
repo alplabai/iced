@@ -675,6 +675,17 @@ mod tests {
             .mark_lost(wgpu::DeviceLostReason::Unknown, "test");
 
         assert!(renderer.screenshot(&viewport, Color::BLACK).is_empty());
+
+        #[cfg(feature = "image")]
+        {
+            use crate::core::image::Renderer as _;
+
+            assert!(
+                renderer
+                    .load_image(&crate::core::image::Handle::from_rgba(1, 1, vec![0; 4]))
+                    .is_err()
+            );
+        }
     }
 
     fn error_source() -> wgpu::ErrorSource {

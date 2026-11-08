@@ -565,6 +565,14 @@ mod worker {
         ) {
             // `Device::poll` panics on a lost device, so do not reach it.
             if self.health.is_lost() {
+                // Resolve the entry (and its callbacks) instead of leaving it loading.
+                let _ = self.output.send(Work::Error {
+                    handle,
+                    error: image::Error::Invalid(Arc::new(std::io::Error::other(
+                        "the graphics device was lost",
+                    ))),
+                });
+
                 return;
             }
 
