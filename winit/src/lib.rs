@@ -361,6 +361,7 @@ where
                                 scale_factor,
                                 last_monitor,
                                 on_open,
+                                parent,
                             } => {
                                 let requested_monitor = match settings.position {
                                     core::window::Position::Default => None,
@@ -392,6 +393,9 @@ where
                                 )
                                 .with_visible(false);
 
+                                let window_attributes =
+                                    conversion::with_parent(window_attributes, parent.as_deref());
+
                                 #[cfg(target_arch = "wasm32")]
                                 let window_attributes = {
                                     use winit::platform::web::WindowAttributesExtWebSys;
@@ -414,6 +418,11 @@ where
                                 let window = event_loop
                                     .create_window(window_attributes)
                                     .expect("Create window");
+
+                                #[cfg(target_os = "macos")]
+                                if let Some(parent) = parent.as_deref() {
+                                    conversion::detach_while_dragged(&window, parent);
+                                }
 
                                 #[cfg(target_os = "macos")]
                                 if let Some(position) = position {
@@ -553,6 +562,7 @@ enum Control {
         last_monitor: Option<winit::monitor::MonitorHandle>,
         on_open: oneshot::Sender<window::Id>,
         scale_factor: f32,
+        parent: Option<Arc<winit::window::Window>>,
     },
     SetAutomaticWindowTabbing(bool),
     ListMonitors(oneshot::Sender<MonitorList>),
@@ -654,6 +664,20 @@ async fn run_instance<P>(
                 make_visible,
                 on_open,
             } => {
+                if window_manager.take_cancelled(id) {
+                    log::warn!(
+                        "Dropping window `{id:?}`: its parent was closed \
+                         before it was created"
+                    );
+
+                    // `window::open` set this when the window was requested.
+                    // Skipping the normal path below must clear it, or a
+                    // non-daemon app never exits once its windows are gone.
+                    is_window_opening = false;
+
+                    continue;
+                }
+
                 if compositor.is_none() {
                     let (compositor_sender, compositor_receiver) = oneshot::channel();
 
@@ -1505,6 +1529,23 @@ fn run_action<'a, P, C>(
             window::Action::Open(id, settings, channel) => {
                 let last_monitor = window_manager.last_monitor();
 
+                let parent = settings.parent.and_then(|parent_id| {
+                    let parent = window_manager
+                        .get(parent_id)
+                        .map(|window| window.raw.clone());
+
+                    if parent.is_some() {
+                        window_manager.set_parent(id, parent_id);
+                    } else {
+                        log::warn!(
+                            "Ignoring parent `{parent_id:?}` of window `{id:?}`: \
+                             no such window is open"
+                        );
+                    }
+
+                    parent
+                });
+
                 control_sender
                     .start_send(Control::CreateWindow {
                         id,
@@ -1513,6 +1554,7 @@ fn run_action<'a, P, C>(
                         scale_factor: program.scale_factor(id),
                         last_monitor,
                         on_open: channel,
+                        parent,
                     })
                     .expect("Send control action");
 
@@ -1524,11 +1566,25 @@ fn run_action<'a, P, C>(
                     .expect("Send control action");
             }
             window::Action::Close(id) => {
-                let _ = ui_caches.remove(&id);
-                let _ = interfaces.remove(&id);
+                // Windows owned by this one close with it, children first.
+                let mut closing = window_manager.descendants(id);
 
-                if window_manager.remove(id).is_some() {
-                    events.push((id, core::Event::Window(core::window::Event::Closed)));
+                // A child that is still being created is not open yet:
+                // drop it when it arrives instead of leaving it orphaned.
+                // It will never report `Opened`, so report `Closed` now.
+                for cancelled in window_manager.cancel_pending(&closing) {
+                    events.push((cancelled, core::Event::Window(core::window::Event::Closed)));
+                }
+
+                closing.push(id);
+
+                for id in closing {
+                    let _ = ui_caches.remove(&id);
+                    let _ = interfaces.remove(&id);
+
+                    if window_manager.remove(id).is_some() {
+                        events.push((id, core::Event::Window(core::window::Event::Closed)));
+                    }
                 }
 
                 if window_manager.is_empty() {

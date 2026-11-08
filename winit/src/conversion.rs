@@ -15,6 +15,258 @@ use crate::core::touch;
 use crate::core::window;
 use crate::core::{Event, Point, Size};
 
+/// Makes `parent` the owner of the window described by `attributes`.
+///
+/// - Windows: an owner window (`WS_POPUP` with an owner), so the window
+///   stays above its owner and has no taskbar entry of its own.
+/// - macOS: a child window of the parent, detached while it is dragged (see
+///   [`detach_while_dragged`]).
+/// - X11 and Wayland: unsupported. No parent is passed (winit would embed
+///   the window on X11), and a warning is logged once.
+/// - Other platforms: no effect.
+///
+/// Does nothing when there is no parent or it has no usable native handle.
+pub fn with_parent(
+    attributes: winit::window::WindowAttributes,
+    parent: Option<&winit::window::Window>,
+) -> winit::window::WindowAttributes {
+    let Some(parent) = parent else {
+        return attributes;
+    };
+
+    #[cfg(windows)]
+    {
+        use winit::platform::windows::WindowAttributesExtWindows;
+        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+        if let Ok(handle) = parent.window_handle()
+            && let RawWindowHandle::Win32(handle) = handle.as_raw()
+        {
+            return attributes
+                .with_owner_window(handle.hwnd.get() as winit::platform::windows::HWND);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        use winit::raw_window_handle::HasWindowHandle;
+
+        if let Ok(handle) = parent.window_handle() {
+            // SAFETY: the handle comes from a live `winit` window that the
+            // caller keeps alive (it holds an `Arc`) until the child exists.
+            #[allow(unsafe_code)]
+            return unsafe { attributes.with_parent_window(Some(handle.as_raw())) };
+        }
+    }
+
+    #[cfg(all(
+        unix,
+        not(target_os = "macos"),
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    {
+        use std::sync::Once;
+
+        static WARN: Once = Once::new();
+
+        WARN.call_once(|| {
+            log::warn!(
+                "`window::Settings::parent` is not supported on X11 and \
+                 Wayland; the window is opened without a parent"
+            );
+        });
+    }
+
+    let _ = parent;
+
+    attributes
+}
+
+/// Returns the `NSWindow` of a `winit` window.
+#[cfg(target_os = "macos")]
+fn ns_window(
+    window: &winit::window::Window,
+) -> Option<objc2::rc::Retained<objc2_app_kit::NSWindow>> {
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let RawWindowHandle::AppKit(handle) = window.window_handle().ok()?.as_raw() else {
+        return None;
+    };
+
+    // SAFETY: the view belongs to a live `winit` window, and `winit` hands
+    // out AppKit handles only on the main thread.
+    #[allow(unsafe_code)]
+    let view: &objc2_app_kit::NSView = unsafe { handle.ns_view.cast().as_ref() };
+
+    view.window()
+}
+
+/// Makes `child` a child of `parent` again once no mouse button is down.
+///
+/// Returns whether the window is attached (or gone) and needs no more work.
+#[cfg(target_os = "macos")]
+fn reattach_if_released(child: &objc2_app_kit::NSWindow, parent: &objc2_app_kit::NSWindow) -> bool {
+    use objc2_app_kit::{NSEvent, NSWindowOrderingMode};
+
+    if child.parentWindow().is_some() {
+        return true;
+    }
+
+    if NSEvent::pressedMouseButtons() != 0 {
+        return false;
+    }
+
+    // SAFETY: `child` was a child of `parent` before the drag and has no
+    // parent now, so this cannot create a cycle.
+    #[allow(unsafe_code)]
+    unsafe {
+        parent.addChildWindow_ordered(child, NSWindowOrderingMode::Above);
+    }
+
+    true
+}
+
+/// Re-attaches `child` once the mouse is released, even if the window never
+/// moved: `willMove` is posted as soon as the title bar is pressed, but
+/// `didMove` only follows a real move. The timer runs in the default run loop
+/// mode, so it stays idle during the drag itself.
+#[cfg(target_os = "macos")]
+fn reattach_when_released(
+    child: &objc2::rc::Retained<objc2_app_kit::NSWindow>,
+    parent: &objc2::rc::Retained<objc2_app_kit::NSWindow>,
+) {
+    use block2::RcBlock;
+    use objc2::rc::{Retained, Weak};
+    use objc2_foundation::NSTimer;
+    use std::ptr::NonNull;
+
+    const POLL_INTERVAL_SECONDS: f64 = 0.1;
+
+    let (child, parent) = (Weak::from_retained(child), Weak::from_retained(parent));
+
+    let poll = RcBlock::new(move |timer: NonNull<NSTimer>| {
+        let done = match (child.load(), parent.load()) {
+            (Some(child), Some(parent)) => reattach_if_released(&child, &parent),
+            _ => true,
+        };
+
+        if done {
+            // SAFETY: AppKit passes the live timer that is firing.
+            #[allow(unsafe_code)]
+            unsafe {
+                timer.as_ref().invalidate();
+            }
+        }
+    });
+
+    // SAFETY: the block only touches AppKit on the main thread, where the
+    // current run loop fires it; the run loop retains the timer.
+    #[allow(unsafe_code)]
+    let _timer: Retained<NSTimer> = unsafe {
+        NSTimer::scheduledTimerWithTimeInterval_repeats_block(POLL_INTERVAL_SECONDS, true, &poll)
+    };
+}
+
+/// Keeps an owned macOS window smooth to drag.
+///
+/// AppKit drags a child window (see [`with_parent`]) with a visible lag, even
+/// in a plain AppKit app, while a top-level window drags smoothly. So the
+/// window is detached from its parent on `willMove` (posted when the user
+/// presses the title bar, and possibly for a programmatic move too, in which
+/// case it stays detached until the next poll tick or mouse release), and
+/// attached again once the mouse button is released: the last `didMove` of a
+/// drag reports no pressed button, and a short poll covers a title-bar press
+/// that never moved the window. Dragging the parent does not detach its
+/// children, so they still move with it. The observers remove themselves
+/// when the window closes.
+#[cfg(target_os = "macos")]
+pub fn detach_while_dragged(window: &winit::window::Window, parent: &winit::window::Window) {
+    use block2::RcBlock;
+    use objc2::rc::{Retained, Weak};
+    use objc2::runtime::ProtocolObject;
+    use objc2_app_kit::{
+        NSWindowDidMoveNotification, NSWindowOrderingMode, NSWindowWillCloseNotification,
+        NSWindowWillMoveNotification,
+    };
+    use objc2_foundation::NSObjectProtocol;
+    use objc2_foundation::{NSNotification, NSNotificationCenter};
+    use std::cell::RefCell;
+    use std::ptr::NonNull;
+    use std::rc::Rc;
+
+    let (Some(child), Some(parent)) = (ns_window(window), ns_window(parent)) else {
+        return;
+    };
+
+    let weak = || (Weak::from_retained(&child), Weak::from_retained(&parent));
+
+    let will_move: RcBlock<dyn Fn(NonNull<NSNotification>)> = {
+        let (child, parent) = weak();
+
+        RcBlock::new(move |_| {
+            if let (Some(child), Some(parent)) = (child.load(), parent.load())
+                && child.parentWindow().is_some()
+            {
+                parent.removeChildWindow(&child);
+                // Detaching drops the window behind its parent; keep it above.
+                child.orderWindow_relativeTo(NSWindowOrderingMode::Above, parent.windowNumber());
+                reattach_when_released(&child, &parent);
+            }
+        })
+    };
+
+    let did_move: RcBlock<dyn Fn(NonNull<NSNotification>)> = {
+        let (child, parent) = weak();
+
+        RcBlock::new(move |_| {
+            if let (Some(child), Some(parent)) = (child.load(), parent.load()) {
+                let _attached = reattach_if_released(&child, &parent);
+            }
+        })
+    };
+
+    let center = NSNotificationCenter::defaultCenter();
+    let tokens: Rc<RefCell<Vec<Retained<ProtocolObject<dyn NSObjectProtocol>>>>> =
+        Rc::new(RefCell::new(Vec::new()));
+
+    let will_close: RcBlock<dyn Fn(NonNull<NSNotification>)> = {
+        let (center, tokens) = (center.clone(), tokens.clone());
+
+        RcBlock::new(move |_| {
+            for token in tokens.borrow_mut().drain(..) {
+                // SAFETY: every token was returned by this center.
+                #[allow(unsafe_code)]
+                unsafe {
+                    center.removeObserver(token.as_ref());
+                }
+            }
+        })
+    };
+
+    // SAFETY: the notification names are AppKit constants, the observed
+    // object is a live window, and the blocks only touch AppKit on the main
+    // thread, where AppKit posts these window notifications.
+    #[allow(unsafe_code)]
+    unsafe {
+        for (name, block) in [
+            (NSWindowWillMoveNotification, &will_move),
+            (NSWindowDidMoveNotification, &did_move),
+            (NSWindowWillCloseNotification, &will_close),
+        ] {
+            let token = center.addObserverForName_object_queue_usingBlock(
+                Some(name),
+                Some(&child),
+                None,
+                block,
+            );
+
+            tokens.borrow_mut().push(token);
+        }
+    }
+}
+
 /// Converts some [`window::Settings`] into some `WindowAttributes` from `winit`.
 pub fn window_attributes(
     settings: window::Settings,
