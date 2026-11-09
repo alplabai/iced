@@ -26,6 +26,8 @@ jobs:
         with:
           components: rustfmt
       - run: cargo fmt --all -- --check
+      - name: Changelog fragments
+        run: bash changelog.d/assemble.sh --check
 
   lint:
     name: clippy
