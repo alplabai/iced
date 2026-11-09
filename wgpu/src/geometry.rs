@@ -892,42 +892,85 @@ fn into_fill_rule(rule: fill::Rule) -> lyon::tessellation::FillRule {
 }
 
 pub(super) fn dashed(path: &Path, line_dash: LineDash<'_>) -> Path {
-    use lyon::algorithms::walk::{RepeatedPattern, WalkerEvent, walk_along_path};
+    use lyon::path::PathEvent;
     use lyon::path::iterator::PathIterator;
 
+    // An odd number of lengths is repeated, so lines and gaps alternate.
+    let doubled = (line_dash.segments.len() % 2 == 1)
+        .then(|| [line_dash.segments, line_dash.segments].concat());
+    let intervals = doubled.as_deref().unwrap_or(line_dash.segments);
+
+    // A pattern without any positive length would never move along the path.
+    if !intervals.iter().any(|&length| length > 0.0) {
+        return path.clone();
+    }
+
+    let interval = |index: usize| intervals[index].max(0.0);
+    let point = |p: lyon::math::Point| Point::new(p.x, p.y);
+
     Path::new(|builder| {
-        let segments_odd = (line_dash.segments.len() % 2 == 1)
-            .then(|| [line_dash.segments, line_dash.segments].concat());
+        // Where in the pattern we are: which interval (even ones are drawn,
+        // odd ones are gaps), and how much of it is left.
+        let mut index = 0;
+        let mut left = 0.0;
 
-        let mut draw_line = false;
+        let flattened = path
+            .raw()
+            .iter()
+            .flattened(lyon::tessellation::StrokeOptions::DEFAULT_TOLERANCE);
 
-        walk_along_path(
-            path.raw()
-                .iter()
-                .flattened(lyon::tessellation::StrokeOptions::DEFAULT_TOLERANCE),
-            0.0,
-            lyon::tessellation::StrokeOptions::DEFAULT_TOLERANCE,
-            &mut RepeatedPattern {
-                callback: |event: WalkerEvent<'_>| {
-                    let point = Point {
-                        x: event.position.x,
-                        y: event.position.y,
-                    };
+        for event in flattened {
+            let (from, to) = match event {
+                // Each subpath restarts the pattern (as SVG and tiny-skia do),
+                // so no dash runs from one subpath into the next.
+                PathEvent::Begin { at } => {
+                    index = line_dash.offset % intervals.len();
+                    left = interval(index);
 
-                    if draw_line {
-                        builder.line_to(point);
-                    } else {
-                        builder.move_to(point);
+                    if index % 2 == 0 {
+                        builder.move_to(point(at));
                     }
 
-                    draw_line = !draw_line;
+                    continue;
+                }
+                PathEvent::Line { from, to } => (from, to),
+                PathEvent::End {
+                    last,
+                    first,
+                    close: true,
+                } => (last, first),
+                PathEvent::End { close: false, .. }
+                | PathEvent::Quadratic { .. }
+                | PathEvent::Cubic { .. } => continue,
+            };
 
-                    true
-                },
-                index: line_dash.offset,
-                intervals: segments_odd.as_deref().unwrap_or(line_dash.segments),
-            },
-        );
+            let length = (to - from).length();
+            let mut done = 0.0;
+
+            // Every segment is followed to its end, so dashes keep to the path
+            // round its corners, and a dash cut short by the end of the path
+            // is still drawn.
+            while done < length {
+                let step = left.min(length - done);
+                done += step;
+                left -= step;
+
+                let at = point(from.lerp(to, done / length));
+
+                if index % 2 == 0 {
+                    builder.line_to(at);
+                }
+
+                if left <= 0.0 {
+                    index = (index + 1) % intervals.len();
+                    left = interval(index);
+
+                    if index % 2 == 0 {
+                        builder.move_to(at);
+                    }
+                }
+            }
+        }
     })
 }
 
@@ -936,6 +979,123 @@ mod tests {
     use super::*;
     use crate::core::Color;
     use crate::graphics::geometry::frame::{Backend as _, DrawPrimitive};
+
+    /// The drawn subpaths of `path`, as lists of points.
+    fn subpaths(path: &Path) -> Vec<Vec<(f32, f32)>> {
+        use lyon::path::PathEvent;
+
+        // Dash ends are interpolated, so compare them to 1/1000 of a pixel.
+        let round = |p: lyon::math::Point| {
+            (
+                (p.x * 1000.0).round() / 1000.0,
+                (p.y * 1000.0).round() / 1000.0,
+            )
+        };
+        let mut subpaths = Vec::new();
+
+        for event in path.raw().iter() {
+            match event {
+                PathEvent::Begin { at } => subpaths.push(vec![round(at)]),
+                PathEvent::Line { to, .. } => {
+                    subpaths
+                        .last_mut()
+                        .expect("a line follows a begin")
+                        .push(round(to));
+                }
+                _ => {}
+            }
+        }
+
+        // A dash that ends exactly where the path ends leaves an empty move.
+        subpaths.retain(|points| points.len() > 1);
+        subpaths
+    }
+
+    fn dash(segments: &[f32]) -> LineDash<'_> {
+        LineDash {
+            segments,
+            offset: 0,
+        }
+    }
+
+    #[test]
+    fn dashes_do_not_join_separate_subpaths() {
+        let path = Path::new(|p| {
+            p.move_to(Point::new(50.0, 50.0));
+            p.line_to(Point::new(95.0, 50.0));
+            p.move_to(Point::new(50.0, 150.0));
+            p.line_to(Point::new(250.0, 150.0));
+        });
+
+        let subpaths = subpaths(&dashed(&path, dash(&[10.0, 10.0])));
+
+        for points in &subpaths {
+            assert!(
+                points.iter().all(|&(_, y)| y == points[0].1),
+                "a dash leaves its subpath: {points:?}"
+            );
+        }
+
+        // 3 dashes on the 45 long subpath (the pattern restarts), 10 on the other.
+        assert_eq!(subpaths.len(), 13);
+    }
+
+    #[test]
+    fn dashes_follow_corners() {
+        let path = Path::new(|p| {
+            p.move_to(Point::new(300.0, 50.0));
+            p.line_to(Point::new(370.0, 50.0));
+            p.line_to(Point::new(370.0, 150.0));
+        });
+
+        let subpaths = subpaths(&dashed(&path, dash(&[40.0, 10.0])));
+
+        assert_eq!(
+            subpaths[1],
+            vec![(350.0, 50.0), (370.0, 50.0), (370.0, 70.0)]
+        );
+    }
+
+    #[test]
+    fn last_dash_is_drawn_shortened() {
+        let path = Path::line(Point::new(50.0, 250.0), Point::new(95.0, 250.0));
+
+        let subpaths = subpaths(&dashed(&path, dash(&[10.0, 10.0])));
+
+        assert_eq!(
+            subpaths,
+            vec![
+                vec![(50.0, 250.0), (60.0, 250.0)],
+                vec![(70.0, 250.0), (80.0, 250.0)],
+                vec![(90.0, 250.0), (95.0, 250.0)],
+            ]
+        );
+    }
+
+    #[test]
+    fn closed_subpaths_dash_their_closing_edge_and_offset_skips_intervals() {
+        let square = Path::rectangle(Point::ORIGIN, Size::new(10.0, 10.0));
+
+        // Offset 1 starts on the gap: 5 off, then 5 on, along each edge.
+        let subpaths = subpaths(&dashed(
+            &square,
+            LineDash {
+                segments: &[5.0, 5.0],
+                offset: 1,
+            },
+        ));
+
+        assert_eq!(subpaths.len(), 4);
+        assert_eq!(subpaths[3], vec![(0.0, 5.0), (0.0, 0.0)]);
+    }
+
+    #[test]
+    fn a_pattern_without_positive_lengths_leaves_the_path_solid() {
+        let path = Path::line(Point::ORIGIN, Point::new(10.0, 0.0));
+
+        assert_eq!(subpaths(&dashed(&path, dash(&[0.0, 0.0]))), subpaths(&path));
+        assert_eq!(subpaths(&dashed(&path, dash(&[]))), subpaths(&path));
+    }
 
     /// (meshes, atlas text runs) a frame holds after drawing `"R1"` at `size`.
     fn drawn(size: f32) -> (usize, usize) {
