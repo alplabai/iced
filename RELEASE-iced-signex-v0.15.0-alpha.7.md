@@ -40,4 +40,4 @@ Each change was merged into `dev` through its own pull request with Fork CI (`fm
 
 ## Not verified
 
-#88 on an affected Windows Vulkan driver; #93 with a real muda build failure on a Mac; Signex has not been built against this release yet (the `svg::Style` fix lands with the re-pin).
+#88 on an affected Windows Vulkan driver; #91 custom cursors on Windows, X11 and Wayland; #92 by running an example with a `currentColor` icon; #93 with a real muda build failure on a Mac; Signex has not been built against this release yet (the `svg::Style` fix lands with the re-pin).
