@@ -693,7 +693,9 @@ async fn run_instance<P>(
         // windowing system installs its default menu; installing before that
         // would be overwritten.
         if !is_menu_synced {
-            native_menu.sync(|| program.menu(), &proxy);
+            if let Some(reason) = native_menu.sync(|| program.menu(), &proxy) {
+                runtime.broadcast(menu_failed(reason));
+            }
             is_menu_synced = true;
         }
 
@@ -1552,9 +1554,17 @@ where
 
     runtime.track(recipes);
 
-    native_menu.sync(|| program.menu(), proxy);
+    if let Some(reason) = native_menu.sync(|| program.menu(), proxy) {
+        runtime.broadcast(menu_failed(reason));
+    }
 
     actions
+}
+
+fn menu_failed(reason: String) -> subscription::Event {
+    subscription::Event::PlatformSpecific(subscription::PlatformSpecific::MacOS(
+        subscription::MacOS::MenuFailed(reason),
+    ))
 }
 
 fn run_action<'a, P, C>(
