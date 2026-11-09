@@ -681,11 +681,11 @@ mod tests {
         image::Handle::from_rgba(2, 2, color.repeat(4))
     }
 
-    /// Upstream #3512: an image drawn in a layer created after a linear
-    /// image used to end up under it once the two layers were merged,
-    /// because nearest images were all drawn before linear ones.
-    #[test]
-    fn a_nearest_image_in_a_later_layer_is_drawn_over_a_linear_one() {
+    /// Draws with `draw` on a fresh headless renderer and returns the RGBA
+    /// pixel getter of the 100x100 result, or `None` without a GPU adapter.
+    fn render(
+        draw: impl FnOnce(&mut crate::Renderer, Rectangle),
+    ) -> Option<impl Fn(usize, usize) -> [u8; 4]> {
         let Some(mut renderer) =
             futures::executor::block_on(<crate::Renderer as crate::renderer::Headless>::new(
                 renderer::Settings::default(),
@@ -697,35 +697,14 @@ mod tests {
                 "no GPU adapter available, but ICED_REQUIRE_GPU_TESTS is set"
             );
             eprintln!("SKIPPED: no GPU adapter available");
-            return;
+            return None;
         };
 
         let bounds = Rectangle::with_size(Size::new(100.0, 100.0));
-        let icon = Rectangle::new(Point::new(25.0, 25.0), Size::new(50.0, 50.0));
 
-        // The new layer must have the same bounds as the base one, so the
-        // two are merged.
+        // Layers with the same bounds as the base one can be merged into it.
         renderer.reset(bounds);
-
-        renderer.fill_quad(
-            Quad {
-                bounds,
-                ..Quad::default()
-            },
-            Color::BLACK,
-        );
-        renderer.draw_image(
-            image::Image::new(solid(RED)).filter_method(FilterMethod::Linear),
-            bounds,
-            bounds,
-        );
-        renderer.with_layer(bounds, |renderer| {
-            renderer.draw_image(
-                image::Image::new(solid(GREEN)).filter_method(FilterMethod::Nearest),
-                icon,
-                icon,
-            );
-        });
+        draw(&mut renderer, bounds);
 
         let pixels = renderer.screenshot(
             &crate::graphics::Viewport::with_physical_size(
@@ -737,12 +716,69 @@ mod tests {
             ),
             Color::TRANSPARENT,
         );
-        let pixel = |x: usize, y: usize| {
+
+        Some(move |x: usize, y: usize| {
             let i = (y * 100 + x) * 4;
             [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
+        })
+    }
+
+    fn icon() -> Rectangle {
+        Rectangle::new(Point::new(25.0, 25.0), Size::new(50.0, 50.0))
+    }
+
+    /// Upstream #3512: an image drawn in a layer created after a linear
+    /// image used to end up under it once the two layers were merged,
+    /// because nearest images were all drawn before linear ones.
+    #[test]
+    fn a_nearest_image_in_a_later_layer_is_drawn_over_a_linear_one() {
+        let Some(pixel) = render(|renderer, bounds| {
+            renderer.fill_quad(
+                Quad {
+                    bounds,
+                    ..Quad::default()
+                },
+                Color::BLACK,
+            );
+            renderer.draw_image(
+                image::Image::new(solid(RED)).filter_method(FilterMethod::Linear),
+                bounds,
+                bounds,
+            );
+            renderer.with_layer(bounds, |renderer| {
+                renderer.draw_image(
+                    image::Image::new(solid(GREEN)).filter_method(FilterMethod::Nearest),
+                    icon(),
+                    icon(),
+                );
+            });
+        }) else {
+            return;
         };
 
         assert_eq!(pixel(50, 50), GREEN, "the later image is on top");
         assert_eq!(pixel(5, 5), RED, "the linear image is still drawn");
+    }
+
+    /// The same order within one layer, without relying on layer merging.
+    #[test]
+    fn images_in_one_layer_keep_submission_order_across_filters() {
+        let Some(pixel) = render(|renderer, bounds| {
+            renderer.draw_image(
+                image::Image::new(solid(RED)).filter_method(FilterMethod::Linear),
+                bounds,
+                bounds,
+            );
+            renderer.draw_image(
+                image::Image::new(solid(GREEN)).filter_method(FilterMethod::Nearest),
+                icon(),
+                icon(),
+            );
+        }) else {
+            return;
+        };
+
+        assert_eq!(pixel(50, 50), GREEN, "the later image is on top");
+        assert_eq!(pixel(5, 5), RED, "the earlier image is still drawn");
     }
 }
