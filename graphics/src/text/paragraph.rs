@@ -159,6 +159,10 @@ impl core::text::Paragraph for Paragraph {
         );
 
         buffer.set_wrap(text::to_wrap(text.wrapping));
+        buffer.set_ellipsize(text::to_ellipsize(
+            text.ellipsis,
+            text.bounds.height * hint_factor,
+        ));
 
         buffer.set_rich_text(
             text.content.iter().enumerate().map(|(i, span)| {
@@ -680,6 +684,32 @@ mod tests {
         };
 
         Paragraph::with_spans(text)
+    }
+
+    /// Upstream #3484: `with_spans` never told the buffer to ellipsize, so
+    /// `rich_text(..).ellipsis(..)` had no effect.
+    #[test]
+    fn rich_text_is_ellipsized() {
+        let measure = |ellipsis| {
+            Paragraph::with_spans(Text {
+                content: &[Span::<()>::new("an overflowing line of rich text")],
+                bounds: Size::new(100.0, 30.0),
+                size: Pixels(20.0),
+                line_height: LineHeight::Relative(1.5),
+                font: Font::default(),
+                align_x: Alignment::Default,
+                align_y: alignment::Vertical::Top,
+                shaping: Shaping::Advanced,
+                wrapping: Wrapping::None,
+                ellipsis,
+                hint_factor: None,
+            })
+            .min_bounds()
+            .width
+        };
+
+        assert!(measure(Ellipsis::None) > 100.0, "the line overflows");
+        assert!(measure(Ellipsis::End) <= 100.0, "the line is ellipsized");
     }
 
     /// Bounds should cover the ink of the span, without stretching to the
