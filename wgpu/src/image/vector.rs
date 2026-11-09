@@ -35,22 +35,48 @@ impl Svg {
 /// Caches svg vector and raster data
 #[derive(Debug, Default)]
 pub struct Cache {
-    svgs: FxHashMap<u64, Svg>,
-    rasterized: FxHashMap<(u64, u32, u32, ColorFilter), atlas::Entry>,
-    svg_hits: FxHashSet<u64>,
-    rasterized_hits: FxHashSet<(u64, u32, u32, ColorFilter)>,
+    svgs: FxHashMap<Key, Svg>,
+    rasterized: FxHashMap<RasterKey, atlas::Entry>,
+    svg_hits: FxHashSet<Key>,
+    rasterized_hits: FxHashSet<RasterKey>,
     should_trim: bool,
     #[cfg(feature = "svg-text")]
     fontdb: Option<Arc<usvg::fontdb::Database>>,
 }
 
-type ColorFilter = Option<[u8; 4]>;
+/// Key for identifying SVGs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct Key {
+    id: u64,
+    current_color: ColorKey,
+}
+
+impl Key {
+    fn new(id: u64, color: Option<Color>) -> Self {
+        Self {
+            id,
+            current_color: color.map(Color::into_rgba8),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RasterKey {
+    pub id: u64,
+    pub width: u32,
+    pub height: u32,
+    pub color: ColorKey,
+    pub current_color: ColorKey,
+}
+
+type ColorKey = Option<[u8; 4]>;
 
 impl Cache {
     /// Load svg
-    pub fn load(&mut self, handle: &svg::Handle) -> &Svg {
-        if self.svgs.contains_key(&handle.id()) {
-            return self.svgs.get(&handle.id()).unwrap();
+    pub fn load(&mut self, handle: &svg::Handle, current_color: Option<Color>) -> &Svg {
+        let key = Key::new(handle.id(), current_color);
+        if self.svgs.contains_key(&key) {
+            return self.svgs.get(&key).unwrap();
         }
 
         // TODO: Reuse `cosmic-text` font database
@@ -72,6 +98,7 @@ impl Cache {
                 .as_ref()
                 .expect("fontdb must be initialized")
                 .clone(),
+            style_sheet: current_color.map(svg::color_style_sheet),
             ..usvg::Options::default()
         };
 
@@ -89,8 +116,9 @@ impl Cache {
 
         self.should_trim = true;
 
-        let _ = self.svgs.insert(handle.id(), svg);
-        self.svgs.get(&handle.id()).unwrap()
+        let key = Key::new(handle.id(), current_color);
+        let _ = self.svgs.insert(key, svg);
+        self.svgs.get(&key).unwrap()
     }
 
     /// Load svg and upload raster data
@@ -101,26 +129,33 @@ impl Cache {
         belt: &mut wgpu::util::StagingBelt,
         handle: &svg::Handle,
         color: Option<Color>,
+        current_color: Option<Color>,
         size: Size<u32>,
         atlas: &mut Atlas,
     ) -> Option<&atlas::Entry> {
         let id = handle.id();
 
         let color = color.map(Color::into_rgba8);
-        let key = (id, size.width, size.height, color);
+        let key = RasterKey {
+            id,
+            width: size.width,
+            height: size.height,
+            color,
+            current_color: current_color.map(Color::into_rgba8),
+        };
 
         // TODO: Optimize!
         // We currently rerasterize the SVG when its size changes. This is slow
         // as heck. A GPU rasterizer like `pathfinder` may perform better.
         // It would be cool to be able to smooth resize the `svg` example.
         if self.rasterized.contains_key(&key) {
-            let _ = self.svg_hits.insert(id);
+            let _ = self.svg_hits.insert(Key::new(handle.id(), current_color));
             let _ = self.rasterized_hits.insert(key);
 
             return self.rasterized.get(&key);
         }
 
-        match self.load(handle) {
+        match self.load(handle, current_color) {
             Svg::Loaded(tree) => {
                 // TODO: Optimize!
                 // We currently rerasterize the SVG when its size changes. This is slow
@@ -177,7 +212,7 @@ impl Cache {
 
                 log::debug!("allocating {id} {}x{}", size.width, size.height);
 
-                let _ = self.svg_hits.insert(id);
+                let _ = self.svg_hits.insert(Key::new(handle.id(), current_color));
                 let _ = self.rasterized_hits.insert(key);
                 let _ = self.rasterized.insert(key, allocation);
                 self.should_trim = true;
@@ -219,5 +254,40 @@ impl std::fmt::Debug for Svg {
             Svg::Loaded(_) => write!(f, "Svg::Loaded"),
             Svg::NotFound => write!(f, "Svg::NotFound"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SQUARE: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4" fill="currentColor"/></svg>"#;
+
+    /// Returns the fill color of the first path of a loaded SVG.
+    fn fill(svg: &Svg) -> [u8; 3] {
+        let Svg::Loaded(tree) = svg else {
+            panic!("SVG should load");
+        };
+        let Some(usvg::Node::Path(path)) = tree.root().children().first() else {
+            panic!("SVG should hold a path");
+        };
+        let Some(usvg::Paint::Color(color)) = path.fill().map(usvg::Fill::paint) else {
+            panic!("path should be filled with a color");
+        };
+
+        [color.red, color.green, color.blue]
+    }
+
+    #[test]
+    fn current_color_is_part_of_the_cache_key() {
+        let handle = svg::Handle::from_memory(SQUARE);
+        let mut cache = Cache::default();
+
+        assert_eq!(fill(cache.load(&handle, None)), [0, 0, 0]);
+        assert_eq!(
+            fill(cache.load(&handle, Some(Color::from_rgb8(255, 0, 0)))),
+            [255, 0, 0]
+        );
+        assert_eq!(fill(cache.load(&handle, None)), [0, 0, 0]);
     }
 }

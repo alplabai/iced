@@ -298,6 +298,7 @@ impl State {
                         belt,
                         &svg.handle,
                         svg.color,
+                        svg.current_color,
                         Size::new(bounds.width as u32, bounds.height as u32),
                     ) {
                         // Vectors are rasterized at their final size, so
