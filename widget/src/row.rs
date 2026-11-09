@@ -152,6 +152,43 @@ impl<W> Row<W> {
     }
 }
 
+impl<'a, Message, Theme, Renderer> Row<crate::core::Element<'a, Message, Theme, Renderer>> {
+    /// Adds any [`Widget`] to the [`Row`], boxing it into an
+    /// [`Element`](crate::core::Element) first.
+    ///
+    /// `None` children are skipped before boxing, so they cost no heap
+    /// allocation.
+    ///
+    /// This is a shorthand for `push(child._boxed())`, useful when the
+    /// children have different types.
+    ///
+    /// ```
+    /// # use iced_widget::core::Element;
+    /// # use iced_widget::{button, text, Row};
+    /// let view: Row<Element<'_, (), iced_widget::Theme, iced_widget::Renderer>> = Row::new()
+    ///     .push_boxed(text("Hello"))
+    ///     .push_boxed(button("Click"))
+    ///     .push_boxed(None::<iced_widget::Text<'_>>);
+    /// ```
+    pub fn push_boxed(self, child: impl Widget<Message, Theme, Renderer> + 'a) -> Self {
+        if child.is_void() {
+            return self;
+        }
+
+        self.push(child._boxed())
+    }
+
+    /// Extends the [`Row`] with the given children, boxing each of them
+    /// into an [`Element`](crate::core::Element) first.
+    pub fn extend_boxed<I>(self, children: I) -> Self
+    where
+        I: IntoIterator,
+        I::Item: Widget<Message, Theme, Renderer> + 'a,
+    {
+        children.into_iter().fold(self, Self::push_boxed)
+    }
+}
+
 impl<W> Default for Row<W> {
     fn default() -> Self {
         Self::new()

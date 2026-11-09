@@ -11,6 +11,10 @@ use crate::core::{
 };
 use crate::core::{keyboard, mouse};
 
+/// Offsets smaller than this (in pixels) count as no pan.
+// Sub-pixel: invisible, but with headroom over f32 drift far from the centre.
+const OFFSET_TOLERANCE: f32 = 0.5;
+
 /// A frame that displays an image with the ability to zoom in/out and pan.
 pub struct Viewer<Handle> {
     padding: f32,
@@ -163,13 +167,17 @@ where
                 ..
             }) => {
                 let state = tree.state.downcast_mut::<State>();
+                // `starting_offset` is drag scratch state, not view state. The
+                // wheel arm snaps `scale` to 1.0, but zooming in and out over
+                // an overflowing image leaves `current_offset` a few ulps off
+                // zero, so compare it with a sub-pixel tolerance.
                 let is_default = state.scale == 1.0
-                    && state.starting_offset == Vector::default()
-                    && state.current_offset == Vector::default();
+                    && state.current_offset.x.abs() < OFFSET_TOLERANCE
+                    && state.current_offset.y.abs() < OFFSET_TOLERANCE;
 
                 // Fork: upstream #3522 captures every Escape; leave it to
-                // the app unless this viewer is hovered or has changed.
-                if cursor.is_over(bounds) || !is_default {
+                // the app unless this viewer has changed.
+                if !is_default {
                     *state = State::new();
                     shell.request_redraw();
                     shell.capture_event();
@@ -188,12 +196,25 @@ where
                         if y < 0.0 && previous_scale > self.min_scale
                             || y > 0.0 && previous_scale < self.max_scale
                         {
-                            state.scale = (if y > 0.0 {
+                            let stepped = if y > 0.0 {
                                 state.scale * (1.0 + self.scale_step)
                             } else {
                                 state.scale / (1.0 + self.scale_step)
-                            })
-                            .clamp(self.min_scale, self.max_scale);
+                            };
+
+                            // Repeated steps in and out leave `scale` a few
+                            // ulps off 1.0; within half a step (multiplicative,
+                            // so a 1/(1+s) step is never captured) of 1.0 that
+                            // can only be drift, so snap back. This runs
+                            // before the clamp so min/max stay reachable.
+                            let half = (1.0 + self.scale_step).sqrt();
+                            let stepped = if stepped > 1.0 / half && stepped < half {
+                                1.0
+                            } else {
+                                stepped
+                            };
+
+                            state.scale = stepped.clamp(self.min_scale, self.max_scale);
 
                             let scaled_size = scaled_image_size(
                                 renderer,

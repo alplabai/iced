@@ -71,6 +71,8 @@ selector = ["iced_runtime/selector"]
 advanced = ["iced_core/advanced", "iced_widget/advanced"]
 # Embeds Fira Sans into the final application; useful for testing and Wasm builds
 fira-sans = ["iced_renderer/fira-sans"]
+# Cache the parsed system-font index on disk (native targets only)
+font-cache = ["iced_renderer/font-cache"]
 # Enables basic text shaping by default
 basic-shaping = ["iced_core/basic-shaping"]
 # Enables advanced text shaping by default
@@ -219,8 +221,13 @@ log = "0.4"
 lyon = "1.0"
 lyon_path = "1.0"
 mundy = { version = "0.2", default-features = false }
+muda = { version = "0.20", default-features = false }
 nom = "8"
 num-traits = "0.2"
+block2 = "0.6"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSEvent", "NSGraphics", "NSResponder", "NSView", "NSWindow"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "block2", "NSNotification", "NSObject", "NSDate", "NSOperation", "NSRunLoop", "NSString", "NSTimer"] }
 png = "0.18"
 pulldown-cmark = "0.12"
 qrcode = { version = "0.13", default-features = false }
@@ -248,7 +255,8 @@ wasmtimer = "0.4.2"
 web-sys = "0.3.104"
 web-time = "1.1"
 wgpu = { version = "30", default-features = false, features = ["std", "wgsl"] }
-winit = { git = "https://github.com/iced-rs/winit.git", rev = "48116469f15d3bc52b5e56bb516694be8882870d", default-features = false, features = ["rwh_06"] }
+# alplabai/winit `iced-signex`: iced-rs/winit 48116469 + cancellable macOS terminate requests (#37).
+winit = { git = "https://github.com/alplabai/winit.git", rev = "d18f63827e52bb23ebdce17ea94b8d31307a6f3b", default-features = false, features = ["rwh_06"] }
 
 [workspace.lints.rust]
 rust_2018_idioms = { level = "deny", priority = -1 }

@@ -25,7 +25,7 @@ mod platform;
 mod platform;
 
 use crate::Size;
-use crate::window::{Icon, Level, Position};
+use crate::window::{Icon, Id, Level, Position};
 
 pub use platform::PlatformSpecific;
 
@@ -91,6 +91,31 @@ pub struct Settings {
     /// The icon of the window.
     pub icon: Option<Icon>,
 
+    /// The [`Id`] of the window that owns this one, if any.
+    ///
+    /// An owned window (e.g. a modal dialog) stays above its owner. The
+    /// runtime maps this to the native relation of the platform:
+    ///
+    /// - Windows: an owner window (`WS_POPUP` with an owner). The window stays
+    ///   above its owner and has no taskbar entry.
+    /// - macOS: a child window of the parent. It moves with its parent; while
+    ///   the user drags the child itself it is detached, because AppKit drags
+    ///   attached child windows with a visible lag.
+    /// - X11 and Wayland: unsupported. The window opens without a parent and
+    ///   a warning is logged once.
+    ///
+    /// The parent must have finished opening when this window is opened (for
+    /// example, chain on the task that opens the parent). If no open window
+    /// has the given [`Id`], the setting is ignored and a warning is logged.
+    ///
+    /// On every platform, closing the owner also closes every window that
+    /// names it as its parent, recursively. A window whose parent is closed
+    /// before the window has been created is never created; it reports
+    /// [`Closed`](crate::window::Event::Closed) but never `Opened`.
+    ///
+    /// By default there is no parent.
+    pub parent: Option<Id>,
+
     /// Platform specific settings.
     pub platform_specific: PlatformSpecific,
 
@@ -123,8 +148,19 @@ impl Default for Settings {
             blur: false,
             level: Level::default(),
             icon: None,
+            parent: None,
             exit_on_close_request: true,
             platform_specific: PlatformSpecific::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Settings;
+
+    #[test]
+    fn windows_have_no_parent_by_default() {
+        assert_eq!(Settings::default().parent, None);
     }
 }

@@ -10,6 +10,7 @@ mod preset;
 
 pub use preset::Preset;
 
+use crate::core::menu;
 use crate::core::renderer;
 use crate::core::text;
 use crate::core::theme;
@@ -90,6 +91,13 @@ pub trait Program: Sized {
         Subscription::none()
     }
 
+    /// Returns the native menu bar of the program, if any.
+    ///
+    /// Only macOS has a native menu bar; elsewhere it is ignored.
+    fn menu(&self, _state: &Self::State) -> Option<menu::Menu<Self::Message>> {
+        None
+    }
+
     fn theme(&self, _state: &Self::State, _window: window::Id) -> Option<Self::Theme> {
         None
     }
@@ -130,6 +138,11 @@ pub fn with_subscription<P: Program>(
         #[inline]
         fn subscription(&self, state: &Self::State) -> Subscription<Self::Message> {
             (self.subscription)(state)
+        }
+
+        #[inline]
+        fn menu(&self, state: &Self::State) -> Option<menu::Menu<Self::Message>> {
+            self.program.menu(state)
         }
 
         #[inline]
@@ -191,6 +204,94 @@ pub fn with_subscription<P: Program>(
         program,
         subscription: f,
     }
+}
+
+/// Decorates a [`Program`] with the given native menu function.
+pub fn with_menu<P: Program>(
+    program: P,
+    f: impl Fn(&P::State) -> menu::Menu<P::Message>,
+) -> impl Program<State = P::State, Message = P::Message, Theme = P::Theme> {
+    struct WithMenu<P, F> {
+        program: P,
+        menu: F,
+    }
+
+    impl<P: Program, F> Program for WithMenu<P, F>
+    where
+        F: Fn(&P::State) -> menu::Menu<P::Message>,
+    {
+        type State = P::State;
+        type Message = P::Message;
+        type Theme = P::Theme;
+        type Renderer = P::Renderer;
+        type Executor = P::Executor;
+
+        #[inline]
+        fn subscription(&self, state: &Self::State) -> Subscription<Self::Message> {
+            self.program.subscription(state)
+        }
+
+        #[inline]
+        fn menu(&self, state: &Self::State) -> Option<menu::Menu<Self::Message>> {
+            Some((self.menu)(state))
+        }
+
+        #[inline]
+        fn name() -> &'static str {
+            P::name()
+        }
+
+        #[inline]
+        fn settings(&self) -> Settings {
+            self.program.settings()
+        }
+
+        #[inline]
+        fn window(&self) -> Option<window::Settings> {
+            self.program.window()
+        }
+
+        #[inline]
+        fn boot(&self) -> (Self::State, Task<Self::Message>) {
+            self.program.boot()
+        }
+
+        #[inline]
+        fn update(&self, state: &mut Self::State, message: Self::Message) -> Task<Self::Message> {
+            self.program.update(state, message)
+        }
+
+        #[inline]
+        fn view<'a>(
+            &self,
+            state: &'a Self::State,
+            window: window::Id,
+        ) -> impl Widget<Self::Message, Self::Theme, Self::Renderer> + 'a {
+            self.program.view(state, window)
+        }
+
+        #[inline]
+        fn title(&self, state: &Self::State, window: window::Id) -> String {
+            self.program.title(state, window)
+        }
+
+        #[inline]
+        fn theme(&self, state: &Self::State, window: window::Id) -> Option<Self::Theme> {
+            self.program.theme(state, window)
+        }
+
+        #[inline]
+        fn style(&self, state: &Self::State, theme: &Self::Theme) -> theme::Style {
+            self.program.style(state, theme)
+        }
+
+        #[inline]
+        fn scale_factor(&self, state: &Self::State, window: window::Id) -> f32 {
+            self.program.scale_factor(state, window)
+        }
+    }
+
+    WithMenu { program, menu: f }
 }
 
 /// Decorates a [`Program`] with the given style function.
@@ -260,6 +361,11 @@ pub fn with_style<P: Program>(
         #[inline]
         fn subscription(&self, state: &Self::State) -> Subscription<Self::Message> {
             self.program.subscription(state)
+        }
+
+        #[inline]
+        fn menu(&self, state: &Self::State) -> Option<menu::Menu<Self::Message>> {
+            self.program.menu(state)
         }
 
         #[inline]
@@ -342,6 +448,11 @@ pub fn with_executor<P: Program, E: Executor>(
         }
 
         #[inline]
+        fn menu(&self, state: &Self::State) -> Option<menu::Menu<Self::Message>> {
+            self.program.menu(state)
+        }
+
+        #[inline]
         fn theme(&self, state: &Self::State, window: window::Id) -> Option<Self::Theme> {
             self.program.theme(state, window)
         }
@@ -404,6 +515,11 @@ impl<P: Program> Instance<P> {
     #[inline]
     pub fn subscription(&self) -> Subscription<P::Message> {
         self.program.subscription(&self.state)
+    }
+
+    /// Returns the current native menu bar of the [`Instance`], if any.
+    pub fn menu(&self) -> Option<menu::Menu<P::Message>> {
+        self.program.menu(&self.state)
     }
 
     /// Returns the current theme of the [`Instance`].
