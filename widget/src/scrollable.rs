@@ -3728,4 +3728,35 @@ mod tests {
             x.bounds
         );
     }
+
+    /// Without the minimum-length clamp in play, scrollers start at their
+    /// track start and end exactly at their track end.
+    #[test]
+    fn scrollers_span_their_tracks_from_start_to_end() {
+        let bounds = Rectangle::new(Point::ORIGIN, Size::new(100.0, 100.0));
+        let content = Size::new(400.0, 400.0);
+        let direction = Direction::Both {
+            vertical: Scrollbar::default(),
+            horizontal: Scrollbar::default(),
+        };
+
+        let at = |translation: Vector| {
+            let scrollbars = Scrollbars::new(translation, direction, bounds, content);
+            let y = scrollbars.y.expect("vertical scrollbar");
+            let x = scrollbars.x.expect("horizontal scrollbar");
+
+            (
+                (y.scroller.expect("vertical scroller").bounds, y.bounds),
+                (x.scroller.expect("horizontal scroller").bounds, x.bounds),
+            )
+        };
+
+        let ((y_scroller, y_track), (x_scroller, x_track)) = at(Vector::new(0.0, 0.0));
+        assert!((y_scroller.y - y_track.y).abs() < 1e-3);
+        assert!((x_scroller.x - x_track.x).abs() < 1e-3);
+
+        let ((y_scroller, y_track), (x_scroller, x_track)) = at(Vector::new(300.0, 300.0));
+        assert!((y_scroller.y + y_scroller.height - (y_track.y + y_track.height)).abs() < 1e-3);
+        assert!((x_scroller.x + x_scroller.width - (x_track.x + x_track.width)).abs() < 1e-3);
+    }
 }

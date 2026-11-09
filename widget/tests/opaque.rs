@@ -6,12 +6,13 @@ use iced_widget::core::widget::{Meta, Tree};
 use iced_widget::core::{
     Event, Layout, Length, Point, Rectangle, Shell, Size, Widget, layout, renderer,
 };
-use iced_widget::{mouse_area, opaque, space, stack};
+use iced_widget::{mouse_area, opaque, scrollable, space, stack};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Message {
     BehindScrolled,
     BehindPressed,
+    InsideScrolled,
 }
 
 /// A full-size area that reports wheel and press events, with an opaque
@@ -120,4 +121,58 @@ fn wheel_scrolling_is_captured_before_cursor_unaware_layers() {
     let _ = simulator.scroll(ScrollDelta::Lines { x: 0.0, y: -1.0 });
 
     assert_eq!(simulator.into_messages().collect::<Vec<_>>(), []);
+}
+
+#[test]
+fn a_scrollable_below_does_not_scroll() {
+    // A scrollable lands the levitated cursor, so only a captured event
+    // keeps it from scrolling.
+    let mut simulator: Simulator<'_, Message> = Simulator::new(stack![
+        scrollable(space().height(3000))
+            .width(Length::Fill)
+            .height(200)
+            .smooth_scroll(false)
+            .on_scroll(|_| Message::BehindScrolled),
+        opaque(space().width(Length::Fill).height(Length::Fill)),
+    ]);
+    simulator.point_at(Point::new(100.0, 100.0));
+
+    let _ = simulator.scroll(ScrollDelta::Lines { x: 0.0, y: -1.0 });
+
+    assert_eq!(simulator.into_messages().collect::<Vec<_>>(), []);
+}
+
+#[test]
+fn content_inside_opaque_still_gets_the_wheel() {
+    let mut simulator: Simulator<'_, Message> = Simulator::new(opaque(
+        mouse_area(space().width(Length::Fill).height(Length::Fill))
+            .on_scroll(|_| Message::InsideScrolled),
+    ));
+    simulator.point_at(Point::new(100.0, 100.0));
+
+    let _ = simulator.scroll(ScrollDelta::Lines { x: 0.0, y: -1.0 });
+
+    assert_eq!(
+        simulator.into_messages().collect::<Vec<_>>(),
+        [Message::InsideScrolled]
+    );
+}
+
+#[test]
+fn a_scrollable_scrolls_without_the_opaque_layer() {
+    let mut simulator: Simulator<'_, Message> = Simulator::new(
+        scrollable(space().height(3000))
+            .width(Length::Fill)
+            .height(200)
+            .smooth_scroll(false)
+            .on_scroll(|_| Message::BehindScrolled),
+    );
+    simulator.point_at(Point::new(100.0, 100.0));
+
+    let _ = simulator.scroll(ScrollDelta::Lines { x: 0.0, y: -1.0 });
+
+    assert_eq!(
+        simulator.into_messages().collect::<Vec<_>>(),
+        [Message::BehindScrolled]
+    );
 }
