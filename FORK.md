@@ -47,6 +47,7 @@ Verification (this batch):
 - [#2770](https://github.com/iced-rs/iced/pull/2770): radio dot animation (hand-ported to the current `Widget` API; animated only with the `animations` feature).
 - [#2779](https://github.com/iced-rs/iced/pull/2779): toggler animation (hand-ported; `Status`/`Style` public API left unchanged, background colors are mixed and the knob position interpolated inside the widget; animated only with the `animations` feature; its `animations` example was not added). Also adds `Animation::force`/`force_mut` in core.
 - [#3282](https://github.com/iced-rs/iced/pull/3282): `text_input` `on_focus`/`on_blur` (hand-ported onto the `text::Input`-based widget; the upstream blur/focus message swap and `on_blur_maybe` bug are not carried over; operation-driven focus changes are reported on the next event; disabling a focused input counts as a blur and a disabled input is skipped by Tab navigation; no blur on removal from the view or window focus loss).
+- [#3157](https://github.com/iced-rs/iced/pull/3157) (open upstream): relayout in the same frame after `window::resize`; see Issue #46 under Fork fixes.
 
 ## Skipped
 
@@ -95,6 +96,7 @@ Numbers refer to the ranks in `TRIAGE.md`, which has the status of all 20.
 - Issue #45 (part): `Snapshot::matches_image_with(path, Tolerance { max_channel_delta, max_diff_pixels })`; a mismatch writes `*.actual.png` and `*.diff.png` next to the reference, `ICED_UPDATE_SNAPSHOTS=1` rewrites it, and `Simulator::with_scale_factor` replaces the fixed 2.0 (references at a non-default scale get an `@<scale>x` name suffix; `ICED_UPDATE_SNAPSHOTS=1` also applies to `matches_hash`; a zero physical size is an `Error::EmptySnapshot`). Unit tests in `test/src/simulator.rs`. Adapter-named files, `system_fonts` and a forced software adapter are not done yet.
 - #7 was not reproducible (a negative-sweep arc test was added); #13 was already handled in this tree. Other ranks were skipped.
 - Issue #44: `push_boxed` and `extend_boxed` on `Row`, `Column`, `Stack`, `Grid` and `keyed::Column` (`push_boxed(key, child)`) take any `Widget` and box it, so children of different types need no `.boxed()`; `Stack::push_under_boxed` likewise; `None` children are skipped before boxing (no allocation). Purely additive (widget). Tests in `widget/tests/push_boxed.rs`.
+- Issue #46 (item 3, port of upstream #3157): when `request_inner_size` applies the size at once and returns one that differs from the window's current physical size, the winit runner sends itself a `WindowEvent::Resized`, so the layout updates in the same frame instead of at the old size. Only Wayland, iOS and Android return a size; the size check keeps a refused request (maximized, fullscreen or tiled on Wayland) from reconfiguring the surface. `examples/resizing` reproduces it. Checked by hand on Fedora GNOME (Wayland); not on iOS or Android. Minimized-window presenting and per-message redraws (rest of #46) are not done.
 
 ## Verification
 
