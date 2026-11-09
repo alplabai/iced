@@ -3253,9 +3253,11 @@ impl Scrollbars {
                 let scroller_offset =
                     translation.y * ratio * scrollbar_bounds.height / bounds.height;
 
+                let max_offset = (scrollbar_bounds.height - scroller_height).max(0.0);
+
                 let scroller_bounds = Rectangle {
                     x: bounds.x + bounds.width - total_scrollbar_width / 2.0 - scroller_width / 2.0,
-                    y: (scrollbar_bounds.y + scroller_offset).max(0.0),
+                    y: scrollbar_bounds.y + scroller_offset.clamp(0.0, max_offset),
                     width: scroller_width,
                     height: scroller_height,
                 };
@@ -3323,8 +3325,10 @@ impl Scrollbars {
                 let scroller_length = (scrollbar_bounds.width * ratio).max(2.0);
                 let scroller_offset = translation.x * ratio * scrollbar_bounds.width / bounds.width;
 
+                let max_offset = (scrollbar_bounds.width - scroller_length).max(0.0);
+
                 let scroller_bounds = Rectangle {
-                    x: (scrollbar_bounds.x + scroller_offset).max(0.0),
+                    x: scrollbar_bounds.x + scroller_offset.clamp(0.0, max_offset),
                     y: bounds.y + bounds.height
                         - total_scrollbar_height / 2.0
                         - scroller_width / 2.0,
@@ -3686,5 +3690,73 @@ pub fn default(theme: &Theme, status: Status) -> Style {
                 auto_scroll,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A tiny viewport over huge content clamps both scrollers to their
+    /// minimum length; scrolled to the end, each scroller must still end
+    /// inside its own track, not in the corner gap between the two bars.
+    #[test]
+    fn scrollers_stay_in_their_tracks_with_both_bars_at_the_end() {
+        let bounds = Rectangle::new(Point::ORIGIN, Size::new(100.0, 100.0));
+        let content = Size::new(100_000.0, 100_000.0);
+        let direction = Direction::Both {
+            vertical: Scrollbar::default(),
+            horizontal: Scrollbar::default(),
+        };
+        let end = Vector::new(content.width - bounds.width, content.height - bounds.height);
+
+        let scrollbars = Scrollbars::new(end, direction, bounds, content);
+
+        let y = scrollbars.y.expect("vertical scrollbar");
+        let y_scroller = y.scroller.expect("vertical scroller").bounds;
+        assert!(
+            y_scroller.y + y_scroller.height <= y.bounds.y + y.bounds.height + 1e-3,
+            "vertical scroller {y_scroller:?} leaves its track {:?}",
+            y.bounds
+        );
+
+        let x = scrollbars.x.expect("horizontal scrollbar");
+        let x_scroller = x.scroller.expect("horizontal scroller").bounds;
+        assert!(
+            x_scroller.x + x_scroller.width <= x.bounds.x + x.bounds.width + 1e-3,
+            "horizontal scroller {x_scroller:?} leaves its track {:?}",
+            x.bounds
+        );
+    }
+
+    /// Without the minimum-length clamp in play, scrollers start at their
+    /// track start and end exactly at their track end.
+    #[test]
+    fn scrollers_span_their_tracks_from_start_to_end() {
+        let bounds = Rectangle::new(Point::ORIGIN, Size::new(100.0, 100.0));
+        let content = Size::new(400.0, 400.0);
+        let direction = Direction::Both {
+            vertical: Scrollbar::default(),
+            horizontal: Scrollbar::default(),
+        };
+
+        let at = |translation: Vector| {
+            let scrollbars = Scrollbars::new(translation, direction, bounds, content);
+            let y = scrollbars.y.expect("vertical scrollbar");
+            let x = scrollbars.x.expect("horizontal scrollbar");
+
+            (
+                (y.scroller.expect("vertical scroller").bounds, y.bounds),
+                (x.scroller.expect("horizontal scroller").bounds, x.bounds),
+            )
+        };
+
+        let ((y_scroller, y_track), (x_scroller, x_track)) = at(Vector::new(0.0, 0.0));
+        assert!((y_scroller.y - y_track.y).abs() < 1e-3);
+        assert!((x_scroller.x - x_track.x).abs() < 1e-3);
+
+        let ((y_scroller, y_track), (x_scroller, x_track)) = at(Vector::new(300.0, 300.0));
+        assert!((y_scroller.y + y_scroller.height - (y_track.y + y_track.height)).abs() < 1e-3);
+        assert!((x_scroller.x + x_scroller.width - (x_track.x + x_track.width)).abs() < 1e-3);
     }
 }
