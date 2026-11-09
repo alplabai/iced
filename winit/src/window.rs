@@ -4,7 +4,7 @@ mod state;
 use mode_flags::ModeFlags;
 use state::State;
 
-pub use crate::core::window::{CursorGrab, Event, Id, RedrawRequest, Settings};
+pub use crate::core::window::{CursorGrab, Event, Id, RedrawRequest, Settings, cursor};
 
 use crate::Proxy;
 use crate::conversion;
@@ -488,10 +488,10 @@ where
         applied
     }
 
-    pub fn update_mouse(&mut self, interaction: mouse::Interaction) {
+    pub fn update_mouse(&mut self, cursors: &Cursors, interaction: mouse::Interaction) {
         if interaction != self.mouse_interaction {
-            if let Some(icon) = conversion::mouse_interaction(interaction) {
-                self.raw.set_cursor(icon);
+            if let Some(cursor) = cursor_for(cursors, interaction) {
+                self.raw.set_cursor(cursor);
 
                 if shows_cursor_on_interaction_change(
                     self.mouse_interaction == mouse::Interaction::Hidden,
@@ -711,6 +711,24 @@ fn shows_cursor_on_interaction_change(
     was_hidden && !(hide_on_lock && grab == CursorGrab::Locked)
 }
 
+/// The custom cursors created with `window::create_cursor`, shared by every
+/// window of the application.
+pub type Cursors = std::collections::BTreeMap<cursor::Id, winit::window::CustomCursor>;
+
+/// The winit cursor for `interaction`, or `None` to hide the cursor.
+///
+/// A custom cursor that is not (or no longer) known falls back to the default
+/// arrow instead of hiding the cursor.
+fn cursor_for(cursors: &Cursors, interaction: mouse::Interaction) -> Option<winit::window::Cursor> {
+    match interaction {
+        mouse::Interaction::Custom(id) => Some(cursors.get(&id).map_or_else(
+            || winit::window::CursorIcon::Default.into(),
+            |cursor| cursor.clone().into(),
+        )),
+        _ => conversion::mouse_interaction(interaction).map(Into::into),
+    }
+}
+
 /// Whether raw device motion is forwarded to a window. The cheap grab check
 /// comes first so windows without a grab never query focus.
 pub fn forwards_raw_motion(grab: CursorGrab, has_focus: impl FnOnce() -> bool) -> bool {
@@ -786,6 +804,21 @@ fn cursor_visibility_after_grab(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unknown_custom_cursor_falls_back_to_the_default_arrow() {
+        let cursors = Cursors::new();
+
+        assert_eq!(
+            cursor_for(&cursors, mouse::Interaction::Custom(cursor::Id::unique())),
+            Some(winit::window::CursorIcon::Default.into())
+        );
+        assert_eq!(
+            cursor_for(&cursors, mouse::Interaction::Pointer),
+            Some(winit::window::CursorIcon::Pointer.into())
+        );
+        assert_eq!(cursor_for(&cursors, mouse::Interaction::Hidden), None);
+    }
     use winit::keyboard::{Key, NamedKey};
 
     fn policy(on_blur: bool, on_escape: bool) -> ReleasePolicy {
