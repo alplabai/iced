@@ -895,9 +895,9 @@ pub(super) fn dashed(path: &Path, line_dash: LineDash<'_>) -> Path {
     use lyon::path::PathEvent;
     use lyon::path::iterator::PathIterator;
 
-    // Most patterns one path may hold (as in tiny-skia); past it, the path is
+    // Most dashes one path may hold (as in tiny-skia); past it, the path is
     // drawn solid.
-    const MAX_PERIODS: f32 = 1e6;
+    const MAX_DASHES: f32 = 1e6;
 
     // An odd number of lengths is repeated, so lines and gaps alternate.
     let doubled = (line_dash.segments.len() % 2 == 1)
@@ -944,10 +944,12 @@ pub(super) fn dashed(path: &Path, line_dash: LineDash<'_>) -> Path {
     }
 
     // A pattern that never advances, or one too fine for the path, would
-    // never finish or would make millions of dashes.
+    // never finish or would make millions of dashes. NaN or infinite
+    // coordinates fail this check too.
     let period: f32 = (0..intervals.len()).map(interval).sum();
+    let dashes = total / period * (intervals.len() / 2) as f32;
 
-    if !(period > 0.0 && total / period <= MAX_PERIODS) {
+    if !(period > 0.0 && dashes <= MAX_DASHES) {
         return path.clone();
     }
 
@@ -963,6 +965,8 @@ pub(super) fn dashed(path: &Path, line_dash: LineDash<'_>) -> Path {
         // (as tiny-skia does), without a notch at the start corner.
         let mut first_dash = Vec::new();
         let mut deferring = false;
+        // Whether the last step ended a dash exactly at its segment's end.
+        let mut dash_ended_at_end = false;
 
         for event in flattened() {
             if let PathEvent::Begin { at } = event {
@@ -1008,9 +1012,12 @@ pub(super) fn dashed(path: &Path, line_dash: LineDash<'_>) -> Path {
                         }
                     }
 
+                    dash_ended_at_end = false;
+
                     if left <= 0.0 {
                         if index % 2 == 0 {
                             deferring = false;
+                            dash_ended_at_end = done >= length;
                         }
 
                         index = (index + 1) % intervals.len();
@@ -1021,13 +1028,29 @@ pub(super) fn dashed(path: &Path, line_dash: LineDash<'_>) -> Path {
                         }
                     }
                 }
+
+                // f32 stopped advancing: a backstop the dash cap above makes
+                // practically unreachable. The rest of the segment is drawn
+                // as the current interval, so no chord crosses it.
+                if done < length && index % 2 == 0 {
+                    let to = point(to);
+
+                    if deferring {
+                        first_dash.push(to);
+                    } else {
+                        builder.line_to(to);
+                    }
+                }
             }
 
             if let PathEvent::End { .. } = event {
                 if let Some((&head, rest)) = first_dash.split_first() {
-                    // A subpath that ends inside a dash carries it on into
-                    // the first one; otherwise the first dash stands alone.
-                    if deferring || index % 2 != 0 {
+                    // A subpath that ends inside a dash, or with a dash that
+                    // ends exactly at the start point, carries it on into the
+                    // first one; otherwise the first dash stands alone.
+                    let joins = index % 2 == 0 || dash_ended_at_end;
+
+                    if deferring || !joins {
                         builder.move_to(head);
                     }
 
@@ -1038,6 +1061,7 @@ pub(super) fn dashed(path: &Path, line_dash: LineDash<'_>) -> Path {
 
                 first_dash.clear();
                 deferring = false;
+                dash_ended_at_end = false;
                 subpath += 1;
             }
         }
@@ -1215,13 +1239,24 @@ mod tests {
     }
 
     #[test]
-    fn many_tiny_intervals_far_along_a_segment_still_end() {
-        // 64 intervals of 1/64: each step is far below the f32 precision of
-        // positions near the end of a 900 000 long segment.
+    fn many_intervals_count_every_dash_against_the_limit() {
+        // 900 000 patterns of 32 dashes each: far more dashes than allowed,
+        // though fewer patterns than that.
         let segments = [1.0 / 64.0; 64];
         let long = Path::line(Point::ORIGIN, Point::new(900_000.0, 0.0));
 
-        let _ = dashed(&long, dash(&segments));
+        assert_eq!(subpaths(&dashed(&long, dash(&segments))), subpaths(&long));
+    }
+
+    #[test]
+    fn a_dash_ending_exactly_at_the_start_point_joins_the_first() {
+        // 30 around: dashes at 0-10 and 20-30, one dash across the start.
+        let rectangle = Path::rectangle(Point::ORIGIN, Size::new(10.0, 5.0));
+
+        assert_eq!(
+            subpaths(&dashed(&rectangle, dash(&[10.0, 10.0]))),
+            vec![vec![(5.0, 5.0), (0.0, 5.0), (0.0, 0.0), (10.0, 0.0)]]
+        );
     }
 
     /// (meshes, atlas text runs) a frame holds after drawing `"R1"` at `size`.
