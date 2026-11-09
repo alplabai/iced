@@ -396,7 +396,19 @@ impl Layer {
 
         for mesh in meshes {
             let clip_bounds = mesh.clip_bounds() * transformation;
-            let snap_distance = nudge::snap(clip_bounds)
+            // Infinite clip bounds have no pixel grid to snap to (upstream #3291).
+            let is_finite = [
+                clip_bounds.x,
+                clip_bounds.y,
+                clip_bounds.width,
+                clip_bounds.height,
+            ]
+            .iter()
+            .all(|value| value.is_finite());
+
+            let snap_distance = is_finite
+                .then(|| nudge::snap(clip_bounds))
+                .flatten()
                 .map(|snapped_bounds| {
                     Point::new(snapped_bounds.x as f32, snapped_bounds.y as f32)
                         - clip_bounds.position()
@@ -884,5 +896,68 @@ mod gradient {
                 constants_layout,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::core::renderer::{self, Renderer as _};
+    use crate::core::{Color, Rectangle, Size, Transformation};
+    use crate::graphics::color;
+    use crate::graphics::mesh::{Indexed, Mesh, Renderer as _, SolidVertex2D};
+
+    /// Upstream #3291: a mesh with infinite clip bounds got NaN clip bounds
+    /// and snap distance, so it was not drawn at all.
+    #[test]
+    fn a_mesh_with_infinite_clip_bounds_is_drawn() {
+        let Some(mut renderer) =
+            futures::executor::block_on(<crate::Renderer as crate::renderer::Headless>::new(
+                renderer::Settings::default(),
+                None,
+            ))
+        else {
+            assert!(
+                std::env::var_os("ICED_REQUIRE_GPU_TESTS").is_none(),
+                "no GPU adapter available, but ICED_REQUIRE_GPU_TESTS is set"
+            );
+            eprintln!("SKIPPED: no GPU adapter available");
+            return;
+        };
+
+        renderer.reset(Rectangle::with_size(Size::new(100.0, 100.0)));
+
+        let green = color::pack(Color::from_rgb(0.0, 1.0, 0.0));
+        let vertex = |x, y| SolidVertex2D {
+            position: [x, y],
+            color: green,
+        };
+
+        renderer.draw_mesh(Mesh::Solid {
+            buffers: Indexed {
+                vertices: vec![
+                    vertex(0.0, 0.0),
+                    vertex(100.0, 0.0),
+                    vertex(100.0, 100.0),
+                    vertex(0.0, 100.0),
+                ],
+                indices: vec![0, 1, 2, 0, 2, 3],
+            },
+            transformation: Transformation::IDENTITY,
+            clip_bounds: Rectangle::INFINITE,
+        });
+
+        let pixels = renderer.screenshot(
+            &crate::graphics::Viewport::with_physical_size(
+                Size::new(100, 100),
+                renderer::Scale {
+                    window: 1.0,
+                    application: 1.0,
+                },
+            ),
+            Color::TRANSPARENT,
+        );
+        let i = (50 * 100 + 50) * 4;
+
+        assert_eq!(&pixels[i..i + 4], &[0, 255, 0, 255]);
     }
 }

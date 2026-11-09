@@ -101,6 +101,12 @@ impl Mul<Transformation> for Rectangle {
     type Output = Self;
 
     fn mul(self, transformation: Transformation) -> Self {
+        // The matrix product turns `0 * -inf` into NaN, so an infinite
+        // rectangle stays infinite (upstream #3291).
+        if self == Rectangle::INFINITE {
+            return self;
+        }
+
         let position = self.position();
         let size = self.size();
 
@@ -123,5 +129,28 @@ impl From<Transformation> for [f32; 16] {
 impl From<Transformation> for Mat4 {
     fn from(transformation: Transformation) -> Self {
         transformation.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_infinite_rectangle_stays_infinite() {
+        for transformation in [
+            Transformation::IDENTITY,
+            Transformation::scale(2.0),
+            Transformation::translate(10.0, -5.0),
+        ] {
+            assert_eq!(Rectangle::INFINITE * transformation, Rectangle::INFINITE);
+        }
+
+        let finite = Rectangle::new(Point::new(1.0, 2.0), Size::new(3.0, 4.0));
+
+        assert_eq!(
+            finite * Transformation::scale(2.0),
+            Rectangle::new(Point::new(2.0, 4.0), Size::new(6.0, 8.0))
+        );
     }
 }

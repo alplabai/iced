@@ -51,6 +51,8 @@ Verification (this batch):
 - [#3445](https://github.com/iced-rs/iced/pull/3445) (open upstream, fixes upstream #3412): tiny_skia raw text (`Renderer::fill_raw`) respects `Raw::clip_bounds` and adjusts the clip mask before drawing (hand-ported onto the fork's `mask_bounds`-tracking `adjust_clip_mask`). Tests in `tiny_skia/src/engine.rs` (`raw_text`).
 - [#3532](https://github.com/iced-rs/iced/pull/3532) (open upstream): the wgpu compositor picks the surface alpha mode on every `configure_surface` instead of once at startup, because some Vulkan drivers on Windows stop offering `PreMultiplied` after a resize or restore (upstream #3387 crash). Hand-ported onto the fork's `configure_surface`. Test in `wgpu/src/window/compositor.rs`.
 - [#3215](https://github.com/iced-rs/iced/pull/3215) (open upstream): a 0x0 image fails to load with `Error::Empty`, and the tiny_skia raster cache keeps a failed load as an error; a second lookup of an image that failed to load used to panic with "Image should be allocated". A failure stays cached while the image is drawn, so it is not decoded again every frame (upstream drops it at the next trim); like wgpu's cache, a `from_path` image that failed keeps failing until it stops being drawn. On wgpu, a 0x0 RGBA image now measures 1x1 and `load_image` reports `Empty` instead of `OutOfMemory`, and a 0x0 encoded image resolves with an error instead of staying pending forever. The wgpu atlas part was already in this tree. Test in `tiny_skia/src/raster.rs`.
+- [#3291](https://github.com/iced-rs/iced/pull/3291) (open upstream): `Rectangle::INFINITE * Transformation` stays infinite (the matrix product turned `0 * -inf` into NaN, even for the identity), and the wgpu triangle pipeline does not snap infinite clip bounds, so a mesh with infinite clip bounds is drawn instead of disappearing. Tests in `core/src/transformation.rs` and `wgpu/src/triangle.rs`.
+- [#3379](https://github.com/iced-rs/iced/pull/3379) (open upstream): `Rectangle::offset` also moves a rectangle that does not overlap its container at all inside it (it returned no offset); unchanged for overlapping rectangles. Test in `core/src/rectangle.rs`.
 
 ## Skipped
 
@@ -63,6 +65,7 @@ Verification (this batch):
 - [#3365](https://github.com/iced-rs/iced/pull/3365): rejects software wgpu adapters (llvmpipe, lavapipe) whenever the `tiny-skia` feature is on. Signex is wgpu-only and needs a software adapter to start on VMs (#47 asks for the opposite direction), and Fork CI runs its GPU tests on lavapipe with all features, where the headless renderer would refuse to start.
 - [#3378](https://github.com/iced-rs/iced/pull/3378): panics in `Handle::from_rgba` for a 0x0 image instead of handling it; #3215 handles that case without a panic.
 - [#3353](https://github.com/iced-rs/iced/pull/3353): trims caches of the `vello_cpu` renderer, which this fork does not carry.
+- [#3507](https://github.com/iced-rs/iced/pull/3507): `Frame::paste` keeping earlier drawing below `with_clip` contents on wgpu; already done by #18 (`paste` seals the current section first).
 
 ## Fork fixes
 
