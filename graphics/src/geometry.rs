@@ -15,7 +15,7 @@ pub use frame::Frame;
 pub use path::Path;
 pub use stroke::{LineCap, LineDash, LineJoin, Stroke};
 pub use style::Style;
-pub use text::{MAX_ATLAS_TEXT_SIZE, Text};
+pub use text::{Glyph, GlyphKey, GlyphOutline, MAX_ATLAS_TEXT_SIZE, Text};
 
 pub use crate::core::{Image, Svg};
 pub use crate::gradient::{self, Gradient};

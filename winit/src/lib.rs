@@ -247,6 +247,18 @@ where
             }
         }
 
+        fn device_event(
+            &mut self,
+            event_loop: &winit::event_loop::ActiveEventLoop,
+            device_id: winit::event::DeviceId,
+            event: winit::event::DeviceEvent,
+        ) {
+            self.process_event(
+                event_loop,
+                Event::EventLoopAwakened(winit::event::Event::DeviceEvent { device_id, event }),
+            );
+        }
+
         fn user_event(
             &mut self,
             event_loop: &winit::event_loop::ActiveEventLoop,
@@ -362,6 +374,7 @@ where
                                 scale_factor,
                                 last_monitor,
                                 on_open,
+                                parent,
                             } => {
                                 let requested_monitor = match settings.position {
                                     core::window::Position::Default => None,
@@ -393,6 +406,9 @@ where
                                 )
                                 .with_visible(false);
 
+                                let window_attributes =
+                                    conversion::with_parent(window_attributes, parent.as_deref());
+
                                 #[cfg(target_arch = "wasm32")]
                                 let window_attributes = {
                                     use winit::platform::web::WindowAttributesExtWebSys;
@@ -415,6 +431,11 @@ where
                                 let window = event_loop
                                     .create_window(window_attributes)
                                     .expect("Create window");
+
+                                #[cfg(target_os = "macos")]
+                                if let Some(parent) = parent.as_deref() {
+                                    conversion::detach_while_dragged(&window, parent);
+                                }
 
                                 #[cfg(target_os = "macos")]
                                 if let Some(position) = position {
@@ -554,6 +575,7 @@ enum Control {
         last_monitor: Option<winit::monitor::MonitorHandle>,
         on_open: oneshot::Sender<window::Id>,
         scale_factor: f32,
+        parent: Option<Arc<winit::window::Window>>,
     },
     SetAutomaticWindowTabbing(bool),
     ListMonitors(oneshot::Sender<MonitorList>),
@@ -656,6 +678,20 @@ async fn run_instance<P>(
                 make_visible,
                 on_open,
             } => {
+                if window_manager.take_cancelled(id) {
+                    log::warn!(
+                        "Dropping window `{id:?}`: its parent was closed \
+                         before it was created"
+                    );
+
+                    // `window::open` set this when the window was requested.
+                    // Skipping the normal path below must clear it, or a
+                    // non-daemon app never exits once its windows are gone.
+                    is_window_opening = false;
+
+                    continue;
+                }
+
                 if compositor.is_none() {
                     let (compositor_sender, compositor_receiver) = oneshot::channel();
 
@@ -821,6 +857,17 @@ async fn run_instance<P>(
                                 subscription::MacOS::ReceivedUrl(url),
                             ),
                         ));
+                    }
+                    event::Event::DeviceEvent { event, .. } => {
+                        if let Some(event) = conversion::device_event(&event) {
+                            for (id, window) in window_manager.iter_mut() {
+                                if window::forwards_raw_motion(window.cursor_grab(), || {
+                                    window.raw.has_focus()
+                                }) {
+                                    events.push((id, event.clone()));
+                                }
+                            }
+                        }
                     }
                     event::Event::PlatformSpecific(event::PlatformSpecific::MacOS(
                         event::MacOS::TerminateRequested,
@@ -1076,6 +1123,24 @@ async fn run_instance<P>(
                                     // This is an unrecoverable error.
                                     panic!("{error:?}");
                                 }
+                                compositor::SurfaceError::DeviceLost => {
+                                    present_span.finish();
+
+                                    // The device cannot recover and recreating the surface
+                                    // will not help. Skip the frame without requesting a
+                                    // redraw, so the loop does not spin.
+                                    if window
+                                        .surface_error_at
+                                        .is_none_or(|at| at.elapsed() > Duration::from_secs(1))
+                                    {
+                                        window.surface_error_at = Some(Instant::now());
+
+                                        log::error!(
+                                            "The graphics device was lost; the window \
+                                             will not be redrawn anymore."
+                                        );
+                                    }
+                                }
                                 compositor::SurfaceError::Occluded => {
                                     present_span.finish();
 
@@ -1187,7 +1252,26 @@ async fn run_instance<P>(
                                 &mut renderer_settings,
                             );
                         } else {
+                            if window.releases_grab(&window_event) {
+                                let _ =
+                                    window.set_cursor_grab(crate::core::window::CursorGrab::None);
+
+                                events.push((
+                                    id,
+                                    core::Event::Window(core::window::Event::CursorGrabReleased),
+                                ));
+                            }
+
                             window.state.update(&program, &window.raw, &window_event);
+
+                            if matches!(
+                                window_event,
+                                winit::event::WindowEvent::Resized(_)
+                                    | winit::event::WindowEvent::Occluded(_)
+                                    | winit::event::WindowEvent::Focused(_)
+                            ) {
+                                window.state.mark_mode_dirty();
+                            }
 
                             if let Some(event) = conversion::window_event(
                                 window_event,
@@ -1202,6 +1286,12 @@ async fn run_instance<P>(
                         if actions > 0 {
                             proxy.free_slots(actions);
                             actions = 0;
+                        }
+
+                        for (id, window) in window_manager.iter_mut() {
+                            if let Some(event) = window.state.poll_mode_change(&window.raw) {
+                                events.push((id, core::Event::Window(event)));
+                            }
                         }
 
                         if events.is_empty() && messages.is_empty() && window_manager.is_idle() {
@@ -1479,6 +1569,23 @@ fn run_action<'a, P, C>(
             window::Action::Open(id, settings, channel) => {
                 let last_monitor = window_manager.last_monitor();
 
+                let parent = settings.parent.and_then(|parent_id| {
+                    let parent = window_manager
+                        .get(parent_id)
+                        .map(|window| window.raw.clone());
+
+                    if parent.is_some() {
+                        window_manager.set_parent(id, parent_id);
+                    } else {
+                        log::warn!(
+                            "Ignoring parent `{parent_id:?}` of window `{id:?}`: \
+                             no such window is open"
+                        );
+                    }
+
+                    parent
+                });
+
                 control_sender
                     .start_send(Control::CreateWindow {
                         id,
@@ -1487,6 +1594,7 @@ fn run_action<'a, P, C>(
                         scale_factor: program.scale_factor(id),
                         last_monitor,
                         on_open: channel,
+                        parent,
                     })
                     .expect("Send control action");
 
@@ -1498,11 +1606,25 @@ fn run_action<'a, P, C>(
                     .expect("Send control action");
             }
             window::Action::Close(id) => {
-                let _ = ui_caches.remove(&id);
-                let _ = interfaces.remove(&id);
+                // Windows owned by this one close with it, children first.
+                let mut closing = window_manager.descendants(id);
 
-                if window_manager.remove(id).is_some() {
-                    events.push((id, core::Event::Window(core::window::Event::Closed)));
+                // A child that is still being created is not open yet:
+                // drop it when it arrives instead of leaving it orphaned.
+                // It will never report `Opened`, so report `Closed` now.
+                for cancelled in window_manager.cancel_pending(&closing) {
+                    events.push((cancelled, core::Event::Window(core::window::Event::Closed)));
+                }
+
+                closing.push(id);
+
+                for id in closing {
+                    let _ = ui_caches.remove(&id);
+                    let _ = interfaces.remove(&id);
+
+                    if window_manager.remove(id).is_some() {
+                        events.push((id, core::Event::Window(core::window::Event::Closed)));
+                    }
                 }
 
                 if window_manager.is_empty() {
@@ -1594,6 +1716,7 @@ fn run_action<'a, P, C>(
             }
             window::Action::SetResizable(id, resizable) => {
                 if let Some(window) = window_manager.get_mut(id) {
+                    window.state.sync_maximized_hint(&window.raw);
                     window.raw.set_resizable(resizable);
                 }
             }
@@ -1611,6 +1734,7 @@ fn run_action<'a, P, C>(
             window::Action::Maximize(id, maximized) => {
                 if let Some(window) = window_manager.get_mut(id) {
                     window.raw.set_maximized(maximized);
+                    window.state.set_maximized_hint(maximized);
                 }
             }
             window::Action::GetMinimized(id, channel) => {
@@ -1621,6 +1745,7 @@ fn run_action<'a, P, C>(
             window::Action::Minimize(id, minimized) => {
                 if let Some(window) = window_manager.get_mut(id) {
                     window.raw.set_minimized(minimized);
+                    window.state.mark_mode_dirty();
                 }
             }
             window::Action::GetPosition(id, channel) => {
@@ -1683,6 +1808,8 @@ fn run_action<'a, P, C>(
                     window
                         .raw
                         .set_fullscreen(conversion::fullscreen(window.raw.current_monitor(), mode));
+
+                    window.state.mark_mode_dirty();
                 }
             }
             window::Action::SetIcon(id, icon) => {
@@ -1703,11 +1830,15 @@ fn run_action<'a, P, C>(
             }
             window::Action::ToggleMaximize(id) => {
                 if let Some(window) = window_manager.get_mut(id) {
-                    window.raw.set_maximized(!window.raw.is_maximized());
+                    let maximized = !window.raw.is_maximized();
+
+                    window.raw.set_maximized(maximized);
+                    window.state.set_maximized_hint(maximized);
                 }
             }
             window::Action::ToggleDecorations(id) => {
                 if let Some(window) = window_manager.get_mut(id) {
+                    window.state.sync_maximized_hint(&window.raw);
                     window.raw.set_decorations(!window.raw.is_decorated());
                 }
             }
@@ -1738,6 +1869,16 @@ fn run_action<'a, P, C>(
                     });
                 }
             }
+            window::Action::SetCursorGrab(id, grab, channel) => {
+                if let Some(window) = window_manager.get_mut(id) {
+                    let _ = channel.send(window.set_cursor_grab(grab));
+                }
+            }
+            window::Action::SetCursorGrabReleaseOnEscape(id, enabled) => {
+                if let Some(window) = window_manager.get_mut(id) {
+                    window.set_release_grab_on_escape(enabled);
+                }
+            }
             window::Action::GetRawId(id, channel) => {
                 if let Some(window) = window_manager.get_mut(id) {
                     let _ = channel.send(window.raw.id().into());
@@ -1758,9 +1899,17 @@ fn run_action<'a, P, C>(
                         window.state.background_color(),
                     );
 
+                    // Empty bytes mean there is nothing to show (for example
+                    // a lost device), so do not claim a size for them.
+                    let size = if bytes.is_empty() {
+                        Size::new(0, 0)
+                    } else {
+                        window.state.physical_size()
+                    };
+
                     let _ = channel.send(core::window::Screenshot::new(
                         bytes,
-                        window.state.physical_size(),
+                        size,
                         window.state.scale_factor(),
                     ));
                 }

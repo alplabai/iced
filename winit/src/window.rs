@@ -1,8 +1,10 @@
+mod mode_flags;
 mod state;
 
+use mode_flags::ModeFlags;
 use state::State;
 
-pub use crate::core::window::{Event, Id, RedrawRequest, Settings};
+pub use crate::core::window::{CursorGrab, Event, Id, RedrawRequest, Settings};
 
 use crate::Proxy;
 use crate::conversion;
@@ -22,7 +24,7 @@ use crate::program::{self, Program};
 use winit::dpi::{LogicalPosition, LogicalSize};
 use winit::monitor::MonitorHandle;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 pub struct Manager<P, C>
@@ -33,6 +35,66 @@ where
 {
     aliases: BTreeMap<winit::window::WindowId, Id>,
     entries: BTreeMap<Id, Window<P, C>>,
+    family: Family,
+}
+
+/// The owner relation between windows.
+#[derive(Debug, Default)]
+struct Family {
+    parents: BTreeMap<Id, Id>,
+    /// Windows whose creation was requested but whose owner closed before
+    /// they were created.
+    cancelled: BTreeSet<Id>,
+}
+
+impl Family {
+    fn set_parent(&mut self, id: Id, parent: Id) {
+        let _ = self.parents.insert(id, parent);
+    }
+
+    fn cancel(&mut self, id: Id) {
+        let _ = self.cancelled.insert(id);
+        self.forget(id);
+    }
+
+    /// Cancels the ids in `ids` that have a parent and are not `is_open`.
+    fn cancel_pending(&mut self, ids: &[Id], is_open: impl Fn(Id) -> bool) -> Vec<Id> {
+        let pending: Vec<Id> = ids
+            .iter()
+            .copied()
+            .filter(|id| self.parents.contains_key(id) && !is_open(*id))
+            .collect();
+
+        for &id in &pending {
+            self.cancel(id);
+        }
+
+        pending
+    }
+
+    /// Returns whether the creation of `id` was cancelled, and clears it.
+    fn take_cancelled(&mut self, id: Id) -> bool {
+        self.cancelled.remove(&id)
+    }
+
+    fn forget(&mut self, id: Id) {
+        let _ = self.parents.remove(&id);
+    }
+
+    /// Returns every window owned by `id`, directly or not, children
+    /// before their own parents.
+    fn descendants(&self, id: Id) -> Vec<Id> {
+        let mut result = Vec::new();
+
+        for (&child, &parent) in &self.parents {
+            if parent == id {
+                result.extend(self.descendants(child));
+                result.push(child);
+            }
+        }
+
+        result
+    }
 }
 
 impl<P, C> Manager<P, C>
@@ -45,7 +107,34 @@ where
         Self {
             aliases: BTreeMap::new(),
             entries: BTreeMap::new(),
+            family: Family::default(),
         }
+    }
+
+    /// Records that `parent` owns the window `id`.
+    pub fn set_parent(&mut self, id: Id, parent: Id) {
+        self.family.set_parent(id, parent);
+    }
+
+    /// Returns the windows owned by `id`, directly or not, children first.
+    pub fn descendants(&self, id: Id) -> Vec<Id> {
+        self.family.descendants(id)
+    }
+
+    /// Cancels the creation of every window in `ids` that is owned by a
+    /// window but is not open yet, and returns the cancelled ids.
+    ///
+    /// Only ids with a recorded parent are considered, so closing an
+    /// unrelated or already closed id records nothing.
+    pub fn cancel_pending(&mut self, ids: &[Id]) -> Vec<Id> {
+        self.family
+            .cancel_pending(ids, |id| self.entries.contains_key(&id))
+    }
+
+    /// Returns whether the creation of `id` was cancelled by
+    /// [`Manager::cancel_pending`]. A cancelled id is reported once.
+    pub fn take_cancelled(&mut self, id: Id) -> bool {
+        self.family.take_cancelled(id)
     }
 
     pub fn insert(
@@ -89,6 +178,8 @@ where
                 surface_error_at: None,
                 renderer,
                 mouse_interaction: mouse::Interaction::None,
+                cursor_grab: CursorGrab::None,
+                release_grab_on_escape: false,
                 redraw_at: None,
                 frame_clock: FrameClock {
                     anchor: Instant::now(),
@@ -153,7 +244,10 @@ where
     }
 
     pub fn remove(&mut self, id: Id) -> Option<Window<P, C>> {
+        // Forget the parent link only for a window that existed: a pending owned
+        // window keeps it, so closing its owner later still closes it.
         let window = self.entries.remove(&id)?;
+        self.family.forget(id);
         let _ = self.aliases.remove(&window.raw.id());
 
         Some(window)
@@ -189,6 +283,8 @@ where
     pub state: State<P>,
     pub exit_on_close_request: bool,
     pub mouse_interaction: mouse::Interaction,
+    cursor_grab: CursorGrab,
+    release_grab_on_escape: bool,
     pub surface: C::Surface,
     pub surface_version: u64,
     pub surface_error_at: Option<Instant>,
@@ -344,12 +440,64 @@ where
         }
     }
 
+    /// Returns the cursor grab currently in effect.
+    pub fn cursor_grab(&self) -> CursorGrab {
+        self.cursor_grab
+    }
+
+    /// Chooses whether Escape releases the cursor grab. Off by default.
+    pub fn set_release_grab_on_escape(&mut self, enabled: bool) {
+        self.release_grab_on_escape = enabled;
+    }
+
+    /// Returns `true` if the runtime should release the cursor grab because
+    /// of the given window event.
+    pub fn releases_grab(&self, event: &winit::event::WindowEvent) -> bool {
+        self.cursor_grab.is_grabbed()
+            && releases_grab(
+                event,
+                ReleasePolicy {
+                    on_blur: RELEASE_GRAB_ON_BLUR,
+                    on_escape: self.release_grab_on_escape,
+                },
+            )
+    }
+
+    /// Requests a cursor grab, falling back to weaker modes the platform
+    /// accepts, and returns the mode that was actually applied. A locked
+    /// cursor is hidden (except on the web, where the browser hides it);
+    /// releasing it restores visibility unless the current interaction hides
+    /// it.
+    pub fn set_cursor_grab(&mut self, grab: CursorGrab) -> CursorGrab {
+        let applied = apply_cursor_grab(grab, |candidate| {
+            self.raw.set_cursor_grab(conversion::cursor_grab(candidate))
+        });
+
+        let was_locked = self.cursor_grab == CursorGrab::Locked;
+        self.cursor_grab = applied;
+
+        if let Some(visible) = cursor_visibility_after_grab(
+            was_locked,
+            applied,
+            self.mouse_interaction == mouse::Interaction::Hidden,
+            HIDE_CURSOR_ON_LOCK,
+        ) {
+            self.raw.set_cursor_visible(visible);
+        }
+
+        applied
+    }
+
     pub fn update_mouse(&mut self, interaction: mouse::Interaction) {
         if interaction != self.mouse_interaction {
             if let Some(icon) = conversion::mouse_interaction(interaction) {
                 self.raw.set_cursor(icon);
 
-                if self.mouse_interaction == mouse::Interaction::Hidden {
+                if shows_cursor_on_interaction_change(
+                    self.mouse_interaction == mouse::Interaction::Hidden,
+                    self.cursor_grab,
+                    HIDE_CURSOR_ON_LOCK,
+                ) {
                     self.raw.set_cursor_visible(true);
                 }
             } else {
@@ -537,5 +685,351 @@ where
                 );
             }
         });
+    }
+}
+
+/// Whether the runtime releases the grab when the window loses focus.
+///
+/// Only macOS: there the lock is global to the system
+/// (`CGAssociateMouseAndMouseCursorPosition`) and would outlive the focus.
+/// Windows and Wayland re-apply the grab when focus returns, so winit's own
+/// handling is left alone.
+const RELEASE_GRAB_ON_BLUR: bool = cfg!(target_os = "macos");
+
+/// Whether the runtime hides the cursor itself while it is locked. On the
+/// web the browser hides it during pointer lock, and the lock may be refused.
+const HIDE_CURSOR_ON_LOCK: bool = !cfg!(target_arch = "wasm32");
+
+/// Whether a change away from `Hidden` makes the cursor visible again. While
+/// the runtime itself keeps the cursor hidden for a lock it must stay hidden;
+/// where it does not hide on lock (web) nothing else keeps it hidden.
+fn shows_cursor_on_interaction_change(
+    was_hidden: bool,
+    grab: CursorGrab,
+    hide_on_lock: bool,
+) -> bool {
+    was_hidden && !(hide_on_lock && grab == CursorGrab::Locked)
+}
+
+/// Whether raw device motion is forwarded to a window. The cheap grab check
+/// comes first so windows without a grab never query focus.
+pub fn forwards_raw_motion(grab: CursorGrab, has_focus: impl FnOnce() -> bool) -> bool {
+    grab.is_grabbed() && has_focus()
+}
+
+/// Which window events make the runtime release a cursor grab.
+#[derive(Debug, Clone, Copy)]
+struct ReleasePolicy {
+    on_blur: bool,
+    on_escape: bool,
+}
+
+fn releases_grab(event: &winit::event::WindowEvent, policy: ReleasePolicy) -> bool {
+    use winit::event::WindowEvent;
+
+    match event {
+        WindowEvent::Focused(false) => policy.on_blur,
+        WindowEvent::KeyboardInput {
+            event,
+            is_synthetic,
+            ..
+        } => {
+            policy.on_escape
+                && is_escape_press(event.state.is_pressed(), &event.logical_key, *is_synthetic)
+        }
+        _ => false,
+    }
+}
+
+fn is_escape_press(pressed: bool, key: &winit::keyboard::Key, is_synthetic: bool) -> bool {
+    pressed
+        && !is_synthetic
+        && *key == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape)
+}
+
+/// Tries `requested` and then each weaker mode until `set` accepts one, and
+/// returns the mode that was applied. If even [`CursorGrab::None`] is
+/// refused, nothing was applied and [`CursorGrab::None`] is returned.
+fn apply_cursor_grab<E>(
+    requested: CursorGrab,
+    mut set: impl FnMut(CursorGrab) -> Result<(), E>,
+) -> CursorGrab {
+    let mut mode = Some(requested);
+
+    while let Some(candidate) = mode {
+        if set(candidate).is_ok() {
+            return candidate;
+        }
+
+        mode = candidate.fallback();
+    }
+
+    CursorGrab::None
+}
+
+/// Returns the cursor visibility to set after a grab change, if any.
+fn cursor_visibility_after_grab(
+    was_locked: bool,
+    applied: CursorGrab,
+    interaction_hidden: bool,
+    hide_on_lock: bool,
+) -> Option<bool> {
+    if applied == CursorGrab::Locked {
+        hide_on_lock.then_some(false)
+    } else if was_locked && !interaction_hidden {
+        Some(true)
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use winit::keyboard::{Key, NamedKey};
+
+    fn policy(on_blur: bool, on_escape: bool) -> ReleasePolicy {
+        ReleasePolicy { on_blur, on_escape }
+    }
+
+    #[test]
+    fn raw_motion_needs_a_grab_and_skips_focus_query_without_one() {
+        let none = forwards_raw_motion(CursorGrab::None, || {
+            panic!("focus must not be queried without a grab")
+        });
+        assert!(!none);
+        assert!(forwards_raw_motion(CursorGrab::Locked, || true));
+        assert!(forwards_raw_motion(CursorGrab::Confined, || true));
+        assert!(!forwards_raw_motion(CursorGrab::Locked, || false));
+    }
+
+    #[test]
+    fn interaction_change_shows_cursor_unless_lock_hides_it() {
+        // Native: the lock hides the cursor, keep it hidden.
+        assert!(!shows_cursor_on_interaction_change(
+            true,
+            CursorGrab::Locked,
+            true
+        ));
+        assert!(shows_cursor_on_interaction_change(
+            true,
+            CursorGrab::Confined,
+            true
+        ));
+        // Web: the runtime did not hide it, so it must be shown again.
+        assert!(shows_cursor_on_interaction_change(
+            true,
+            CursorGrab::Locked,
+            false
+        ));
+        assert!(!shows_cursor_on_interaction_change(
+            false,
+            CursorGrab::None,
+            true
+        ));
+    }
+
+    #[test]
+    fn blur_releases_only_when_enabled() {
+        let blur = winit::event::WindowEvent::Focused(false);
+        let focus = winit::event::WindowEvent::Focused(true);
+
+        assert!(releases_grab(&blur, policy(true, false)));
+        assert!(!releases_grab(&blur, policy(false, true)));
+        assert!(!releases_grab(&focus, policy(true, true)));
+        assert!(!releases_grab(
+            &winit::event::WindowEvent::CursorEntered {
+                device_id: winit::event::DeviceId::dummy()
+            },
+            policy(true, true)
+        ));
+    }
+
+    #[test]
+    fn escape_press_is_a_release_unless_synthetic_or_a_release_event() {
+        let escape = Key::Named(NamedKey::Escape);
+
+        assert!(is_escape_press(true, &escape, false));
+        assert!(!is_escape_press(true, &escape, true));
+        assert!(!is_escape_press(false, &escape, false));
+        assert!(!is_escape_press(true, &Key::Named(NamedKey::Enter), false));
+    }
+
+    #[test]
+    fn fallback_loop_applies_first_accepted_mode() {
+        let mut tried = Vec::new();
+
+        let applied = apply_cursor_grab(CursorGrab::Locked, |mode| {
+            tried.push(mode);
+
+            if mode == CursorGrab::Locked {
+                Err(())
+            } else {
+                Ok(())
+            }
+        });
+
+        assert_eq!(applied, CursorGrab::Confined);
+        assert_eq!(tried, [CursorGrab::Locked, CursorGrab::Confined]);
+    }
+
+    #[test]
+    fn fallback_loop_chain_ends_at_none() {
+        let mut tried = Vec::new();
+
+        let applied = apply_cursor_grab(CursorGrab::Locked, |mode| {
+            tried.push(mode);
+
+            if mode == CursorGrab::None {
+                Ok(())
+            } else {
+                Err(())
+            }
+        });
+
+        assert_eq!(applied, CursorGrab::None);
+        assert_eq!(
+            tried,
+            [CursorGrab::Locked, CursorGrab::Confined, CursorGrab::None]
+        );
+    }
+
+    #[test]
+    fn fallback_loop_reports_none_when_nothing_applies() {
+        let mut calls = 0;
+
+        let applied = apply_cursor_grab(CursorGrab::Confined, |_| {
+            calls += 1;
+            Err::<(), _>(())
+        });
+
+        assert_eq!(applied, CursorGrab::None);
+        assert_eq!(calls, 2);
+    }
+
+    #[test]
+    fn fallback_loop_stops_at_requested_mode_when_accepted() {
+        let mut calls = 0;
+
+        let applied = apply_cursor_grab(CursorGrab::Confined, |_| {
+            calls += 1;
+            Ok::<(), ()>(())
+        });
+
+        assert_eq!(applied, CursorGrab::Confined);
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn locking_hides_the_cursor_unless_the_platform_does() {
+        assert_eq!(
+            cursor_visibility_after_grab(false, CursorGrab::Locked, false, true),
+            Some(false)
+        );
+        assert_eq!(
+            cursor_visibility_after_grab(false, CursorGrab::Locked, false, false),
+            None
+        );
+    }
+
+    #[test]
+    fn leaving_a_lock_shows_the_cursor_unless_the_interaction_hides_it() {
+        // Locked then degraded to Confined, or released.
+        for applied in [CursorGrab::Confined, CursorGrab::None] {
+            assert_eq!(
+                cursor_visibility_after_grab(true, applied, false, true),
+                Some(true)
+            );
+            assert_eq!(
+                cursor_visibility_after_grab(true, applied, true, true),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn grab_changes_that_never_locked_leave_visibility_alone() {
+        assert_eq!(
+            cursor_visibility_after_grab(false, CursorGrab::Confined, false, true),
+            None
+        );
+        assert_eq!(
+            cursor_visibility_after_grab(false, CursorGrab::None, false, true),
+            None
+        );
+    }
+
+    #[test]
+    fn descendants_are_children_first_and_exclude_unrelated_windows() {
+        let (root, child, grandchild, other) =
+            (Id::unique(), Id::unique(), Id::unique(), Id::unique());
+
+        let mut family = Family::default();
+        family.set_parent(child, root);
+        family.set_parent(grandchild, child);
+
+        assert_eq!(family.descendants(root), [grandchild, child]);
+        assert_eq!(family.descendants(child), [grandchild]);
+        assert!(family.descendants(other).is_empty());
+    }
+
+    #[test]
+    fn cancelled_windows_are_reported_once_and_forgotten() {
+        let (root, child) = (Id::unique(), Id::unique());
+
+        let mut family = Family::default();
+        family.set_parent(child, root);
+        family.cancel(child);
+
+        assert!(family.descendants(root).is_empty());
+        assert!(family.take_cancelled(child));
+        assert!(!family.take_cancelled(child));
+        assert!(!family.take_cancelled(root));
+    }
+
+    #[test]
+    fn only_pending_owned_windows_are_cancelled() {
+        let (root, open, pending, stray) = (Id::unique(), Id::unique(), Id::unique(), Id::unique());
+
+        let mut family = Family::default();
+        family.set_parent(open, root);
+        family.set_parent(pending, root);
+
+        let cancelled = family.cancel_pending(&[open, pending, stray, root], |id| id == open);
+
+        assert_eq!(cancelled, [pending]);
+        assert!(family.take_cancelled(pending));
+        assert!(!family.take_cancelled(stray));
+        assert!(!family.take_cancelled(root));
+        assert!(!family.take_cancelled(open));
+    }
+
+    #[test]
+    fn pending_owned_window_is_found_and_cancelled_by_its_owner() {
+        let (root, pending) = (Id::unique(), Id::unique());
+
+        let mut family = Family::default();
+        family.set_parent(pending, root);
+
+        // While no `forget` ran, the owner still lists the pending window.
+        // (`Manager::remove` is not covered: it needs a live window.)
+        let descendants = family.descendants(root);
+        assert_eq!(descendants, [pending]);
+
+        let cancelled = family.cancel_pending(&descendants, |_| false);
+
+        assert_eq!(cancelled, [pending]);
+        assert!(family.take_cancelled(pending));
+    }
+
+    #[test]
+    fn forgotten_windows_are_no_longer_descendants() {
+        let (root, child) = (Id::unique(), Id::unique());
+
+        let mut family = Family::default();
+        family.set_parent(child, root);
+        family.forget(child);
+
+        assert!(family.descendants(root).is_empty());
     }
 }

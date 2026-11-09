@@ -33,6 +33,41 @@ pub enum Event {
     /// A window changed its scale factor.
     Rescaled(f32),
 
+    /// A window changed its maximized, minimized or fullscreen state.
+    ///
+    /// It is emitted once per change, whether the change was requested by the
+    /// application, by the user or by the window manager, and carries the
+    /// state after the change. Plain resizes and moves do not emit it. The
+    /// flags are read at most once per event loop pass, after the window was
+    /// resized, occluded or its focus changed, or after a maximize, minimize,
+    /// toggle-maximize or mode action.
+    ///
+    /// ## Platform-specific
+    ///
+    /// - **macOS / X11:** `fullscreen` reports the requested state, so it
+    ///   flips when the transition starts, not when it ends.
+    /// - **macOS:** for undecorated or non-resizable windows `maximized`
+    ///   follows only the window actions, not changes made by the user or
+    ///   window manager.
+    /// - **X11:** minimizing may not produce a window event of its own, so
+    ///   it is detected through the focus change that usually accompanies it.
+    ///   A fullscreen change made by the window manager or the user, not
+    ///   through iced, is not reported.
+    /// - **Wayland:** `minimized` is always `None`, and `maximized` changes
+    ///   once the compositor acknowledges it.
+    /// - **Windows:** maximize requests are applied asynchronously, so
+    ///   `maximized` changes with the `Resized` that follows the request.
+    /// - **Web:** `minimized` is `None`.
+    ModeChanged {
+        /// Whether the window is maximized.
+        maximized: bool,
+        /// Whether the window is minimized, or `None` if the platform
+        /// cannot tell.
+        minimized: Option<bool>,
+        /// Whether the window is fullscreen.
+        fullscreen: bool,
+    },
+
     /// A window redraw was requested.
     ///
     /// The [`Instant`] contains the current time.
@@ -46,6 +81,16 @@ pub enum Event {
 
     /// A window was unfocused.
     Unfocused,
+
+    /// The runtime released the cursor grab of the window on its own, so the
+    /// application can update its state.
+    ///
+    /// This is emitted when the window loses focus (macOS only, where the
+    /// grab is global to the system) or when Escape is pressed while the
+    /// application has opted in with `window::release_cursor_grab_on_escape`
+    /// in `iced_runtime`. It is not emitted for a release the application
+    /// requested itself.
+    CursorGrabReleased,
 
     /// A file is being hovered over the window.
     ///
