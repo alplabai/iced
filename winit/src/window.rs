@@ -805,6 +805,8 @@ fn cursor_visibility_after_grab(
 mod tests {
     use super::*;
 
+    use winit::keyboard::{Key, NamedKey};
+
     #[test]
     fn an_unknown_custom_cursor_falls_back_to_the_default_arrow() {
         let cursors = Cursors::new();
@@ -819,7 +821,6 @@ mod tests {
         );
         assert_eq!(cursor_for(&cursors, mouse::Interaction::Hidden), None);
     }
-    use winit::keyboard::{Key, NamedKey};
 
     fn policy(on_blur: bool, on_escape: bool) -> ReleasePolicy {
         ReleasePolicy { on_blur, on_escape }

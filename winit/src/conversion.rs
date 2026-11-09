@@ -809,6 +809,10 @@ pub fn monitor(handle: winit::monitor::MonitorHandle) -> MonitorData {
 
 /// Converts a [`mouse::Interaction`] into a [`winit`] cursor icon.
 ///
+/// Returns `None` for [`mouse::Interaction::Hidden`], meaning the cursor is
+/// hidden, and for [`mouse::Interaction::Custom`], whose cursor only the
+/// runner that created it can set.
+///
 /// [`winit`]: https://github.com/rust-windowing/winit
 pub fn mouse_interaction(interaction: mouse::Interaction) -> Option<winit::window::CursorIcon> {
     use mouse::Interaction;

@@ -3,6 +3,9 @@ use std::fmt;
 use std::sync::atomic::{self, AtomicU64};
 
 /// The id of a custom cursor created with `window::create_cursor`.
+///
+/// Use the id that task returns: an id made with [`Id::unique`] has no cursor
+/// behind it, and the runtime shows the default arrow for it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Id(u64);
