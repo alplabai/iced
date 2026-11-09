@@ -102,7 +102,9 @@ impl Mul<Transformation> for Rectangle {
 
     fn mul(self, transformation: Transformation) -> Self {
         // The matrix product turns `0 * -inf` into NaN, so an infinite
-        // rectangle stays infinite (upstream #3291).
+        // rectangle stays infinite (upstream #3291). Only the exact
+        // `INFINITE` is handled: a rectangle with just an infinite width or
+        // height still turns into NaN, as before.
         if self == Rectangle::INFINITE {
             return self;
         }
