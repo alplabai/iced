@@ -20,6 +20,9 @@
 /// The menu is delivered through `muda`'s process-wide event handler, which
 /// iced installs; another `muda` menu in the same application will not
 /// receive its events.
+///
+/// If the native menu cannot be built, `system::menu_failures` reports it so
+/// the application can show its own menu instead.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Menu<Message> {
     items: Vec<Item<Message>>,

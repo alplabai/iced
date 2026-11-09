@@ -37,6 +37,7 @@ enum Message {
     Revert,
     ToggleWordWrap,
     QuitRequested,
+    MenuFailed(String),
     ConfirmQuit,
     CancelQuit,
 }
@@ -52,6 +53,10 @@ impl Editor {
             Message::Save => self.saved = self.content.clone(),
             Message::Revert => self.content = self.saved.clone(),
             Message::ToggleWordWrap => self.is_word_wrap = !self.is_word_wrap,
+            // A real app would show an in-window menu here.
+            Message::MenuFailed(reason) => {
+                eprintln!("The native menu could not be built: {reason}")
+            }
             // Every quit request needs an answer: quit now, or ask first.
             Message::QuitRequested if self.is_dirty() => self.is_confirming_quit = true,
             Message::QuitRequested | Message::ConfirmQuit => return iced::exit(),
@@ -112,6 +117,7 @@ impl Editor {
         Subscription::batch([
             system::quit_requests().map(|()| Message::QuitRequested),
             window::close_requests().map(|_| Message::QuitRequested),
+            system::menu_failures().map(Message::MenuFailed),
         ])
     }
 

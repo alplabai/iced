@@ -411,7 +411,8 @@ impl<P: Program> Application<P> {
     ///
     /// The menu is built from the state after every update, like a view, and
     /// the native menu is only touched when it changed. Only macOS has a
-    /// native menu bar; elsewhere it is ignored.
+    /// native menu bar; elsewhere it is ignored. If the menu cannot be built,
+    /// [`system::menu_failures`](crate::system::menu_failures) reports why.
     pub fn menu(
         self,
         f: impl Fn(&P::State) -> menu::Menu<P::Message>,
