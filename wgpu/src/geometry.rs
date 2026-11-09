@@ -895,18 +895,23 @@ pub(super) fn dashed(path: &Path, line_dash: LineDash<'_>) -> Path {
     use lyon::path::PathEvent;
     use lyon::path::iterator::PathIterator;
 
+    // Most patterns one path may hold (as in tiny-skia); past it, the path is
+    // drawn solid.
+    const MAX_PERIODS: f32 = 1e6;
+
     // An odd number of lengths is repeated, so lines and gaps alternate.
     let doubled = (line_dash.segments.len() % 2 == 1)
         .then(|| [line_dash.segments, line_dash.segments].concat());
     let intervals = doubled.as_deref().unwrap_or(line_dash.segments);
 
-    // Below this pattern length dashes are invisible and only cost time.
-    const MIN_PERIOD: f32 = 1e-3;
-    // Above this many patterns per segment, positions along it lose f32
-    // precision, so the walk could stop advancing.
-    const MAX_PERIODS_PER_SEGMENT: f32 = 1e6;
+    if intervals.is_empty() {
+        return path.clone();
+    }
 
-    let interval = |index: usize| intervals[index].max(0.0);
+    // The pattern starts at the `offset` interval, which is drawn. Even
+    // indices count from there, so they are the drawn intervals.
+    let start = line_dash.offset % intervals.len();
+    let interval = |index: usize| intervals[(start + index) % intervals.len()].max(0.0);
     let point = |p: lyon::math::Point| Point::new(p.x, p.y);
 
     let flattened = || {
@@ -925,18 +930,24 @@ pub(super) fn dashed(path: &Path, line_dash: LineDash<'_>) -> Path {
         _ => None,
     };
 
-    // Patterns too fine for the path are drawn solid: every pattern must span
-    // at least `MIN_PERIOD`, and no segment may hold more than
-    // `MAX_PERIODS_PER_SEGMENT` of them.
-    let period: f32 = (0..intervals.len()).map(interval).sum();
-    let longest = flattened()
-        .filter_map(segment)
-        .map(|(from, to)| (to - from).length())
-        .fold(0.0, f32::max);
+    let mut total = 0.0;
+    let mut closed = Vec::new();
 
-    if !(period.is_finite() && period >= MIN_PERIOD)
-        || !(longest / period <= MAX_PERIODS_PER_SEGMENT)
-    {
+    for event in flattened() {
+        if let PathEvent::End { close, .. } = event {
+            closed.push(close);
+        }
+
+        if let Some((from, to)) = segment(event) {
+            total += (to - from).length();
+        }
+    }
+
+    // A pattern that never advances, or one too fine for the path, would
+    // never finish or would make millions of dashes.
+    let period: f32 = (0..intervals.len()).map(interval).sum();
+
+    if !(period > 0.0 && total / period <= MAX_PERIODS) {
         return path.clone();
     }
 
@@ -945,55 +956,89 @@ pub(super) fn dashed(path: &Path, line_dash: LineDash<'_>) -> Path {
         // odd ones are gaps), and how much of it is left.
         let mut index = 0;
         let mut left = 0.0;
+        let mut subpath = 0;
+
+        // The first dash of a closed subpath is held back and drawn last, so
+        // a dash that runs on through the start point is drawn in one piece
+        // (as tiny-skia does), without a notch at the start corner.
+        let mut first_dash = Vec::new();
+        let mut deferring = false;
 
         for event in flattened() {
             if let PathEvent::Begin { at } = event {
                 // Each subpath restarts the pattern (as SVG and tiny-skia do),
                 // so no dash runs from one subpath into the next.
-                index = line_dash.offset % intervals.len();
-                left = interval(index);
+                index = 0;
+                left = interval(0);
+                deferring = closed.get(subpath).copied().unwrap_or(false);
 
-                if index % 2 == 0 {
+                if deferring {
+                    first_dash.push(point(at));
+                } else {
                     builder.move_to(point(at));
                 }
 
                 continue;
             }
 
-            let Some((from, to)) = segment(event) else {
-                continue;
-            };
+            if let Some((from, to)) = segment(event) {
+                let length = (to - from).length();
+                let mut done = 0.0;
+                // Steps in a row that did not move `done`. A whole pattern of
+                // them means f32 can no longer advance here, so the walk stops.
+                let mut stalled = 0;
 
-            let length = (to - from).length();
-            let mut done = 0.0;
-            // Steps in a row that did not move `done`. A whole pattern of them
-            // means f32 can no longer advance here, so the walk stops.
-            let mut stalled = 0;
+                // Every segment is followed to its end, so dashes keep to the
+                // path round its corners, and a dash cut short by the end of
+                // the path is still drawn.
+                while done < length && stalled <= intervals.len() {
+                    let step = left.min(length - done);
+                    let before = done;
+                    done += step;
+                    left -= step;
+                    stalled = if done > before { 0 } else { stalled + 1 };
 
-            // Every segment is followed to its end, so dashes keep to the path
-            // round its corners, and a dash cut short by the end of the path
-            // is still drawn.
-            while done < length && stalled <= intervals.len() {
-                let step = left.min(length - done);
-                let before = done;
-                done += step;
-                left -= step;
-                stalled = if done > before { 0 } else { stalled + 1 };
-
-                let at = point(from.lerp(to, done / length));
-
-                if index % 2 == 0 {
-                    builder.line_to(at);
-                }
-
-                if left <= 0.0 {
-                    index = (index + 1) % intervals.len();
-                    left = interval(index);
+                    let at = point(from.lerp(to, done / length));
 
                     if index % 2 == 0 {
-                        builder.move_to(at);
+                        if deferring {
+                            first_dash.push(at);
+                        } else {
+                            builder.line_to(at);
+                        }
+                    }
+
+                    if left <= 0.0 {
+                        if index % 2 == 0 {
+                            deferring = false;
+                        }
+
+                        index = (index + 1) % intervals.len();
+                        left = interval(index);
+
+                        if index % 2 == 0 {
+                            builder.move_to(at);
+                        }
                     }
                 }
+            }
+
+            if let PathEvent::End { .. } = event {
+                if let Some((&head, rest)) = first_dash.split_first() {
+                    // A subpath that ends inside a dash carries it on into
+                    // the first one; otherwise the first dash stands alone.
+                    if deferring || index % 2 != 0 {
+                        builder.move_to(head);
+                    }
+
+                    for &at in rest {
+                        builder.line_to(at);
+                    }
+                }
+
+                first_dash.clear();
+                deferring = false;
+                subpath += 1;
             }
         }
     })
@@ -1098,20 +1143,36 @@ mod tests {
     }
 
     #[test]
-    fn closed_subpaths_dash_their_closing_edge_and_offset_skips_intervals() {
+    fn closed_subpaths_join_the_last_dash_to_the_first() {
         let square = Path::rectangle(Point::ORIGIN, Size::new(10.0, 10.0));
 
-        // Offset 1 starts on the gap: 5 off, then 5 on, along each edge.
-        let subpaths = subpaths(&dashed(
-            &square,
-            LineDash {
-                segments: &[5.0, 5.0],
-                offset: 1,
-            },
-        ));
+        // 40 around: dashes at 0-8, 12-20, 24-32 and 36-44, the last one
+        // running on through the start corner.
+        assert_eq!(
+            subpaths(&dashed(&square, dash(&[8.0, 4.0]))),
+            vec![
+                vec![(10.0, 2.0), (10.0, 10.0)],
+                vec![(6.0, 10.0), (0.0, 10.0), (0.0, 8.0)],
+                vec![(0.0, 4.0), (0.0, 0.0), (8.0, 0.0)],
+            ]
+        );
+    }
 
-        assert_eq!(subpaths.len(), 4);
-        assert_eq!(subpaths[3], vec![(0.0, 5.0), (0.0, 0.0)]);
+    #[test]
+    fn offset_starts_the_pattern_on_a_drawn_interval() {
+        let path = Path::line(Point::ORIGIN, Point::new(30.0, 0.0));
+
+        // Offset 1 of [10, 5] draws 5, skips 10, as before this fix.
+        assert_eq!(
+            subpaths(&dashed(
+                &path,
+                LineDash {
+                    segments: &[10.0, 5.0],
+                    offset: 1,
+                },
+            )),
+            vec![vec![(0.0, 0.0), (5.0, 0.0)], vec![(15.0, 0.0), (20.0, 0.0)]]
+        );
     }
 
     #[test]
@@ -1130,14 +1191,25 @@ mod tests {
     fn patterns_too_fine_for_the_path_leave_it_solid() {
         let short = Path::line(Point::ORIGIN, Point::new(10.0, 0.0));
         let long = Path::line(Point::ORIGIN, Point::new(1e9, 0.0));
+        let many = Path::new(|p| {
+            for i in 0..1000 {
+                p.move_to(Point::new(0.0, i as f32));
+                p.line_to(Point::new(5000.0, i as f32));
+            }
+        });
 
-        // Below the minimum pattern length.
+        // Too many patterns for the path.
         assert_eq!(
             subpaths(&dashed(&short, dash(&[1e-9, 1e-9]))),
             subpaths(&short)
         );
-        // Too many patterns for one segment.
         assert_eq!(subpaths(&dashed(&long, dash(&[1.0, 1.0]))), subpaths(&long));
+        // The limit is for the whole path, not for each segment.
+        assert_eq!(subpaths(&dashed(&many, dash(&[1.0, 1.0]))), subpaths(&many));
+        // A fine pattern on a scaled-down drawing is still dashed (about
+        // 50 000 dashes; f32 steps this small drift a little).
+        let fine = subpaths(&dashed(&short, dash(&[1e-4, 1e-4]))).len();
+        assert!((49_000..=50_001).contains(&fine), "{fine} dashes");
         // A tiny interval inside a normal pattern still advances.
         assert_eq!(subpaths(&dashed(&short, dash(&[1e-9, 5.0]))).len(), 2);
     }
