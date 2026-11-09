@@ -900,13 +900,45 @@ pub(super) fn dashed(path: &Path, line_dash: LineDash<'_>) -> Path {
         .then(|| [line_dash.segments, line_dash.segments].concat());
     let intervals = doubled.as_deref().unwrap_or(line_dash.segments);
 
-    // A pattern without any positive length would never move along the path.
-    if !intervals.iter().any(|&length| length > 0.0) {
-        return path.clone();
-    }
+    // Below this pattern length dashes are invisible and only cost time.
+    const MIN_PERIOD: f32 = 1e-3;
+    // Above this many patterns per segment, positions along it lose f32
+    // precision, so the walk could stop advancing.
+    const MAX_PERIODS_PER_SEGMENT: f32 = 1e6;
 
     let interval = |index: usize| intervals[index].max(0.0);
     let point = |p: lyon::math::Point| Point::new(p.x, p.y);
+
+    let flattened = || {
+        path.raw()
+            .iter()
+            .flattened(lyon::tessellation::StrokeOptions::DEFAULT_TOLERANCE)
+    };
+
+    let segment = |event: PathEvent| match event {
+        PathEvent::Line { from, to } => Some((from, to)),
+        PathEvent::End {
+            last,
+            first,
+            close: true,
+        } => Some((last, first)),
+        _ => None,
+    };
+
+    // Every pattern advances at least `MIN_PERIOD`, and no segment holds more
+    // than `MAX_PERIODS_PER_SEGMENT` patterns, so the walk below always ends.
+    // Otherwise the path is drawn solid.
+    let period: f32 = (0..intervals.len()).map(interval).sum();
+    let longest = flattened()
+        .filter_map(segment)
+        .map(|(from, to)| (to - from).length())
+        .fold(0.0, f32::max);
+
+    if !(period.is_finite() && period >= MIN_PERIOD)
+        || !(longest / period <= MAX_PERIODS_PER_SEGMENT)
+    {
+        return path.clone();
+    }
 
     Path::new(|builder| {
         // Where in the pattern we are: which interval (even ones are drawn,
@@ -914,34 +946,22 @@ pub(super) fn dashed(path: &Path, line_dash: LineDash<'_>) -> Path {
         let mut index = 0;
         let mut left = 0.0;
 
-        let flattened = path
-            .raw()
-            .iter()
-            .flattened(lyon::tessellation::StrokeOptions::DEFAULT_TOLERANCE);
-
-        for event in flattened {
-            let (from, to) = match event {
+        for event in flattened() {
+            if let PathEvent::Begin { at } = event {
                 // Each subpath restarts the pattern (as SVG and tiny-skia do),
                 // so no dash runs from one subpath into the next.
-                PathEvent::Begin { at } => {
-                    index = line_dash.offset % intervals.len();
-                    left = interval(index);
+                index = line_dash.offset % intervals.len();
+                left = interval(index);
 
-                    if index % 2 == 0 {
-                        builder.move_to(point(at));
-                    }
-
-                    continue;
+                if index % 2 == 0 {
+                    builder.move_to(point(at));
                 }
-                PathEvent::Line { from, to } => (from, to),
-                PathEvent::End {
-                    last,
-                    first,
-                    close: true,
-                } => (last, first),
-                PathEvent::End { close: false, .. }
-                | PathEvent::Quadratic { .. }
-                | PathEvent::Cubic { .. } => continue,
+
+                continue;
+            }
+
+            let Some((from, to)) = segment(event) else {
+                continue;
             };
 
             let length = (to - from).length();
@@ -1095,6 +1115,26 @@ mod tests {
 
         assert_eq!(subpaths(&dashed(&path, dash(&[0.0, 0.0]))), subpaths(&path));
         assert_eq!(subpaths(&dashed(&path, dash(&[]))), subpaths(&path));
+        assert_eq!(
+            subpaths(&dashed(&path, dash(&[f32::NAN, f32::NAN]))),
+            subpaths(&path)
+        );
+    }
+
+    #[test]
+    fn patterns_too_fine_for_the_path_leave_it_solid() {
+        let short = Path::line(Point::ORIGIN, Point::new(10.0, 0.0));
+        let long = Path::line(Point::ORIGIN, Point::new(1e9, 0.0));
+
+        // Below the minimum pattern length.
+        assert_eq!(
+            subpaths(&dashed(&short, dash(&[1e-9, 1e-9]))),
+            subpaths(&short)
+        );
+        // Too many patterns for one segment.
+        assert_eq!(subpaths(&dashed(&long, dash(&[1.0, 1.0]))), subpaths(&long));
+        // A tiny interval inside a normal pattern still advances.
+        assert_eq!(subpaths(&dashed(&short, dash(&[1e-9, 5.0]))).len(), 2);
     }
 
     /// (meshes, atlas text runs) a frame holds after drawing `"R1"` at `size`.
