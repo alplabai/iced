@@ -154,6 +154,52 @@ impl subscription::Recipe for QuitRequests {
     }
 }
 
+/// Subscribes to failures to build the native menu bar given by
+/// `Application::menu`.
+///
+/// Each item is the reason the build failed, ready to show to the user.
+///
+/// Only macOS has a native menu bar, so this never fires elsewhere. It fires
+/// once for each distinct menu that fails to build, not on every update; a
+/// menu taken down and given again is built, and reported, again. The
+/// previous menu, if any, stays installed; the application typically falls
+/// back to an in-window menu, most needed when the first menu failed and
+/// none is installed.
+///
+/// Nothing is reported when a later, different menu builds successfully
+/// (that happens on the next update that changes the rows), so the
+/// application can treat a failure as sticky and keep its fallback.
+pub fn menu_failures() -> Subscription<String> {
+    subscription::from_recipe(MenuFailures)
+}
+
+struct MenuFailures;
+
+fn menu_failure(event: subscription::Event) -> Option<String> {
+    match event {
+        subscription::Event::PlatformSpecific(subscription::PlatformSpecific::MacOS(
+            subscription::MacOS::MenuFailed(reason),
+        )) => Some(reason),
+        _ => None,
+    }
+}
+
+impl subscription::Recipe for MenuFailures {
+    type Output = String;
+
+    fn hash(&self, state: &mut subscription::Hasher) {
+        use std::hash::Hash;
+
+        std::any::TypeId::of::<Self>().hash(state);
+    }
+
+    fn stream(self: Box<Self>, input: subscription::EventStream) -> BoxStream<String> {
+        use crate::futures::futures::{future, stream::StreamExt};
+
+        boxed_stream(input.filter_map(|event| future::ready(menu_failure(event))))
+    }
+}
+
 /// Cancels a pending quit request (see [`quit_requests`]); the application
 /// keeps running. Does nothing when no request is pending.
 pub fn cancel_quit<T>() -> Task<T> {
@@ -163,6 +209,52 @@ pub fn cancel_quit<T>() -> Task<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn mac(event: subscription::MacOS) -> subscription::Event {
+        subscription::Event::PlatformSpecific(subscription::PlatformSpecific::MacOS(event))
+    }
+
+    #[test]
+    fn menu_failure_filter_accepts_only_menu_failed() {
+        let failed = subscription::MacOS::MenuFailed("boom".to_owned());
+
+        assert_eq!(menu_failure(mac(failed)), Some("boom".to_owned()));
+        assert_eq!(menu_failure(mac(subscription::MacOS::QuitRequested)), None);
+        assert_eq!(
+            menu_failure(mac(subscription::MacOS::ReceivedUrl(String::new()))),
+            None
+        );
+    }
+
+    /// The shell broadcasts before the runtime polls a new stream, and the
+    /// first-install failure is the one an app most needs to see.
+    #[test]
+    fn a_failure_broadcast_before_the_stream_is_polled_is_delivered() {
+        use crate::futures::futures::{StreamExt, channel::mpsc, task::noop_waker};
+
+        use std::task::{Context, Poll};
+
+        let mut tracker = subscription::Tracker::new();
+        let (sender, mut received) = mpsc::channel(8);
+
+        let mut futures = tracker.update(
+            subscription::into_recipes(menu_failures()).into_iter(),
+            sender,
+        );
+        tracker.broadcast(mac(subscription::MacOS::MenuFailed("boom".to_owned())));
+
+        let waker = noop_waker();
+        let mut context = Context::from_waker(&waker);
+
+        // The driver forwards what it buffered, then waits for more.
+        let mut driver = futures.remove(0);
+        assert!(driver.as_mut().poll(&mut context).is_pending());
+
+        assert_eq!(
+            received.poll_next_unpin(&mut context),
+            Poll::Ready(Some("boom".to_owned()))
+        );
+    }
 
     #[test]
     fn quit_listener_counts_only_while_alive() {

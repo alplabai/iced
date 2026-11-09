@@ -2,8 +2,9 @@
 use crate::core::time::Instant;
 use crate::core::window::{
     CursorGrab, Direction, Event, Icon, Id, Level, Mode, Screenshot, Settings, UserAttention,
+    cursor,
 };
-use crate::core::{Size, Window};
+use crate::core::{Size, Vector, Window};
 use crate::futures::Subscription;
 use crate::futures::event;
 use crate::futures::futures::channel::oneshot;
@@ -222,6 +223,19 @@ pub enum Action {
 
     /// Recompute the layouts of all the windows.
     RelayoutAll,
+
+    /// Creates a custom cursor out of RGBA pixels.
+    CreateCursor {
+        /// The pixels of the cursor, 4 bytes (RGBA) each, row by row.
+        rgba: Vec<u8>,
+        /// The size of the cursor, in pixels.
+        size: Size<u16>,
+        /// The point of the cursor that is the pointer position, from its
+        /// top-left corner.
+        hotspot: Vector<u16>,
+        /// The channel to send the [`cursor::Id`] of the new cursor to.
+        channel: oneshot::Sender<cursor::Id>,
+    },
 
     /// Lists all monitors with positions, resolutions and scaling factors.
     ListMonitors(oneshot::Sender<MonitorList>),
@@ -542,4 +556,26 @@ pub fn allow_automatic_tabbing<T>(enabled: bool) -> Task<T> {
     task::effect(crate::Action::Window(Action::SetAllowAutomaticTabbing(
         enabled,
     )))
+}
+
+/// Creates a custom cursor out of RGBA pixels, row by row, and returns its
+/// [`cursor::Id`]. Use it with [`mouse::Interaction::Custom`].
+///
+/// The task produces nothing if the pixels do not match `size` or the
+/// platform refuses the cursor.
+///
+/// [`mouse::Interaction::Custom`]: crate::core::mouse::Interaction::Custom
+pub fn create_cursor(
+    rgba: impl Into<Vec<u8>>,
+    size: Size<u16>,
+    hotspot: Vector<u16>,
+) -> Task<cursor::Id> {
+    task::oneshot(move |channel| {
+        crate::Action::Window(Action::CreateCursor {
+            rgba: rgba.into(),
+            size,
+            hotspot,
+            channel,
+        })
+    })
 }

@@ -161,23 +161,22 @@ impl Rectangle<f32> {
     /// Computes the offset that must be applied to the [`Rectangle`] to be placed
     /// inside the given `container`.
     pub fn offset(&self, container: &Rectangle) -> Vector {
-        let Some(intersection) = self.intersection(container) else {
-            return Vector::ZERO;
-        };
-
-        let left = intersection.x - self.x;
-        let top = intersection.y - self.y;
-
+        // Also for a rectangle that does not overlap the container at all
+        // (upstream #3379), which used to get no offset.
         Vector::new(
-            if left > 0.0 {
-                left
+            if container.x > self.x {
+                container.x - self.x
+            } else if self.x + self.width > container.x + container.width {
+                container.x + container.width - self.x - self.width
             } else {
-                intersection.x + intersection.width - self.x - self.width
+                0.0
             },
-            if top > 0.0 {
-                top
+            if container.y > self.y {
+                container.y - self.y
+            } else if self.y + self.height > container.y + container.height {
+                container.y + container.height - self.y - self.height
             } else {
-                intersection.y + intersection.height - self.y - self.height
+                0.0
             },
         )
     }
@@ -468,6 +467,24 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn offset_moves_a_rectangle_inside_its_container() {
+        let container = Rectangle::new(Point::new(0.0, 0.0), Size::new(100.0, 100.0));
+        let at = |x, y| Rectangle::new(Point::new(x, y), Size::new(20.0, 20.0));
+
+        assert_eq!(at(10.0, 10.0).offset(&container), Vector::ZERO);
+        assert_eq!(at(-5.0, 90.0).offset(&container), Vector::new(5.0, -10.0));
+        // Not overlapping at all (upstream #3379): used to be no offset.
+        assert_eq!(
+            at(150.0, -50.0).offset(&container),
+            Vector::new(-70.0, 50.0)
+        );
+        assert_eq!(
+            at(-50.0, 300.0).offset(&container),
+            Vector::new(50.0, -220.0)
+        );
+    }
 
     #[test]
     fn chord_endpoints_lie_on_boundary() {

@@ -15,7 +15,6 @@ pub struct Compositor {
     instance: wgpu::Instance,
     adapter: wgpu::Adapter,
     format: wgpu::TextureFormat,
-    alpha_mode: wgpu::CompositeAlphaMode,
     engine: Engine,
     settings: Settings,
 }
@@ -222,7 +221,7 @@ impl Compositor {
 
         log::info!("Selected: {:#?}", adapter.get_info());
 
-        let (format, alpha_mode) = compatible_surface
+        let format = compatible_surface
             .as_ref()
             .and_then(|surface| {
                 let capabilities = surface.get_capabilities(&adapter);
@@ -254,22 +253,13 @@ impl Compositor {
                     capabilities.formats.first().copied()
                 });
 
-                let alpha_modes = capabilities.alpha_modes;
+                log::info!("Available alpha modes: {:#?}", capabilities.alpha_modes);
 
-                log::info!("Available alpha modes: {alpha_modes:#?}");
-
-                let preferred_alpha =
-                    if alpha_modes.contains(&wgpu::CompositeAlphaMode::PreMultiplied) {
-                        wgpu::CompositeAlphaMode::PreMultiplied
-                    } else {
-                        wgpu::CompositeAlphaMode::Auto
-                    };
-
-                format.zip(Some(preferred_alpha))
+                format
             })
             .ok_or(Error::IncompatibleSurface)?;
 
-        log::info!("Selected format: {format:?} with alpha mode: {alpha_mode:?}");
+        log::info!("Selected format: {format:?}");
 
         #[cfg(target_arch = "wasm32")]
         let limits = [wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits())];
@@ -324,7 +314,6 @@ impl Compositor {
                         instance,
                         adapter,
                         format,
-                        alpha_mode,
                         engine,
                         settings,
                     });
@@ -347,6 +336,15 @@ pub async fn new(
     shell: Shell,
 ) -> Result<Compositor, Error> {
     Compositor::request(settings, display, compatible_window, shell).await
+}
+
+/// Chooses the alpha mode for a surface out of the ones it supports now.
+fn alpha_mode(supported: &[wgpu::CompositeAlphaMode]) -> wgpu::CompositeAlphaMode {
+    if supported.contains(&wgpu::CompositeAlphaMode::PreMultiplied) {
+        wgpu::CompositeAlphaMode::PreMultiplied
+    } else {
+        wgpu::CompositeAlphaMode::Auto
+    }
 }
 
 /// Presents the given primitives with the given [`Compositor`].
@@ -451,6 +449,13 @@ impl graphics::Compositor for Compositor {
             wgpu::TextureUsages::RENDER_ATTACHMENT
         };
 
+        // Upstream #3532: the alpha modes a surface supports can change during
+        // its lifetime (some Vulkan drivers on Windows stop offering
+        // `PreMultiplied` after a resize or restore), so pick one each time.
+        let alpha_mode = alpha_mode(&capabilities.alpha_modes);
+
+        log::debug!("Configuring surface ({width}x{height}) with alpha mode: {alpha_mode:?}");
+
         surface.configure(
             &self.engine.device,
             &wgpu::SurfaceConfiguration {
@@ -459,7 +464,7 @@ impl graphics::Compositor for Compositor {
                 present_mode: self.settings.present_mode,
                 width,
                 height,
-                alpha_mode: self.alpha_mode,
+                alpha_mode,
                 view_formats: vec![],
                 desired_maximum_frame_latency: 1,
                 color_space: wgpu::SurfaceColorSpace::Auto,
@@ -700,6 +705,17 @@ pub fn present_mode_from_env() -> Option<wgpu::PresentMode> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn alpha_mode_prefers_premultiplied_and_falls_back_to_auto() {
+        use wgpu::CompositeAlphaMode::{Auto, Opaque, PostMultiplied, PreMultiplied};
+
+        assert_eq!(alpha_mode(&[Opaque, PreMultiplied]), PreMultiplied);
+        // Upstream #3532: a surface that stopped offering `PreMultiplied`
+        // after a resize must not be configured with it.
+        assert_eq!(alpha_mode(&[Opaque, PostMultiplied]), Auto);
+        assert_eq!(alpha_mode(&[]), Auto);
+    }
 
     /// Creates a device with an adapter, if the machine has one.
     fn device() -> Option<(wgpu::Device, wgpu::Queue)> {

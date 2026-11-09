@@ -30,4 +30,6 @@ pub enum Interaction {
     AllScroll,
     ZoomIn,
     ZoomOut,
+    /// A custom cursor created with `window::create_cursor`.
+    Custom(crate::window::cursor::Id),
 }

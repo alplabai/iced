@@ -221,7 +221,7 @@ where
         _state: &Tree,
         renderer: &mut Renderer,
         theme: &Theme,
-        _style: &renderer::Style,
+        defaults: &renderer::Style,
         layout: Layout,
         _cursor: mouse::Cursor,
         _viewport: &Rectangle,
@@ -258,6 +258,7 @@ where
             svg::Svg {
                 handle: self.handle.clone(),
                 color: style.color,
+                current_color: style.inherit_current_color.then_some(defaults.text_color),
                 rotation: self.rotation.radians(),
                 opacity: self.opacity,
             },
@@ -285,6 +286,12 @@ pub struct Style {
     ///
     /// `None` keeps the original color.
     pub color: Option<Color>,
+
+    /// Whether the [`Svg`] should inherit the current rendering color.
+    ///
+    /// This will override the SVG's original `color` field so that
+    /// `currentColor` is the same as the current renderer style's color.
+    pub inherit_current_color: bool,
 }
 
 /// The theme catalog of an [`Svg`].
@@ -319,5 +326,13 @@ pub type StyleFn<'a, Theme> = Box<dyn Fn(&Theme, Status) -> Style + 'a>;
 impl<Theme> From<Style> for StyleFn<'_, Theme> {
     fn from(style: Style) -> Self {
         Box::new(move |_theme, _status| style)
+    }
+}
+
+/// Returns a [`Style`] that inherits the current rendering color.
+pub fn current_color(_theme: &Theme, _status: Status) -> Style {
+    Style {
+        color: None,
+        inherit_current_color: true,
     }
 }

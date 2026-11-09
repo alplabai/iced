@@ -12,6 +12,7 @@ pub struct Cache {
     entries: FxHashMap<KeyHash, Entry>,
     aliases: FxHashMap<KeyHash, KeyHash>,
     recently_used: FxHashSet<KeyHash>,
+    version: text::Version,
 }
 
 impl Cache {
@@ -30,7 +31,17 @@ impl Cache {
         &mut self,
         font_system: &mut cosmic_text::FontSystem,
         key: Key<'_>,
+        version: text::Version,
     ) -> (KeyHash, &mut Entry) {
+        // A font loaded since the text was shaped can change its shape, so
+        // the cache starts over when the font system changes (upstream #3352).
+        if version != self.version {
+            self.entries.clear();
+            self.aliases.clear();
+            self.recently_used.clear();
+            self.version = version;
+        }
+
         let hash = key.hash(FxHasher::default());
 
         if let Some(hash) = self.aliases.get(&hash) {
@@ -175,5 +186,58 @@ mod tests {
         let tabular = key(Font::DEFAULT.features(font::Features::TNUM)).hash(FxHasher::default());
 
         assert_ne!(plain, tabular);
+    }
+
+    /// Upstream #3352: text shaped with a fallback before its font was
+    /// loaded stayed in the cache with the fallback's shape.
+    #[test]
+    fn reshapes_text_when_its_font_is_loaded() {
+        use std::sync::Arc;
+
+        // The icon font is there so the font system can always shape;
+        // Fira Sans, the font the text asks for, is loaded only later.
+        let mut db = cosmic_text::fontdb::Database::new();
+        let _ = db.load_font_source(cosmic_text::fontdb::Source::Binary(Arc::new(
+            include_bytes!("../../fonts/Iced-Icons.ttf").to_vec(),
+        )));
+        let mut font_system =
+            cosmic_text::FontSystem::new_with_locale_and_db("en-US".to_owned(), db);
+        let mut cache = Cache::new();
+        let version = text::Version::default();
+        let key = || Key {
+            content: "Hello, world!",
+            bounds: Size::new(1000.0, 1000.0),
+            shaping: text::Shaping::Advanced,
+            ..key(Font::new("Fira Sans"))
+        };
+
+        let unshaped = cache
+            .allocate(&mut font_system, key(), version)
+            .1
+            .min_bounds;
+
+        assert_eq!(
+            cache
+                .allocate(&mut font_system, key(), version)
+                .1
+                .min_bounds,
+            unshaped,
+            "text was reshaped without a font being loaded"
+        );
+
+        let _ = font_system
+            .db_mut()
+            .load_font_source(cosmic_text::fontdb::Source::Binary(Arc::new(
+                include_bytes!("../../fonts/FiraSans-Regular.ttf").to_vec(),
+            )));
+
+        assert_ne!(
+            cache
+                .allocate(&mut font_system, key(), text::Version(version.0 + 1))
+                .1
+                .min_bounds,
+            unshaped,
+            "text was not reshaped after its font was loaded"
+        );
     }
 }

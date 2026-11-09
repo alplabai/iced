@@ -55,6 +55,11 @@ pub enum MacOS {
     /// Triggered when the application is asked to quit (Command+Q, Dock ▸ Quit,
     /// logout) and `Settings::exit_on_quit_request` is `false`.
     QuitRequested,
+
+    /// Triggered when the native menu bar given by `Application::menu` could
+    /// not be built. The previous menu, if any, stays installed; when this was
+    /// the first menu, none is installed. Carries the reason the build failed.
+    MenuFailed(String),
 }
 
 /// A stream of runtime events.

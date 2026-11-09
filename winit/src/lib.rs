@@ -511,6 +511,22 @@ where
                                     event_loop.set_allows_automatic_window_tabbing(_enabled);
                                 }
                             }
+                            Control::CreateCursor {
+                                id,
+                                source,
+                                on_created,
+                            } => {
+                                let cursor = event_loop.create_custom_cursor(source);
+
+                                self.process_event(
+                                    event_loop,
+                                    Event::CursorCreated {
+                                        id,
+                                        cursor,
+                                        on_created,
+                                    },
+                                );
+                            }
                             Control::ListMonitors(on_done) => {
                                 let monitors = crate::conversion::monitor_list(
                                     event_loop.available_monitors(),
@@ -559,6 +575,11 @@ enum Event<Message: 'static> {
         make_visible: bool,
         on_open: oneshot::Sender<window::Id>,
     },
+    CursorCreated {
+        id: window::cursor::Id,
+        cursor: winit::window::CustomCursor,
+        on_created: oneshot::Sender<window::cursor::Id>,
+    },
     EventLoopAwakened(winit::event::Event<Message>),
     Exit,
 }
@@ -578,6 +599,11 @@ enum Control {
         parent: Option<Arc<winit::window::Window>>,
     },
     SetAutomaticWindowTabbing(bool),
+    CreateCursor {
+        id: window::cursor::Id,
+        source: winit::window::CustomCursorSource,
+        on_created: oneshot::Sender<window::cursor::Id>,
+    },
     ListMonitors(oneshot::Sender<MonitorList>),
     CancelQuit,
 }
@@ -603,6 +629,7 @@ async fn run_instance<P>(
     use winit::event_loop::ControlFlow;
 
     let mut window_manager = window::Manager::new();
+    let mut cursors = window::Cursors::new();
     let mut is_window_opening = !is_daemon;
 
     let mut compositor = None;
@@ -666,7 +693,9 @@ async fn run_instance<P>(
         // windowing system installs its default menu; installing before that
         // would be overwritten.
         if !is_menu_synced {
-            native_menu.sync(|| program.menu(), &proxy);
+            if let Some(reason) = native_menu.sync(|| program.menu(), &proxy) {
+                runtime.broadcast(menu_failed(reason));
+            }
             is_menu_synced = true;
         }
 
@@ -821,6 +850,14 @@ async fn run_instance<P>(
 
                 let _ = on_open.send(id);
                 is_window_opening = false;
+            }
+            Event::CursorCreated {
+                id,
+                cursor,
+                on_created,
+            } => {
+                let _ = cursors.insert(id, cursor);
+                let _ = on_created.send(id);
             }
             Event::EventLoopAwakened(event) => {
                 match event {
@@ -1094,7 +1131,7 @@ async fn run_instance<P>(
                         {
                             window.request_redraw(redraw_request);
                             window.request_input_method(input_method);
-                            window.update_mouse(mouse_interaction);
+                            window.update_mouse(&cursors, mouse_interaction);
 
                             run_clipboard(&mut proxy, &mut clipboard, clipboard_requests, id);
                         }
@@ -1339,7 +1376,7 @@ async fn run_instance<P>(
                                     clipboard: clipboard_requests,
                                     ..
                                 } => {
-                                    window.update_mouse(mouse_interaction);
+                                    window.update_mouse(&cursors, mouse_interaction);
 
                                     #[cfg(not(feature = "unconditional-rendering"))]
                                     window.request_redraw(_redraw_request);
@@ -1517,9 +1554,17 @@ where
 
     runtime.track(recipes);
 
-    native_menu.sync(|| program.menu(), proxy);
+    if let Some(reason) = native_menu.sync(|| program.menu(), proxy) {
+        runtime.broadcast(menu_failed(reason));
+    }
 
     actions
+}
+
+fn menu_failed(reason: String) -> subscription::Event {
+    subscription::Event::PlatformSpecific(subscription::PlatformSpecific::MacOS(
+        subscription::MacOS::MenuFailed(reason),
+    ))
 }
 
 fn run_action<'a, P, C>(
@@ -1941,6 +1986,31 @@ fn run_action<'a, P, C>(
                     window.raw.request_redraw();
                 }
             }
+            window::Action::CreateCursor {
+                rgba,
+                size,
+                hotspot,
+                channel,
+            } => match winit::window::CustomCursor::from_rgba(
+                rgba,
+                size.width,
+                size.height,
+                hotspot.x,
+                hotspot.y,
+            ) {
+                Ok(source) => {
+                    control_sender
+                        .start_send(Control::CreateCursor {
+                            id: core::window::cursor::Id::unique(),
+                            source,
+                            on_created: channel,
+                        })
+                        .expect("Send control action");
+                }
+                Err(error) => {
+                    log::warn!("Invalid custom cursor: {error}");
+                }
+            },
             window::Action::RelayoutAll => {
                 for (id, window) in window_manager.iter_mut() {
                     if let Some(ui) = interfaces.remove(&id) {

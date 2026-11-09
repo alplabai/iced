@@ -2,7 +2,7 @@
 //!
 //! Every call here must run on the main thread (`muda` panics elsewhere);
 //! [`Native::sync`] is called from the event loop, which runs there.
-use super::{Flags, Node, Spec};
+use super::{Flags, Node, Outcome, Reconciler, Spec};
 use crate::Proxy;
 use crate::core::menu::{Menu, Predefined};
 
@@ -44,8 +44,7 @@ struct Installed {
 pub(crate) struct Native<Message: 'static> {
     installed: Option<Installed>,
     router: Option<Arc<Mutex<Router<Message>>>>,
-    /// Rows that failed to build; not retried until they change.
-    failed: Option<Vec<Node>>,
+    reconciler: Reconciler,
 }
 
 impl<Message: Send + 'static> Native<Message> {
@@ -53,7 +52,7 @@ impl<Message: Send + 'static> Native<Message> {
         Self {
             installed: None,
             router: None,
-            failed: None,
+            reconciler: Reconciler::default(),
         }
     }
 
@@ -62,13 +61,21 @@ impl<Message: Send + 'static> Native<Message> {
     /// Same rows: only the flags that changed (or rows chosen since the last
     /// sync, whose check mark AppKit flips itself) are written. Different
     /// rows: the menu is rebuilt, and the old one stays installed if that
-    /// fails. `None`: the menu is taken down.
+    /// fails; while it does, its rows act and show flags according to the
+    /// current menu's rows with the same id (`<submenu path>/<label>`), and
+    /// rows with no counterpart are inert. `None`: the menu is taken down.
+    ///
+    /// Returns the reason only when this call tried to build a menu and
+    /// failed. The same failed rows are not built again, so a repeated sync
+    /// returns `None`: a failure is reported once per distinct menu. A menu
+    /// taken down and given again is built, and reported, again.
     pub(crate) fn sync(
         &mut self,
         menu: impl FnOnce() -> Option<Menu<Message>>,
         proxy: &Proxy<Message>,
-    ) {
+    ) -> Option<String> {
         let Some(menu) = menu() else {
+            self.reconciler.taken_down();
             if let Some(installed) = self.installed.take() {
                 installed.menu.remove_for_nsapp();
             }
@@ -79,7 +86,7 @@ impl<Message: Send + 'static> Native<Message> {
                     .actions
                     .clear();
             }
-            return;
+            return None;
         };
 
         let Spec {
@@ -88,44 +95,49 @@ impl<Message: Send + 'static> Native<Message> {
             actions,
         } = Spec::new(menu);
 
+        let outcome = self.reconciler.reconcile(
+            self.installed
+                .as_ref()
+                .map(|installed| installed.nodes.as_slice()),
+            &nodes,
+            build,
+        );
+
         let clicked = {
             let mut router = self
                 .router(proxy)
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner);
 
+            // Always the new actions: a click takes its message out of the
+            // map, so every sync must refill it. A kept old menu routes by
+            // row id into the current spec; rows without a match are inert.
             router.actions = actions;
             std::mem::take(&mut router.clicked)
         };
 
-        let is_same = self
-            .installed
-            .as_ref()
-            .is_some_and(|installed| installed.nodes == nodes);
+        let mut failure = None;
 
-        if !is_same && self.failed.as_ref() != Some(&nodes) {
-            match build(nodes.clone()) {
-                Ok(installed) => {
-                    if let Some(old) = self.installed.take() {
-                        old.menu.remove_for_nsapp();
-                    }
-                    installed.menu.init_for_nsapp();
-                    self.installed = Some(installed);
-                    self.failed = None;
+        match outcome {
+            Outcome::Built(installed) => {
+                if let Some(old) = self.installed.take() {
+                    old.menu.remove_for_nsapp();
                 }
-                Err(error) => {
-                    log::error!(
-                        "Failed to build the native menu bar, keeping the old one: {error}"
-                    );
-                    self.failed = Some(nodes);
-                    return;
-                }
+                installed.menu.init_for_nsapp();
+                self.installed = Some(installed);
             }
+            Outcome::Failed(error) => {
+                log::error!("Failed to build the native menu bar, keeping the old one: {error}");
+                failure = Some(error.to_string());
+            }
+            Outcome::Unchanged | Outcome::Skipped => {}
         }
 
         if let Some(installed) = &mut self.installed {
             apply(installed, &flags, &clicked);
         }
+
+        failure
     }
 
     /// Returns the router, installing the `muda` event handler on first use.

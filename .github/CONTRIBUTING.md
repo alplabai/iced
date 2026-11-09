@@ -46,6 +46,7 @@ When we fix or build something here first, we offer it upstream, so the fork sta
 
 - Every fork change has an issue. Title the pull request `Issue #N: <what changes> (fixes #N)`.
 - Add a line to `FORK.md` under "Fork fixes" (or "Merged upstream PRs" / "Skipped") in the same pull request.
+- Add a changelog fragment, `changelog.d/<PR number>.<section>.md`, with one bullet that ends in a `Signex:` sentence saying what changes for Signex. The release notes are assembled from these fragments; see [`changelog.d/README.md`](../changelog.d/README.md). Pull requests that only touch docs or CI need none.
 - Keep a fork fix small and generic: code that belongs in iced lives here, and Signex-specific policy stays in Signex.
 - Before asking for review, run `cargo check --workspace --all-targets` and the tests of every crate you touched with the features they need (for example `cargo test -p iced_graphics --features geometry`).
 - Say whether the change was checked on a real GPU or only on software rendering.
