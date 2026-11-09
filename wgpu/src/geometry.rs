@@ -925,9 +925,9 @@ pub(super) fn dashed(path: &Path, line_dash: LineDash<'_>) -> Path {
         _ => None,
     };
 
-    // Every pattern advances at least `MIN_PERIOD`, and no segment holds more
-    // than `MAX_PERIODS_PER_SEGMENT` patterns, so the walk below always ends.
-    // Otherwise the path is drawn solid.
+    // Patterns too fine for the path are drawn solid: every pattern must span
+    // at least `MIN_PERIOD`, and no segment may hold more than
+    // `MAX_PERIODS_PER_SEGMENT` of them.
     let period: f32 = (0..intervals.len()).map(interval).sum();
     let longest = flattened()
         .filter_map(segment)
@@ -966,14 +966,19 @@ pub(super) fn dashed(path: &Path, line_dash: LineDash<'_>) -> Path {
 
             let length = (to - from).length();
             let mut done = 0.0;
+            // Steps in a row that did not move `done`. A whole pattern of them
+            // means f32 can no longer advance here, so the walk stops.
+            let mut stalled = 0;
 
             // Every segment is followed to its end, so dashes keep to the path
             // round its corners, and a dash cut short by the end of the path
             // is still drawn.
-            while done < length {
+            while done < length && stalled <= intervals.len() {
                 let step = left.min(length - done);
+                let before = done;
                 done += step;
                 left -= step;
+                stalled = if done > before { 0 } else { stalled + 1 };
 
                 let at = point(from.lerp(to, done / length));
 
@@ -1135,6 +1140,16 @@ mod tests {
         assert_eq!(subpaths(&dashed(&long, dash(&[1.0, 1.0]))), subpaths(&long));
         // A tiny interval inside a normal pattern still advances.
         assert_eq!(subpaths(&dashed(&short, dash(&[1e-9, 5.0]))).len(), 2);
+    }
+
+    #[test]
+    fn many_tiny_intervals_far_along_a_segment_still_end() {
+        // 64 intervals of 1/64: each step is far below the f32 precision of
+        // positions near the end of a 900 000 long segment.
+        let segments = [1.0 / 64.0; 64];
+        let long = Path::line(Point::ORIGIN, Point::new(900_000.0, 0.0));
+
+        let _ = dashed(&long, dash(&segments));
     }
 
     /// (meshes, atlas text runs) a frame holds after drawing `"R1"` at `size`.
