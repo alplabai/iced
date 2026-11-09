@@ -487,7 +487,14 @@ impl Engine {
                 };
 
                 let transformation = transformation * *local_transformation;
+                let Some(clip_bounds) =
+                    clip_bounds.intersection(&(raw.clip_bounds * transformation))
+                else {
+                    return;
+                };
+
                 let (width, height) = buffer.size();
+                let fully_sized = width.is_some() && height.is_some();
 
                 let physical_bounds = Rectangle::new(
                     raw.position,
@@ -501,8 +508,15 @@ impl Engine {
                     return;
                 }
 
-                let clip_mask =
-                    (!physical_bounds.is_within(&clip_bounds)).then_some(clip_mask as &_);
+                // A buffer without a complete size has no proven extent, so it
+                // is always drawn through the mask.
+                let clip_mask = match fully_sized && physical_bounds.is_within(&clip_bounds) {
+                    true => None,
+                    false => {
+                        adjust_clip_mask(clip_mask, mask_bounds, clip_bounds);
+                        Some(clip_mask as &_)
+                    }
+                };
 
                 self.text_pipeline.draw_raw(
                     &buffer,
@@ -1371,5 +1385,129 @@ mod tests {
         assert_eq!(pixmap.pixel(25, 16), pixel(color));
         assert_eq!(pixmap.pixel(6, 16), pixel(color));
         assert_eq!(pixmap.pixel(16, 26), pixel(Color::WHITE));
+    }
+
+    mod raw_text {
+        use super::*;
+        use crate::graphics::text::{self, Raw};
+
+        use std::borrow::Cow;
+        use std::ops::Range;
+        use std::sync::Arc;
+
+        const WIDTH: u32 = 180;
+        const HEIGHT: u32 = 60;
+        const CLIP_EDGE: u32 = 48;
+
+        #[test]
+        fn respects_clip_bounds_and_keeps_inner_ink() {
+            let pixels = draw_raw_text(
+                (Some(WIDTH as f32), Some(HEIGHT as f32)),
+                clip_edge_bounds(),
+                canvas_bounds(),
+            );
+
+            assert!(has_alpha(&pixels, 0..CLIP_EDGE));
+            assert!(!has_alpha(&pixels, CLIP_EDGE..WIDTH));
+        }
+
+        #[test]
+        fn intersects_layer_clip_bounds() {
+            let pixels = draw_raw_text(
+                (Some(WIDTH as f32), Some(HEIGHT as f32)),
+                canvas_bounds(),
+                clip_edge_bounds(),
+            );
+
+            assert!(has_alpha(&pixels, 0..CLIP_EDGE));
+            assert!(!has_alpha(&pixels, CLIP_EDGE..WIDTH));
+        }
+
+        #[test]
+        fn without_a_complete_size_is_masked() {
+            for size in [
+                (None, None),
+                (Some(WIDTH as f32), None),
+                (None, Some(HEIGHT as f32)),
+            ] {
+                let pixels = draw_raw_text(size, clip_edge_bounds(), canvas_bounds());
+
+                assert!(has_alpha(&pixels, 0..CLIP_EDGE));
+                assert!(!has_alpha(&pixels, CLIP_EDGE..WIDTH));
+            }
+        }
+
+        fn draw_raw_text(
+            size: (Option<f32>, Option<f32>),
+            raw_clip_bounds: Rectangle,
+            layer_clip_bounds: Rectangle,
+        ) -> tiny_skia::Pixmap {
+            let buffer = {
+                let mut font_system = text::font_system().write().expect("Write font system");
+
+                font_system.load_font(Cow::Borrowed(
+                    include_bytes!("../../graphics/fonts/FiraSans-Regular.ttf").as_slice(),
+                ));
+
+                let mut buffer = cosmic_text::Buffer::new(
+                    font_system.raw(),
+                    cosmic_text::Metrics::new(32.0, 40.0),
+                );
+
+                buffer.set_size(size.0, size.1);
+                buffer.set_wrap(cosmic_text::Wrap::None);
+                buffer.set_text(
+                    "MMMMMMMM",
+                    &cosmic_text::Attrs::new().family(cosmic_text::Family::Name("Fira Sans")),
+                    cosmic_text::Shaping::Advanced,
+                    None,
+                );
+                buffer.shape_until_scroll(font_system.raw(), false);
+
+                Arc::new(buffer)
+            };
+
+            let text = Text::Raw {
+                raw: Raw {
+                    buffer: Arc::downgrade(&buffer),
+                    position: Point::ORIGIN,
+                    color: Color::WHITE,
+                    clip_bounds: raw_clip_bounds,
+                },
+                transformation: Transformation::IDENTITY,
+            };
+
+            let mut pixels = tiny_skia::Pixmap::new(WIDTH, HEIGHT).expect("Create pixel map");
+            let mut clip_mask = tiny_skia::Mask::new(WIDTH, HEIGHT).expect("Create clip mask");
+            let mut mask_bounds = Rectangle::new(Point::ORIGIN, Size::ZERO);
+            adjust_clip_mask(&mut clip_mask, &mut mask_bounds, canvas_bounds());
+
+            Engine::new().draw_text(
+                &text,
+                Transformation::IDENTITY,
+                &mut pixels.as_mut(),
+                &mut clip_mask,
+                &mut mask_bounds,
+                layer_clip_bounds,
+            );
+
+            pixels
+        }
+
+        fn canvas_bounds() -> Rectangle {
+            Rectangle::new(Point::ORIGIN, Size::new(WIDTH as f32, HEIGHT as f32))
+        }
+
+        fn clip_edge_bounds() -> Rectangle {
+            Rectangle::new(Point::ORIGIN, Size::new(CLIP_EDGE as f32, HEIGHT as f32))
+        }
+
+        fn has_alpha(pixels: &tiny_skia::Pixmap, x_range: Range<u32>) -> bool {
+            (0..HEIGHT).any(|y| {
+                x_range
+                    .clone()
+                    .any(|x| pixels.data()[((y * WIDTH + x) * 4 + 3) as usize] > 0)
+            })
+        }
     }
 }
