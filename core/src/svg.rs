@@ -24,7 +24,8 @@ pub struct Svg<H = Handle> {
 
     /// The default color used when the [`Svg`] references `currentColor`.
     ///
-    /// Overrides the `color` field of the SVG.
+    /// Overrides the `color` attribute of the SVG document. The `color`
+    /// filter above still applies on top of it.
     pub current_color: Option<Color>,
 
     /// The rotation to be applied to the image; on its center.
@@ -172,8 +173,12 @@ pub trait Renderer: crate::Renderer {
 
 /// Gets the style sheet to apply to an SVG to override the `color` attribute.
 pub fn color_style_sheet(color: Color) -> String {
-    let [r, g, b, _] = color.into_rgba8();
+    let [r, g, b, a] = color.into_rgba8();
 
-    // CSS takes the alpha of `rgba` as a number from 0 to 1.
-    format!("svg {{ color: rgba({r}, {g}, {b}, {}); }}", color.a)
+    // CSS takes the alpha of `rgba` as a number from 0 to 1. Deriving it
+    // from the same bytes as the cache keys keeps sheet and key in step.
+    format!(
+        "svg {{ color: rgba({r}, {g}, {b}, {}); }}",
+        f32::from(a) / 255.0
+    )
 }

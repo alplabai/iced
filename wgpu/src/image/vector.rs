@@ -61,12 +61,12 @@ impl Key {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct RasterKey {
-    pub id: u64,
-    pub width: u32,
-    pub height: u32,
-    pub color: ColorKey,
-    pub current_color: ColorKey,
+struct RasterKey {
+    id: u64,
+    width: u32,
+    height: u32,
+    color: ColorKey,
+    current_color: ColorKey,
 }
 
 type ColorKey = Option<[u8; 4]>;
@@ -121,6 +121,13 @@ impl Cache {
         self.svgs.get(&key).unwrap()
     }
 
+    /// Keeps the drawn SVG through the next trim, together with the
+    /// uncolored tree that `measure_svg` loads for layout.
+    fn hit_svg(&mut self, id: u64, current_color: Option<Color>) {
+        let _ = self.svg_hits.insert(Key::new(id, current_color));
+        let _ = self.svg_hits.insert(Key::new(id, None));
+    }
+
     /// Load svg and upload raster data
     pub fn upload(
         &mut self,
@@ -149,7 +156,7 @@ impl Cache {
         // as heck. A GPU rasterizer like `pathfinder` may perform better.
         // It would be cool to be able to smooth resize the `svg` example.
         if self.rasterized.contains_key(&key) {
-            let _ = self.svg_hits.insert(Key::new(handle.id(), current_color));
+            self.hit_svg(id, current_color);
             let _ = self.rasterized_hits.insert(key);
 
             return self.rasterized.get(&key);
@@ -212,7 +219,7 @@ impl Cache {
 
                 log::debug!("allocating {id} {}x{}", size.width, size.height);
 
-                let _ = self.svg_hits.insert(Key::new(handle.id(), current_color));
+                self.hit_svg(id, current_color);
                 let _ = self.rasterized_hits.insert(key);
                 let _ = self.rasterized.insert(key, allocation);
                 self.should_trim = true;
