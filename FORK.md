@@ -49,6 +49,8 @@ Verification (this batch):
 - [#3282](https://github.com/iced-rs/iced/pull/3282): `text_input` `on_focus`/`on_blur` (hand-ported onto the `text::Input`-based widget; the upstream blur/focus message swap and `on_blur_maybe` bug are not carried over; operation-driven focus changes are reported on the next event; disabling a focused input counts as a blur and a disabled input is skipped by Tab navigation; no blur on removal from the view or window focus loss).
 - [#3157](https://github.com/iced-rs/iced/pull/3157) (open upstream): relayout in the same frame after `window::resize`; see Issue #46 under Fork fixes.
 - [#3445](https://github.com/iced-rs/iced/pull/3445) (open upstream, fixes upstream #3412): tiny_skia raw text (`Renderer::fill_raw`) respects `Raw::clip_bounds` and adjusts the clip mask before drawing (hand-ported onto the fork's `mask_bounds`-tracking `adjust_clip_mask`). Tests in `tiny_skia/src/engine.rs` (`raw_text`).
+- [#3532](https://github.com/iced-rs/iced/pull/3532) (open upstream): the wgpu compositor picks the surface alpha mode on every `configure_surface` instead of once at startup, because some Vulkan drivers on Windows stop offering `PreMultiplied` after a resize or restore (upstream #3387 crash). Hand-ported onto the fork's `configure_surface`. Test in `wgpu/src/window/compositor.rs`.
+- [#3215](https://github.com/iced-rs/iced/pull/3215) (open upstream): a 0x0 image fails to load with `Error::Empty`, and the tiny_skia raster cache keeps a failed load as an error; a second lookup of an image that failed to load used to panic with "Image should be allocated". The wgpu atlas part was already in this tree. Test in `tiny_skia/src/raster.rs`.
 
 ## Skipped
 
@@ -58,6 +60,9 @@ Verification (this batch):
 - [#2483](https://github.com/iced-rs/iced/pull/2483): animations for default widgets; based on a 2024 tree, conflicts in about 40 files including files deleted since (winit program/system, text_input cursor), 139 files changed. Superseded in practice by the smaller #2770/#2779 ports.
 - [#3443](https://github.com/iced-rs/iced/pull/3443): `blank` field in `window::Settings`; it refactors winit window/surface ownership into a new `Interface` type and conflicts with the frame clock, surface-error handling and #3450 work (9 hunks).
 - [#3021](https://github.com/iced-rs/iced/pull/3021): architectural port (winit run/shell plumbing rewritten); about 39 conflict hunks.
+- [#3365](https://github.com/iced-rs/iced/pull/3365): rejects software wgpu adapters (llvmpipe, lavapipe) whenever the `tiny-skia` feature is on. Signex is wgpu-only and needs a software adapter to start on VMs (#47 asks for the opposite direction), and Fork CI runs its GPU tests on lavapipe with all features, where the headless renderer would refuse to start.
+- [#3378](https://github.com/iced-rs/iced/pull/3378): panics in `Handle::from_rgba` for a 0x0 image instead of handling it; #3215 handles that case without a panic.
+- [#3353](https://github.com/iced-rs/iced/pull/3353): trims caches of the `vello_cpu` renderer, which this fork does not carry.
 
 ## Fork fixes
 
