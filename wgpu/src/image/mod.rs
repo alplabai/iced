@@ -198,8 +198,7 @@ impl Pipeline {
 pub struct State {
     layers: Vec<Layer>,
     prepare_layer: usize,
-    nearest_instances: Vec<Instance>,
-    linear_instances: Vec<Instance>,
+    instances: Vec<Instance>,
 }
 
 impl State {
@@ -229,7 +228,11 @@ impl State {
 
         let layer = &mut self.layers[self.prepare_layer];
 
-        let mut atlas: Option<Arc<wgpu::BindGroup>> = None;
+        // The group being filled: its atlas and whether it samples linearly.
+        // Images keep their submission order, so a new group starts whenever
+        // either changes (#3512: nearest and linear images used to be drawn
+        // in two passes, which reordered them).
+        let mut group: Option<(Arc<wgpu::BindGroup>, bool)> = None;
 
         for image in images {
             match &image {
@@ -252,17 +255,12 @@ impl State {
                     if let Some((atlas_entry, bind_group)) =
                         cache.upload_raster(device, encoder, belt, &image.handle)
                     {
-                        match atlas.as_mut() {
-                            None => {
-                                atlas = Some(bind_group.clone());
-                            }
-                            Some(atlas) if atlas != bind_group => {
-                                layer.push(atlas, &self.nearest_instances, &self.linear_instances);
+                        let linear = match image.filter_method {
+                            crate::core::image::FilterMethod::Nearest => false,
+                            crate::core::image::FilterMethod::Linear => true,
+                        };
 
-                                *atlas = Arc::clone(bind_group);
-                            }
-                            _ => {}
-                        }
+                        switch_group(layer, &mut group, bind_group, linear, &self.instances);
 
                         add_instances(
                             bounds,
@@ -271,14 +269,7 @@ impl State {
                             f32::from(image.rotation),
                             image.opacity,
                             atlas_entry,
-                            match image.filter_method {
-                                crate::core::image::FilterMethod::Nearest => {
-                                    &mut self.nearest_instances
-                                }
-                                crate::core::image::FilterMethod::Linear => {
-                                    &mut self.linear_instances
-                                }
-                            },
+                            &mut self.instances,
                         );
                     }
                 }
@@ -309,17 +300,9 @@ impl State {
                         svg.color,
                         Size::new(bounds.width as u32, bounds.height as u32),
                     ) {
-                        match atlas.as_mut() {
-                            None => {
-                                atlas = Some(bind_group.clone());
-                            }
-                            Some(atlas) if atlas != bind_group => {
-                                layer.push(atlas, &self.nearest_instances, &self.linear_instances);
-
-                                *atlas = bind_group.clone();
-                            }
-                            _ => {}
-                        }
+                        // Vectors are rasterized at their final size, so
+                        // they are sampled with the nearest filter.
+                        switch_group(layer, &mut group, bind_group, false, &self.instances);
 
                         add_instances(
                             bounds,
@@ -328,7 +311,7 @@ impl State {
                             f32::from(svg.rotation),
                             svg.opacity,
                             atlas_entry,
-                            &mut self.nearest_instances,
+                            &mut self.instances,
                         );
                     }
                 }
@@ -337,22 +320,14 @@ impl State {
             }
         }
 
-        if let Some(atlas) = &atlas {
-            layer.push(atlas, &self.nearest_instances, &self.linear_instances);
+        if let Some((atlas, linear)) = &group {
+            layer.push(atlas, *linear, &self.instances);
         }
 
-        layer.prepare(
-            device,
-            encoder,
-            belt,
-            transformation,
-            &self.nearest_instances,
-            &self.linear_instances,
-        );
+        layer.prepare(device, encoder, belt, transformation, &self.instances);
 
         self.prepare_layer += 1;
-        self.nearest_instances.clear();
-        self.linear_instances.clear();
+        self.instances.clear();
     }
 
     pub fn render<'a>(
@@ -384,17 +359,16 @@ impl State {
 struct Layer {
     uniforms: wgpu::Buffer,
     instances: Buffer<Instance>,
-    nearest: Vec<Group>,
+    groups: Vec<Group>,
+    total: usize,
     nearest_layout: wgpu::BindGroup,
-    nearest_total: usize,
-    linear: Vec<Group>,
     linear_layout: wgpu::BindGroup,
-    linear_total: usize,
 }
 
 #[derive(Debug)]
 struct Group {
     atlas: Arc<wgpu::BindGroup>,
+    linear: bool,
     instance_count: usize,
 }
 
@@ -460,12 +434,10 @@ impl Layer {
         Self {
             uniforms,
             instances,
-            nearest: Vec::new(),
+            groups: Vec::new(),
+            total: 0,
             nearest_layout,
-            nearest_total: 0,
-            linear: Vec::new(),
             linear_layout,
-            linear_total: 0,
         }
     }
 
@@ -475,8 +447,7 @@ impl Layer {
         encoder: &mut wgpu::CommandEncoder,
         belt: &mut wgpu::util::StagingBelt,
         transformation: Transformation,
-        nearest: &[Instance],
-        linear: &[Instance],
+        instances: &[Instance],
     ) {
         let uniforms = Uniforms {
             transform: transformation.into(),
@@ -492,42 +463,25 @@ impl Layer {
         )
         .copy_from_slice(bytes);
 
-        let _ = self
-            .instances
-            .resize(device, self.nearest_total + self.linear_total);
+        let _ = self.instances.resize(device, self.total);
 
-        let mut offset = 0;
-
-        if !nearest.is_empty() {
-            offset += self.instances.write(encoder, belt, 0, nearest);
-        }
-
-        if !linear.is_empty() {
-            let _ = self.instances.write(encoder, belt, offset, linear);
+        if !instances.is_empty() {
+            let _ = self.instances.write(encoder, belt, 0, instances);
         }
     }
 
-    fn push(&mut self, atlas: &Arc<wgpu::BindGroup>, nearest: &[Instance], linear: &[Instance]) {
-        let new_nearest = nearest.len() - self.nearest_total;
+    /// Closes the group of the instances added since the last push.
+    fn push(&mut self, atlas: &Arc<wgpu::BindGroup>, linear: bool, instances: &[Instance]) {
+        let new = instances.len() - self.total;
 
-        if new_nearest > 0 {
-            self.nearest.push(Group {
+        if new > 0 {
+            self.groups.push(Group {
                 atlas: atlas.clone(),
-                instance_count: new_nearest,
+                linear,
+                instance_count: new,
             });
 
-            self.nearest_total = nearest.len();
-        }
-
-        let new_linear = linear.len() - self.linear_total;
-
-        if new_linear > 0 {
-            self.linear.push(Group {
-                atlas: atlas.clone(),
-                instance_count: new_linear,
-            });
-
-            self.linear_total = linear.len();
+            self.total = instances.len();
         }
     }
 
@@ -535,37 +489,54 @@ impl Layer {
         render_pass.set_vertex_buffer(0, self.instances.slice(..));
 
         let mut offset = 0;
+        let mut sampler = None;
 
-        if !self.nearest.is_empty() {
-            render_pass.set_bind_group(0, &self.nearest_layout, &[]);
+        for group in &self.groups {
+            if sampler != Some(group.linear) {
+                render_pass.set_bind_group(
+                    0,
+                    if group.linear {
+                        &self.linear_layout
+                    } else {
+                        &self.nearest_layout
+                    },
+                    &[],
+                );
 
-            for group in &self.nearest {
-                render_pass.set_bind_group(1, group.atlas.as_ref(), &[]);
-                render_pass.draw(0..6, offset..offset + group.instance_count as u32);
-
-                offset += group.instance_count as u32;
+                sampler = Some(group.linear);
             }
-        }
 
-        if !self.linear.is_empty() {
-            render_pass.set_bind_group(0, &self.linear_layout, &[]);
+            render_pass.set_bind_group(1, group.atlas.as_ref(), &[]);
+            render_pass.draw(0..6, offset..offset + group.instance_count as u32);
 
-            for group in &self.linear {
-                render_pass.set_bind_group(1, group.atlas.as_ref(), &[]);
-                render_pass.draw(0..6, offset..offset + group.instance_count as u32);
-
-                offset += group.instance_count as u32;
-            }
+            offset += group.instance_count as u32;
         }
     }
 
     fn clear(&mut self) {
-        self.nearest.clear();
-        self.nearest_total = 0;
-
-        self.linear.clear();
-        self.linear_total = 0;
+        self.groups.clear();
+        self.total = 0;
     }
+}
+
+/// Starts a new group when the atlas or the filter changes, closing the
+/// current one in `layer`.
+fn switch_group(
+    layer: &mut Layer,
+    group: &mut Option<(Arc<wgpu::BindGroup>, bool)>,
+    atlas: &Arc<wgpu::BindGroup>,
+    linear: bool,
+    instances: &[Instance],
+) {
+    if let Some((current, current_linear)) = group.as_ref() {
+        if current == atlas && *current_linear == linear {
+            return;
+        }
+
+        layer.push(current, *current_linear, instances);
+    }
+
+    *group = Some((atlas.clone(), linear));
 }
 
 #[repr(C)]
@@ -695,4 +666,83 @@ fn add_instance(
     };
 
     instances.push(instance);
+}
+
+#[cfg(all(test, feature = "image"))]
+mod tests {
+    use crate::core::image::{self, FilterMethod, Renderer as _};
+    use crate::core::renderer::{self, Quad, Renderer as _};
+    use crate::core::{Color, Point, Rectangle, Size};
+
+    const RED: [u8; 4] = [255, 0, 0, 255];
+    const GREEN: [u8; 4] = [0, 255, 0, 255];
+
+    fn solid(color: [u8; 4]) -> image::Handle {
+        image::Handle::from_rgba(2, 2, color.repeat(4))
+    }
+
+    /// Upstream #3512: an image drawn in a layer created after a linear
+    /// image used to end up under it once the two layers were merged,
+    /// because nearest images were all drawn before linear ones.
+    #[test]
+    fn a_nearest_image_in_a_later_layer_is_drawn_over_a_linear_one() {
+        let Some(mut renderer) =
+            futures::executor::block_on(<crate::Renderer as crate::renderer::Headless>::new(
+                renderer::Settings::default(),
+                None,
+            ))
+        else {
+            assert!(
+                std::env::var_os("ICED_REQUIRE_GPU_TESTS").is_none(),
+                "no GPU adapter available, but ICED_REQUIRE_GPU_TESTS is set"
+            );
+            eprintln!("SKIPPED: no GPU adapter available");
+            return;
+        };
+
+        let bounds = Rectangle::with_size(Size::new(100.0, 100.0));
+        let icon = Rectangle::new(Point::new(25.0, 25.0), Size::new(50.0, 50.0));
+
+        // The new layer must have the same bounds as the base one, so the
+        // two are merged.
+        renderer.reset(bounds);
+
+        renderer.fill_quad(
+            Quad {
+                bounds,
+                ..Quad::default()
+            },
+            Color::BLACK,
+        );
+        renderer.draw_image(
+            image::Image::new(solid(RED)).filter_method(FilterMethod::Linear),
+            bounds,
+            bounds,
+        );
+        renderer.with_layer(bounds, |renderer| {
+            renderer.draw_image(
+                image::Image::new(solid(GREEN)).filter_method(FilterMethod::Nearest),
+                icon,
+                icon,
+            );
+        });
+
+        let pixels = renderer.screenshot(
+            &crate::graphics::Viewport::with_physical_size(
+                Size::new(100, 100),
+                renderer::Scale {
+                    window: 1.0,
+                    application: 1.0,
+                },
+            ),
+            Color::TRANSPARENT,
+        );
+        let pixel = |x: usize, y: usize| {
+            let i = (y * 100 + x) * 4;
+            [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
+        };
+
+        assert_eq!(pixel(50, 50), GREEN, "the later image is on top");
+        assert_eq!(pixel(5, 5), RED, "the linear image is still drawn");
+    }
 }
