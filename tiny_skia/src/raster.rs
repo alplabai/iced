@@ -98,6 +98,7 @@ impl Cache {
                 Ok(image) => image,
                 Err(error) => {
                     let _ = entry.insert(Err(error.clone()));
+                    let _ = self.hits.insert(id);
 
                     return Err(error);
                 }
@@ -159,10 +160,17 @@ mod tests {
         let garbage = raster::Handle::from_bytes(vec![1u8, 2, 3]);
 
         // The second lookup hits the cached failure, which used to panic
-        // with "Image should be allocated" (upstream #3215).
+        // with "Image should be allocated" (upstream #3215). A trim between
+        // frames keeps a failure that is still drawn.
         for _ in 0..2 {
             assert!(matches!(cache.allocate(&empty), Err(raster::Error::Empty)));
             assert!(cache.allocate(&garbage).is_err());
+            cache.trim();
+            assert_eq!(cache.entries.len(), 2, "failures survive the trim");
         }
+
+        // Not drawn in a frame: dropped like any other entry.
+        cache.trim();
+        assert!(cache.entries.is_empty());
     }
 }

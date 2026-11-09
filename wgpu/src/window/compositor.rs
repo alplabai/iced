@@ -454,6 +454,8 @@ impl graphics::Compositor for Compositor {
         // `PreMultiplied` after a resize or restore), so pick one each time.
         let alpha_mode = alpha_mode(&capabilities.alpha_modes);
 
+        log::debug!("Configuring surface ({width}x{height}) with alpha mode: {alpha_mode:?}");
+
         surface.configure(
             &self.engine.device,
             &wgpu::SurfaceConfiguration {
