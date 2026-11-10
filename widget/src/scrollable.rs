@@ -3759,10 +3759,11 @@ mod tests {
         assert!((x_scroller.x + x_scroller.width - (x_track.x + x_track.width)).abs() < 1e-3);
     }
 
-    /// A minimum-length scroller still travels the whole free track: it ends
-    /// at the track end when fully scrolled, and sits halfway at half scroll.
+    /// A minimum-length scroller moves in step with the scroll position over
+    /// the whole free track: it ends at the track end only when fully
+    /// scrolled, and sits halfway at half scroll.
     #[test]
-    fn minimum_length_scrollers_reach_the_end_of_their_tracks() {
+    fn minimum_length_scrollers_move_linearly_over_the_free_track() {
         let bounds = Rectangle::new(Point::ORIGIN, Size::new(100.0, 100.0));
         let content = Size::new(100_000.0, 100_000.0);
         let direction = Direction::Both {
@@ -3797,16 +3798,21 @@ mod tests {
     fn drawn_scrollers_agree_with_the_drag_mapping() {
         let bounds = Rectangle::new(Point::ORIGIN, Size::new(100.0, 100.0));
 
-        for content_len in [100_000.0, 400.0] {
+        for (content_len, anchor) in [
+            (100_000.0, Anchor::Start),
+            (400.0, Anchor::Start),
+            (100_000.0, Anchor::End),
+            (400.0, Anchor::End),
+        ] {
             let content = Size::new(content_len, content_len);
             let direction = Direction::Both {
-                vertical: Scrollbar::default(),
-                horizontal: Scrollbar::default(),
+                vertical: Scrollbar::default().anchor(anchor),
+                horizontal: Scrollbar::default().anchor(anchor),
             };
             let relative = 0.3;
             let translation = Vector::new(
-                (content.width - bounds.width) * relative,
-                (content.height - bounds.height) * relative,
+                Offset::Relative(relative).translation(bounds.width, content.width, anchor),
+                Offset::Relative(relative).translation(bounds.height, content.height, anchor),
             );
 
             let scrollbars = Scrollbars::new(translation, direction, bounds, content);
