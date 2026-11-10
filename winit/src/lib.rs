@@ -1976,6 +1976,32 @@ fn run_action<'a, P, C>(
                     window.raw.focus_window();
                 }
             }
+            window::Action::SetTitleColors {
+                id,
+                background,
+                text,
+                border,
+            } => {
+                #[cfg(target_os = "windows")]
+                if let Some(window) = window_manager.get_mut(id) {
+                    use winit::platform::windows::{Color, WindowExtWindows};
+
+                    // winit's `None` means "no colour"; the system default is a colour of its own.
+                    let color = |color| {
+                        conversion::title_color_rgb(color)
+                            .map_or(Color::SYSTEM_DEFAULT, |[r, g, b]| Color::from_rgb(r, g, b))
+                    };
+
+                    window
+                        .raw
+                        .set_title_background_color(Some(color(background)));
+                    window.raw.set_title_text_color(color(text));
+                    window.raw.set_border_color(Some(color(border)));
+                }
+
+                #[cfg(not(target_os = "windows"))]
+                let _ = (id, background, text, border);
+            }
             window::Action::SetEnabled(id, enabled) => {
                 use crate::window::EnabledChange;
 

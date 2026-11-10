@@ -4,7 +4,7 @@ use crate::core::window::{
     CursorGrab, Direction, Event, Icon, Id, Level, Mode, Screenshot, Settings, UserAttention,
     cursor,
 };
-use crate::core::{Size, Vector, Window};
+use crate::core::{Color, Size, Vector, Window};
 use crate::futures::Subscription;
 use crate::futures::event;
 use crate::futures::futures::channel::oneshot;
@@ -131,6 +131,24 @@ pub enum Action {
     /// - **Elsewhere:** the runtime drops the input events, and focus moves
     ///   to the most recently opened enabled window owned by this one.
     SetEnabled(Id, bool),
+
+    /// Change the title bar and border colours of the window. `None` restores
+    /// the system default for that colour. The alpha channel is ignored.
+    ///
+    /// ## Platform-specific
+    ///
+    /// - **Windows:** supported starting with Windows 11 Build 22000.
+    /// - **Elsewhere:** does nothing.
+    SetTitleColors {
+        /// The window.
+        id: Id,
+        /// The title bar background.
+        background: Option<Color>,
+        /// The title bar text.
+        text: Option<Color>,
+        /// The window border.
+        border: Option<Color>,
+    },
 
     /// Change the window [`Level`].
     SetLevel(Id, Level),
@@ -536,6 +554,25 @@ pub fn set_enabled<T>(id: Id, enabled: bool) -> Task<T> {
     task::effect(crate::Action::Window(Action::SetEnabled(id, enabled)))
 }
 
+/// Changes the title bar and border colours of the window with the given [`Id`]
+/// (`None` restores the system default), so an open window can follow a theme
+/// switch. The alpha channel is ignored.
+///
+/// Works on Windows 11 (Build 22000 and later); it does nothing elsewhere.
+pub fn set_title_colors<T>(
+    id: Id,
+    background: Option<Color>,
+    text: Option<Color>,
+    border: Option<Color>,
+) -> Task<T> {
+    task::effect(crate::Action::Window(Action::SetTitleColors {
+        id,
+        background,
+        text,
+        border,
+    }))
+}
+
 /// Changes the window [`Level`].
 pub fn set_level<T>(id: Id, level: Level) -> Task<T> {
     task::effect(crate::Action::Window(Action::SetLevel(id, level)))
@@ -654,5 +691,26 @@ mod tests {
                     if window == id && value == enabled
             ));
         }
+    }
+
+    #[test]
+    fn set_title_colors_runs_the_set_title_colors_action() {
+        let id = Id::unique();
+        let (background, text) = (Some(Color::BLACK), Some(Color::WHITE));
+
+        let mut stream = task::into_stream(set_title_colors::<()>(id, background, text, None))
+            .expect("a stream");
+
+        let action = stream.next().now_or_never().expect("ready");
+
+        assert!(matches!(
+            action,
+            Some(crate::Action::Window(Action::SetTitleColors {
+                id: window,
+                background: bg,
+                text: fg,
+                border: None,
+            })) if window == id && bg == background && fg == text
+        ));
     }
 }
