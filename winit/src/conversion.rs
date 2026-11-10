@@ -363,6 +363,10 @@ pub fn window_attributes(
         attributes =
             attributes.with_undecorated_shadow(settings.platform_specific.undecorated_shadow);
 
+        attributes = attributes.with_extend_content_into_title_bar(
+            settings.platform_specific.extend_content_into_title_bar,
+        );
+
         attributes =
             attributes.with_corner_preference(match settings.platform_specific.corner_preference {
                 platform::CornerPreference::Default => CornerPreference::Default,
