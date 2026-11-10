@@ -1379,7 +1379,7 @@ async fn run_instance<P>(
 
                         if !stranded.is_empty() {
                             log::warn!(
-                                "A close left only disabled windows; \
+                                "No enabled window was left and none is opening; \
                                  enabled {stranded:?} again"
                             );
 
