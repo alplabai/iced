@@ -894,4 +894,152 @@ mod windowed {
         assert!(tree.children.len() <= 14);
         assert_eq!(tree.children.last().unwrap().translation.y, 99_999.0 * 24.0);
     }
+
+    fn wheel(list: &mut VirtualList<'_, Probe>, tree: &mut Tree, y: f32) {
+        let mut messages = shell::Bus::new();
+        let mut shell = shell::Shell::new(&window::Headless, shell::Waker::noop(), &mut messages);
+
+        list.update(
+            tree,
+            &Event::Mouse(mouse::Event::WheelScrolled {
+                delta: ScrollDelta::Pixels { x: 0.0, y },
+            }),
+            Layout::new(tree.size),
+            mouse::Cursor::Available(Point::new(5.0, 5.0)),
+            &(),
+            &mut shell,
+            &Rectangle::with_size(Size::new(100.0, 100.0)),
+        );
+    }
+
+    #[test]
+    fn unflagged_infinite_max_stays_fallback_and_self_scrolls() {
+        let mut list = VirtualList::new(100_000, 10.0, |i| Probe(i as u64));
+        let mut tree = Tree::new::<Never, Theme, ()>(&list);
+
+        list.layout(
+            &mut tree,
+            &(),
+            &layout::Limits::new(Size::ZERO, Size::new(100.0, f32::INFINITY)),
+        );
+
+        assert_eq!(tree.size.height, 4096.0);
+
+        wheel(&mut list, &mut tree, -3.0);
+
+        assert_eq!(tree.children[0].translation.y, -3.0);
+    }
+
+    #[test]
+    fn bounded_to_windowed_switch_drops_the_self_scroll_offset() {
+        let mut list = VirtualList::new(100, 10.0, |i| Probe(i as u64));
+        let mut tree = Tree::new::<Never, Theme, ()>(&list);
+
+        list.layout(
+            &mut tree,
+            &(),
+            &layout::Limits::new(Size::ZERO, Size::new(100.0, 100.0)),
+        );
+        wheel(&mut list, &mut tree, -50.0);
+
+        list.layout(&mut tree, &(), &flagged(100.0));
+
+        assert_eq!(tree.size.height, 1_000.0);
+        assert_eq!(tree.children[0].translation.y, 0.0);
+    }
+
+    #[test]
+    fn taller_viewport_builds_the_extra_rows_without_a_scroll() {
+        let scrollable = || -> Scrollable<'static, Scroll, Rows, Theme> {
+            Scrollable::new(rows(100_000, 20.0, Rc::new(Cell::new(0))))
+                .id(ID)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .on_scroll(Some)
+        };
+
+        let mut simulator =
+            Simulator::with_size(Default::default(), Size::new(400.0, 100.0), scrollable());
+
+        let mut instant = Instant::now();
+        step_frames(&mut simulator, &mut instant, 1);
+        assert!(!has(&mut simulator, 19));
+
+        let mut simulator = simulator.resize(Size::new(400.0, 400.0));
+        step_frames(&mut simulator, &mut instant, 1);
+
+        assert!(has(&mut simulator, 19));
+    }
+
+    #[test]
+    fn both_directions_parent_windows_the_list() {
+        use iced_widget::scrollable::{Direction, Scrollbar};
+
+        let element: Scrollable<'static, Scroll, Rows, Theme> = Scrollable::with_direction(
+            rows(100_000, 20.0, Rc::new(Cell::new(0))),
+            Direction::Both {
+                vertical: Scrollbar::default(),
+                horizontal: Scrollbar::default(),
+            },
+        )
+        .id(ID)
+        .width(Length::Fill)
+        .height(100)
+        .on_scroll(Some);
+        let mut simulator = Simulator::new(element);
+
+        simulator.operate(&mut scrollable::snap_to::<()>(
+            ID,
+            RelativeOffset {
+                x: None,
+                y: Some(1.0),
+            },
+            Animation::Instant,
+        ));
+
+        let mut instant = Instant::now();
+        step_frames(&mut simulator, &mut instant, 2);
+
+        assert!(has(&mut simulator, 99_999));
+        assert!(!has(&mut simulator, 0));
+    }
+
+    #[test]
+    fn list_scrolled_off_screen_and_back_shows_the_right_rows() {
+        let content = Column::with_children([
+            Widget::<Scroll, Theme, Renderer>::_boxed(space().height(1_000)),
+            Widget::<Scroll, Theme, Renderer>::_boxed(rows(100_000, 20.0, Rc::new(Cell::new(0)))),
+        ]);
+
+        let mut simulator = Simulator::new(
+            Scrollable::new(content)
+                .id(ID)
+                .width(Length::Fill)
+                .height(100)
+                .on_scroll(Some),
+        );
+
+        let mut instant = Instant::now();
+        let mut go = |simulator: &mut Simulator<'_, Scroll, Theme, Renderer>, y: f32| {
+            simulator.operate(&mut scrollable::scroll_to::<()>(
+                ID,
+                AbsoluteOffset {
+                    x: Some(0.0),
+                    y: Some(y),
+                },
+                Animation::Instant,
+            ));
+            step_frames(simulator, &mut instant, 2);
+        };
+
+        go(&mut simulator, 1_500.0);
+        assert!(has(&mut simulator, 25));
+
+        // The list is entirely above the viewport at the top.
+        go(&mut simulator, 0.0);
+
+        go(&mut simulator, 1_500.0);
+        assert!(has(&mut simulator, 25));
+        assert!(!has(&mut simulator, 0));
+    }
 }

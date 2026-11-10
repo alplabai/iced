@@ -22,16 +22,16 @@
 //!
 //! # Sizing
 //! Given a bounded height, the list scrolls itself. Inside a vertical
-//! [`scrollable`](crate::scrollable) (the `infinite` limits flag, or an
-//! infinite maximum), it is as tall as all of its rows and only builds the
+//! [`scrollable`](crate::scrollable) (the `infinite` limits flag it sets), it
+//! is as tall as all of its rows and only builds the
 //! ones in the viewport of the scrollable, so the scrollable does the
 //! scrolling. Scroll operations and [`reveal_row`] must then target the `Id`
 //! of the scrollable: the list has nothing left to scroll. [`reveal_row`]
 //! assumes the list is the direct content of the scrollable; anything above
 //! it (a header, padding) shifts the row.
 //!
-//! Before it knows its viewport, a list with an infinite maximum assumes
-//! 4096 logical pixels.
+//! A list laid out with a truly infinite maximum height (no scrollable)
+//! falls back to a viewport of 4096 logical pixels and scrolls itself.
 //!
 //! # Precision
 //! Offsets are `f32`, like in [`scrollable`](crate::scrollable): positions
@@ -85,6 +85,9 @@ pub fn virtual_list<'a, W>(
 
 /// Produces an [`Operation`] that scrolls the [`VirtualList`] with the given
 /// [`Id`] by the minimum amount needed to bring the row at `index` into view.
+///
+/// Inside a [`scrollable`](crate::scrollable), pass the `Id` of the
+/// scrollable, not of the list.
 pub fn reveal_row<T>(id: Id, index: usize, row_height: f32) -> impl Operation<T> {
     // Only the vertical axis is revealed, so that the horizontal scroll of
     // any other scrollable with the same `Id` is left untouched.
@@ -140,6 +143,9 @@ impl<'a, W> VirtualList<'a, W> {
 
     /// Sets the [`Id`] of the [`VirtualList`], so it can be targeted by
     /// scrolling [`Operation`]s.
+    ///
+    /// Inside a `scrollable`, pass the scrollable's `Id` to scrolling
+    /// [`Operation`]s instead: the list has nothing left to scroll.
     pub fn id(mut self, id: impl Into<Id>) -> Self {
         self.id = Some(id.into());
         self
@@ -337,12 +343,12 @@ where
         let mut size = limits.resolve(self.width, self.height, Size::new(0.0, total));
 
         // A vertical `scrollable` does not hand out an infinite maximum, it
-        // sets the `infinite` flag on a finite viewport height, so the flag
-        // has to be checked as well as the resolved size.
-        let windowed = limits.infinite.height || !size.height.is_finite();
+        // sets the `infinite` flag on a finite viewport height. Only that flag
+        // means a parent scrolls the list.
+        let windowed = limits.infinite.height;
 
         // Which part of the list is visible, before any viewport is known.
-        let default_height = if limits.infinite.height && limits.max.height.is_finite() {
+        let default_height = if windowed && limits.max.height.is_finite() {
             limits.max.height
         } else {
             FALLBACK_HEIGHT
@@ -352,6 +358,9 @@ where
             // The list is as tall as its content and a parent scrollable
             // moves it; only the rows in its viewport are built.
             size.height = total;
+        } else if !size.height.is_finite() {
+            // An unbounded height would build every row.
+            size.height = total.min(FALLBACK_HEIGHT);
         }
 
         let Tree {
@@ -640,8 +649,8 @@ where
         window: Size,
     ) -> Vec<overlay::Element<'b, Message, Theme, Renderer>> {
         // Rows that were built as overscan are off screen: their overlays
-        // must not outlive them. Inside a scrollable the list is much taller
-        // than what is visible, so only the viewport counts.
+        // must not outlive them. Only the visible part of the list counts,
+        // which in a scrollable is much smaller than the list.
         let visible = viewport.intersection(&layout.bounds());
 
         self.rows
