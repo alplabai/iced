@@ -3,7 +3,6 @@
 //! there, for the atlas-style path (identity transform) and for the glyph mesh
 //! path (rotated transform). Upstream iced-rs/iced#3192 reinterprets the
 //! position as a box corner; these tests fail if that reaches the fork.
-#![cfg(feature = "geometry")]
 
 use iced_tiny_skia::Renderer;
 use iced_tiny_skia::core::alignment::Vertical;
@@ -18,7 +17,10 @@ const SIZE: u32 = 400;
 const BACKGROUND: Color = Color::BLACK;
 const FONT_SIZE: f32 = 20.0;
 const LINE: f32 = 30.0;
-/// Side bearings and rounding of the ink against the advance box.
+/// Side bearings and rounding of the ink against the advance box (measured up
+/// to 4 px at a 20 px font; the vertical ink also sits inside the line box).
+/// It cannot catch an offset smaller than about this much, so it guards the
+/// anchor semantics (shifts of half a text width or a line), not subpixel layout.
 const TOLERANCE: f32 = 5.0;
 
 /// The bounding box of every pixel that is not background: `(x0, y0, x1, y1)`.
@@ -167,7 +169,7 @@ fn wrapped_text_is_anchored_as_a_block() {
 }
 
 #[test]
-fn centred_text_sits_on_the_anchor_through_a_translation() {
+fn all_alignments_are_anchored_through_a_translation() {
     // A scale/translation transform takes the other branch of `fill_text`.
     let anchor = Point::new(200.0, 200.0);
     let draw = |text: Text| {
@@ -198,26 +200,35 @@ fn rotated_text_is_anchored_on_the_rotation_origin() {
         )
     };
 
-    let centred = draw(Alignment::Center, Vertical::Center);
-    close((centred.1 + centred.3) / 2.0, 200.0, "rotated centre y");
-    close((centred.0 + centred.2) / 2.0, 200.0, "rotated centre x");
-
-    // Right: the text's end sits on the anchor, so the ink is above it.
-    let right = draw(Alignment::Right, Vertical::Center);
-    close(right.3, 200.0, "rotated Right bottom");
-
-    // Top: the line box starts on the anchor and hangs to its left; the text's
-    // start is on the anchor along y.
     let top = draw(Alignment::Left, Vertical::Top);
+    // Top: the line box starts on the anchor and hangs to its left.
     assert!(
         top.2 <= 200.0 + TOLERANCE,
         "rotated Top ink right of anchor"
     );
-    close(top.1, 200.0, "rotated Left top");
 
-    // Bottom: the text's "up" side points right after the rotation, so the
-    // line box lies on the other side of the anchor: one line to the right.
-    let bottom = draw(Alignment::Left, Vertical::Bottom);
-    close(bottom.0, top.0 + LINE, "rotated Bottom left");
-    close(bottom.2, top.2 + LINE, "rotated Bottom right");
+    for align_x in ALIGN_X {
+        for align_y in ALIGN_Y {
+            let ink = draw(align_x, align_y);
+            let case = format!("rotated {align_x:?}/{align_y:?}");
+
+            // Along the canvas y axis runs the text's x axis.
+            match align_x {
+                Alignment::Center => close((ink.1 + ink.3) / 2.0, 200.0, &format!("{case} mid y")),
+                Alignment::Right => close(ink.3, 200.0, &format!("{case} end y")),
+                _ => close(ink.1, 200.0, &format!("{case} start y")),
+            }
+
+            // Along the canvas x axis runs the text's y axis, reversed: Bottom
+            // lies one line to the right of Top, Center half a line.
+            let shift = match align_y {
+                Vertical::Top => 0.0,
+                Vertical::Center => LINE / 2.0,
+                Vertical::Bottom => LINE,
+            };
+
+            close(ink.0, top.0 + shift, &format!("{case} x0"));
+            close(ink.2, top.2 + shift, &format!("{case} x1"));
+        }
+    }
 }

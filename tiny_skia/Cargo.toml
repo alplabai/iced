@@ -37,3 +37,7 @@ tiny-skia.workspace = true
 
 resvg.workspace = true
 resvg.optional = true
+
+[[test]]
+name = "canvas_text_alignment"
+required-features = ["geometry"]
