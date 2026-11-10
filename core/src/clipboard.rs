@@ -6,10 +6,10 @@ use std::sync::Arc;
 #[derive(Debug, Clone)]
 pub struct Clipboard {
     /// The read requests the runtime must fulfill.
-    pub reads: Vec<Kind>,
+    pub reads: Vec<(ClipboardKind, Kind)>,
     /// The content that must be written to the clipboard by the runtime,
     /// if any.
-    pub write: Option<Content>,
+    pub write: Option<(ClipboardKind, Content)>,
 }
 
 impl Clipboard {
@@ -24,8 +24,28 @@ impl Clipboard {
     /// Merges the current [`Clipboard`] requests with others.
     pub fn merge(&mut self, other: &mut Self) {
         self.reads.append(&mut other.reads);
-        self.write = other.write.take().or(self.write.take());
+        // The latest write wins, but a primary write never replaces a pending
+        // standard one: that would silently lose an explicit copy.
+        self.write = match (self.write.take(), other.write.take()) {
+            (Some((ClipboardKind::Standard, content)), Some((ClipboardKind::Primary, _))) => {
+                Some((ClipboardKind::Standard, content))
+            }
+            (current, new) => new.or(current),
+        };
     }
+}
+
+/// The kind of [`Clipboard`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClipboardKind {
+    /// The standard clipboard.
+    Standard,
+
+    /// The primary clipboard (select to copy, middle-click to paste).
+    ///
+    /// Only present in X11 and Wayland; requests are ignored on every other
+    /// platform.
+    Primary,
 }
 
 impl Default for Clipboard {
@@ -122,4 +142,21 @@ pub enum Error {
         /// means to identify an error case during runtime.
         description: Arc<String>,
     },
+}
+
+/// Returns true if the platform has a primary clipboard (X11 and Wayland, on
+/// Linux and the BSDs).
+///
+/// Everywhere else, widgets must behave as if the primary clipboard did not
+/// exist: no middle-click paste and no select-to-copy.
+pub const fn primary_selection_supported() -> bool {
+    cfg!(all(
+        unix,
+        not(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "android",
+            target_os = "emscripten"
+        ))
+    ))
 }
