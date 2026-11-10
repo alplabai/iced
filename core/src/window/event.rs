@@ -44,8 +44,11 @@ pub enum Event {
     ///
     /// ## Platform-specific
     ///
-    /// - **macOS / X11:** `fullscreen` reports the requested state, so it
-    ///   flips when the transition starts, not when it ends.
+    /// - **macOS:** a fullscreen change started by the OS (green button,
+    ///   Ctrl+Cmd+F, menu) flips `fullscreen` when the animation ends. One
+    ///   requested by the application flips when it is requested.
+    /// - **X11:** `fullscreen` reports the requested state, so it flips when
+    ///   the transition starts, not when it ends.
     /// - **macOS:** for undecorated or non-resizable windows `maximized`
     ///   follows only the window actions, not changes made by the user or
     ///   window manager.

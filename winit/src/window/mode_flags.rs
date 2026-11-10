@@ -135,6 +135,15 @@ mod tests {
     }
 
     #[test]
+    fn late_fullscreen_exit_emits_exactly_one_event() {
+        let mut flags = ModeFlags::new(false, Some(false), true);
+        let exited = ModeFlags::new(false, Some(false), false);
+
+        assert_eq!(flags.update(exited), changed(false, Some(false), false));
+        assert_eq!(flags.update(exited), None);
+    }
+
+    #[test]
     fn repeated_reads_emit_once() {
         let mut flags = ModeFlags::default();
         let maximized = ModeFlags::new(true, Some(false), false);
