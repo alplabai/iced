@@ -319,6 +319,9 @@ pub struct State {
     last_click: Option<mouse::Click>,
     is_dragging: bool,
     is_selecting: bool,
+    defers_primary_copy: bool,
+    has_pending_primary_copy: bool,
+    primary_selection: Option<bool>,
     partial_scroll: f32,
 }
 
@@ -328,8 +331,63 @@ impl State {
         Self::default()
     }
 
+    /// Creates a new [`State`] that writes a pointer selection to the primary
+    /// clipboard on the redraw after its release instead of at the release.
+    ///
+    /// Use it when the actions of the [`Editor`] are applied after the event
+    /// that produced them, so the selection is not yet visible at the release.
+    pub fn with_deferred_primary_copy() -> Self {
+        Self {
+            defers_primary_copy: true,
+            ..Self::default()
+        }
+    }
+
+    /// Overrides whether the primary clipboard is used (middle-click paste and
+    /// select-to-copy), instead of asking [`primary_selection_supported`].
+    ///
+    /// [`primary_selection_supported`]: clipboard::primary_selection_supported
+    pub fn with_primary_selection(mut self, is_supported: bool) -> Self {
+        self.primary_selection = Some(is_supported);
+        self
+    }
+
+    fn uses_primary_selection(&self) -> bool {
+        self.primary_selection
+            .unwrap_or(clipboard::primary_selection_supported())
+    }
+
     /// Updates the [`State`] for the given [`Editor`] and returns any relevant [`Update`].
     pub fn update<Message>(
+        &mut self,
+        editor: &impl Editor,
+        event: &Event,
+        bounds: Rectangle,
+        padding: Padding,
+        cursor: mouse::Cursor,
+        key_binding: impl Fn(KeyPress) -> Option<Binding<Message>>,
+    ) -> Option<Update<Message>> {
+        // A deferred selection is written once the application applied the
+        // actions that produced it, which is by the next redraw.
+        let deferred = (self.has_pending_primary_copy
+            && matches!(event, Event::Window(window::Event::RedrawRequested(_))))
+        .then(|| {
+            self.has_pending_primary_copy = false;
+            editor.copy()
+        })
+        .flatten()
+        .map(Update::CopyPrimary);
+
+        let update = self.handle(editor, event, bounds, padding, cursor, key_binding);
+
+        match (deferred, update) {
+            (Some(copy), Some(update)) => Some(Update::Sequence(vec![copy, update])),
+            (Some(copy), None) => Some(copy),
+            (None, update) => update,
+        }
+    }
+
+    fn handle<Message>(
         &mut self,
         editor: &impl Editor,
         event: &Event,
@@ -419,27 +477,44 @@ impl State {
                     self.is_dragging = false;
 
                     // A pointer selection also becomes the primary selection.
-                    if mem::take(&mut self.is_selecting)
-                        && let Some(selection) = editor.copy()
-                    {
+                    if !mem::take(&mut self.is_selecting) || !self.uses_primary_selection() {
+                        Some(Update::Release)
+                    } else if self.defers_primary_copy {
+                        self.has_pending_primary_copy = true;
+
+                        Some(Update::RedrawAt(Instant::now()))
+                    } else if let Some(selection) = editor.copy() {
                         Some(Update::CopyPrimary(selection))
                     } else {
                         Some(Update::Release)
                     }
                 }
-                mouse::Event::ButtonPressed(mouse::Button::Middle) => {
+                mouse::Event::ButtonPressed(mouse::Button::Middle)
+                    if self.uses_primary_selection() =>
+                {
                     // Like a left click, but pastes the primary selection once
                     // the caret is placed.
-                    let cursor_position =
-                        cursor.position_in(bounds)? - Vector::new(padding.left, padding.top);
+                    if let Some(cursor_position) = cursor.position_in(bounds) {
+                        let cursor_position =
+                            cursor_position - Vector::new(padding.left, padding.top);
 
-                    self.focus = Some(Focus::now());
-                    self.is_selecting = false;
+                        self.focus = Some(Focus::now());
+                        self.is_selecting = false;
 
-                    Some(Update::Sequence(vec![
-                        Update::Action(Action::Click(cursor_position, mouse::click::Kind::Single)),
-                        Update::PastePrimary,
-                    ]))
+                        Some(Update::Sequence(vec![
+                            Update::Action(Action::Click(
+                                cursor_position,
+                                mouse::click::Kind::Single,
+                            )),
+                            Update::PastePrimary,
+                        ]))
+                    } else if self.focus.is_some() {
+                        self.focus = None;
+
+                        Some(Update::Unfocus)
+                    } else {
+                        None
+                    }
                 }
                 mouse::Event::CursorMoved { .. } if self.is_dragging => {
                     let position = cursor.position_from(bounds.position())?

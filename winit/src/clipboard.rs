@@ -1,7 +1,12 @@
 //! Access the clipboard.
-use crate::core::clipboard::{ClipboardKind, Content, Error, Kind};
+use crate::core::clipboard::{ClipboardKind, Content, Error, Kind, primary_selection_supported};
 
 pub use platform::*;
+
+/// Whether the given [`ClipboardKind`] exists on this platform.
+pub fn is_supported(kind: ClipboardKind) -> bool {
+    kind == ClipboardKind::Standard || primary_selection_supported()
+}
 
 impl Default for Clipboard {
     fn default() -> Self {
@@ -11,9 +16,6 @@ impl Default for Clipboard {
 
 #[cfg(not(target_arch = "wasm32"))]
 mod platform {
-    #[cfg(target_os = "linux")]
-    use arboard::{GetExtLinux, SetExtLinux};
-
     use super::*;
 
     use std::sync::{Arc, Mutex};
@@ -152,38 +154,71 @@ mod platform {
         }
     }
 
-    /// Whether the given [`ClipboardKind`] exists on this platform.
-    fn is_supported(kind: ClipboardKind) -> bool {
-        kind == ClipboardKind::Standard || cfg!(target_os = "linux")
-    }
+    // These `cfg`s must match `primary_selection_supported`: they are the
+    // platforms where arboard has `LinuxClipboardKind`.
+    #[cfg(all(
+        unix,
+        not(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "android",
+            target_os = "emscripten"
+        ))
+    ))]
+    mod backend {
+        use super::*;
+        use arboard::{GetExtLinux, SetExtLinux};
 
-    #[cfg(target_os = "linux")]
-    fn linux_kind(kind: ClipboardKind) -> arboard::LinuxClipboardKind {
-        match kind {
-            ClipboardKind::Standard => arboard::LinuxClipboardKind::Clipboard,
-            ClipboardKind::Primary => arboard::LinuxClipboardKind::Primary,
+        fn kind(kind: ClipboardKind) -> arboard::LinuxClipboardKind {
+            match kind {
+                ClipboardKind::Standard => arboard::LinuxClipboardKind::Clipboard,
+                ClipboardKind::Primary => arboard::LinuxClipboardKind::Primary,
+            }
+        }
+
+        pub fn get_clipboard(
+            clipboard: &mut arboard::Clipboard,
+            for_kind: ClipboardKind,
+        ) -> arboard::Get<'_> {
+            clipboard.get().clipboard(kind(for_kind))
+        }
+
+        pub fn set_clipboard(
+            clipboard: &mut arboard::Clipboard,
+            for_kind: ClipboardKind,
+        ) -> arboard::Set<'_> {
+            clipboard.set().clipboard(kind(for_kind))
         }
     }
 
-    #[cfg(target_os = "linux")]
-    fn get_clipboard(clipboard: &mut arboard::Clipboard, kind: ClipboardKind) -> arboard::Get<'_> {
-        clipboard.get().clipboard(linux_kind(kind))
+    #[cfg(not(all(
+        unix,
+        not(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "android",
+            target_os = "emscripten"
+        ))
+    )))]
+    mod backend {
+        use super::*;
+
+        pub fn get_clipboard(
+            clipboard: &mut arboard::Clipboard,
+            _kind: ClipboardKind,
+        ) -> arboard::Get<'_> {
+            clipboard.get()
+        }
+
+        pub fn set_clipboard(
+            clipboard: &mut arboard::Clipboard,
+            _kind: ClipboardKind,
+        ) -> arboard::Set<'_> {
+            clipboard.set()
+        }
     }
 
-    #[cfg(not(target_os = "linux"))]
-    fn get_clipboard(clipboard: &mut arboard::Clipboard, _kind: ClipboardKind) -> arboard::Get<'_> {
-        clipboard.get()
-    }
-
-    #[cfg(target_os = "linux")]
-    fn set_clipboard(clipboard: &mut arboard::Clipboard, kind: ClipboardKind) -> arboard::Set<'_> {
-        clipboard.set().clipboard(linux_kind(kind))
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    fn set_clipboard(clipboard: &mut arboard::Clipboard, _kind: ClipboardKind) -> arboard::Set<'_> {
-        clipboard.set()
-    }
+    use backend::{get_clipboard, set_clipboard};
 
     fn to_error(error: arboard::Error) -> Error {
         match error {

@@ -143,3 +143,20 @@ pub enum Error {
         description: Arc<String>,
     },
 }
+
+/// Returns true if the platform has a primary clipboard (X11 and Wayland, on
+/// Linux and the BSDs).
+///
+/// Everywhere else, widgets must behave as if the primary clipboard did not
+/// exist: no middle-click paste and no select-to-copy.
+pub const fn primary_selection_supported() -> bool {
+    cfg!(all(
+        unix,
+        not(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "android",
+            target_os = "emscripten"
+        ))
+    ))
+}

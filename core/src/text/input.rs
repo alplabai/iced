@@ -229,6 +229,17 @@ impl<R: text::Renderer> Input<R> {
             None
         }
 
+        // Placing the caret from a pixel position needs the secure layout, so
+        // a secure input ignores middle-click paste altogether.
+        if self.secure.is_some()
+            && matches!(
+                event,
+                Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Middle))
+            )
+        {
+            return None;
+        }
+
         let editor = self.secure.as_ref().unwrap_or(&self.editor);
 
         let update = self
@@ -303,15 +314,6 @@ impl<R: text::Renderer> Input<R> {
                 // The secure editor only holds placeholder characters, and the
                 // real value must never leave through the primary selection.
                 editor::Update::CopyPrimary(_) => None,
-                // Placing the caret from a pixel position needs the secure
-                // layout, so a middle-click paste is not supported here.
-                editor::Update::Sequence(updates)
-                    if updates
-                        .iter()
-                        .any(|update| matches!(update, editor::Update::PastePrimary)) =>
-                {
-                    None
-                }
                 _ => apply(&mut self.editor, shell, update, self.multiline.is_some()),
             }
         } else {

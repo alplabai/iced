@@ -2331,13 +2331,10 @@ fn run_clipboard<Message: Send>(
     requests: core::Clipboard,
     window: window::Id,
 ) {
-    // Widgets request the primary clipboard unconditionally; outside of Linux
-    // it does not exist, so those requests are dropped without any event.
-    let is_supported =
-        |kind| kind == core::clipboard::ClipboardKind::Standard || cfg!(target_os = "linux");
-
+    // Where there is no primary clipboard, requests for it are dropped
+    // without any event.
     for (clipboard_kind, kind) in requests.reads {
-        if !is_supported(clipboard_kind) {
+        if !clipboard::is_supported(clipboard_kind) {
             continue;
         }
 
@@ -2352,7 +2349,7 @@ fn run_clipboard<Message: Send>(
     }
 
     if let Some((clipboard_kind, content)) = requests.write
-        && is_supported(clipboard_kind)
+        && clipboard::is_supported(clipboard_kind)
     {
         let proxy = proxy.clone();
 

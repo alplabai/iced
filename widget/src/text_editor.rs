@@ -338,7 +338,8 @@ where
 
     fn state(&self) -> widget::tree::State {
         widget::tree::State::new(State {
-            editor: editor::State::new(),
+            // The application applies `on_action` messages after the event.
+            editor: editor::State::with_deferred_primary_copy(),
             parser: RefCell::new(Parser::new(&self.parser_settings)),
             parser_settings: self.parser_settings.clone(),
             last_theme: RefCell::new(None),
