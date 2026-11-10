@@ -8,12 +8,22 @@ use std::collections::BTreeSet;
 pub struct Disabled(BTreeSet<window::Id>);
 
 impl Disabled {
-    pub fn set_enabled(&mut self, id: window::Id, enabled: bool) {
+    /// Sets the flag of `id` and returns whether it changed.
+    pub fn set_enabled(&mut self, id: window::Id, enabled: bool) -> bool {
         if enabled {
-            let _ = self.0.remove(&id);
+            self.0.remove(&id)
         } else {
-            let _ = self.0.insert(id);
+            self.0.insert(id)
         }
+    }
+
+    /// Whether disabling `id` would leave none of the `open` windows enabled
+    /// while none is `pending` (being created).
+    pub fn would_strand(&self, id: window::Id, open: &[window::Id], pending: bool) -> bool {
+        !pending
+            && open
+                .iter()
+                .all(|other| *other == id || !self.is_enabled(*other))
     }
 
     pub fn is_enabled(&self, id: window::Id) -> bool {
@@ -24,11 +34,15 @@ impl Disabled {
         let _ = self.0.remove(&id);
     }
 
-    /// If windows remain open and every one of them is disabled, the user
-    /// could not interact with the application any more: enables them all
-    /// and returns them.
-    pub fn reenable_stranded(&mut self, open: &[window::Id]) -> Vec<window::Id> {
-        if open.is_empty() || open.iter().any(|id| self.is_enabled(*id)) {
+    /// If windows remain open, none is `pending` (being created) and every
+    /// open one is disabled, the user could not interact with the application
+    /// any more: enables them all and returns them.
+    ///
+    /// The runtime calls this a moment after a close, once the application
+    /// handled the `Closed` event, so a dialog that re-enables its owner
+    /// itself, or is swapped for another one, is never overruled.
+    pub fn reenable_stranded(&mut self, open: &[window::Id], pending: bool) -> Vec<window::Id> {
+        if pending || open.is_empty() || open.iter().any(|id| self.is_enabled(*id)) {
             return Vec::new();
         }
 
@@ -81,10 +95,28 @@ mod tests {
         let mut disabled = Disabled::default();
 
         assert!(disabled.is_enabled(id));
-        disabled.set_enabled(id, false);
+        assert!(!disabled.set_enabled(id, true), "already enabled");
+        assert!(disabled.set_enabled(id, false));
         assert!(!disabled.is_enabled(id));
-        disabled.set_enabled(id, true);
+        assert!(!disabled.set_enabled(id, false), "already disabled");
+        assert!(disabled.set_enabled(id, true));
         assert!(disabled.is_enabled(id));
+    }
+
+    #[test]
+    fn disabling_the_last_enabled_window_would_strand() {
+        let (owner, dialog) = (window::Id::unique(), window::Id::unique());
+        let mut disabled = Disabled::default();
+
+        assert!(disabled.would_strand(owner, &[owner], false));
+        assert!(
+            !disabled.would_strand(owner, &[owner], true),
+            "one is opening"
+        );
+        assert!(!disabled.would_strand(owner, &[owner, dialog], false));
+
+        let _ = disabled.set_enabled(dialog, false);
+        assert!(disabled.would_strand(owner, &[owner, dialog], false));
     }
 
     #[test]
@@ -92,7 +124,7 @@ mod tests {
         let id = window::Id::unique();
         let mut disabled = Disabled::default();
 
-        disabled.set_enabled(id, false);
+        let _ = disabled.set_enabled(id, false);
         disabled.forget(id);
 
         assert!(disabled.is_enabled(id));
@@ -103,26 +135,49 @@ mod tests {
         let (owner, other) = (window::Id::unique(), window::Id::unique());
         let mut disabled = Disabled::default();
 
-        disabled.set_enabled(owner, false);
-        disabled.set_enabled(other, false);
+        let _ = disabled.set_enabled(owner, false);
+        let _ = disabled.set_enabled(other, false);
 
-        let mut reenabled = disabled.reenable_stranded(&[owner, other]);
+        let mut reenabled = disabled.reenable_stranded(&[owner, other], false);
         reenabled.sort();
 
         assert_eq!(reenabled, [owner, other]);
         assert!(disabled.is_enabled(owner) && disabled.is_enabled(other));
-        assert!(disabled.reenable_stranded(&[]).is_empty());
+        assert!(disabled.reenable_stranded(&[], false).is_empty());
     }
 
     #[test]
     fn nested_modal_keeps_owner_disabled() {
-        let (root, dialog) = (window::Id::unique(), window::Id::unique());
+        let (root, dialog1) = (window::Id::unique(), window::Id::unique());
         let mut disabled = Disabled::default();
 
-        disabled.set_enabled(root, false);
+        // root is locked by dialog1, dialog1 by dialog2. dialog2 closed and
+        // the application then enabled dialog1 again.
+        let _ = disabled.set_enabled(root, false);
+        let _ = disabled.set_enabled(dialog1, false);
+        let _ = disabled.set_enabled(dialog1, true);
 
-        assert!(disabled.reenable_stranded(&[root, dialog]).is_empty());
+        assert!(
+            disabled
+                .reenable_stranded(&[root, dialog1], false)
+                .is_empty()
+        );
         assert!(!disabled.is_enabled(root));
+    }
+
+    #[test]
+    fn swapping_dialogs_does_not_reenable_the_owner() {
+        let owner = window::Id::unique();
+        let mut disabled = Disabled::default();
+
+        // The first dialog closed and the second is still being created.
+        let _ = disabled.set_enabled(owner, false);
+
+        assert!(disabled.reenable_stranded(&[owner], true).is_empty());
+        assert!(!disabled.is_enabled(owner));
+
+        // Once nothing is opening any more the owner is really stranded.
+        assert_eq!(disabled.reenable_stranded(&[owner], false), [owner]);
     }
 
     #[test]

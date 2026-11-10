@@ -124,7 +124,10 @@ pub enum Action {
     /// ## Platform-specific
     ///
     /// - **Windows:** also disabled natively (`EnableWindow`), so the system
-    ///   stops routing input to it.
+    ///   stops routing input to it. A natively disabled window gets no
+    ///   `CloseRequested` from its caption close button or Alt+F4. So the last
+    ///   enabled window is only disabled for the runtime filter, never
+    ///   natively, and a warning is logged.
     /// - **Elsewhere:** the runtime drops the input events, and focus moves
     ///   to the most recently opened enabled window owned by this one.
     SetEnabled(Id, bool),
@@ -505,17 +508,29 @@ pub fn gain_focus<T>(id: Id) -> Task<T> {
 /// [`window::Event::CloseRequested`], but keyboard, mouse, touch, IME and
 /// file-drop input is dropped, and the window is drawn without a cursor.
 ///
-/// On Windows the window is also disabled natively. Elsewhere only the
-/// runtime filter applies, and it also eats `Escape`: keep an in-window lock
-/// if the application needs one there.
+/// On Windows the window is also disabled natively, and a natively disabled
+/// window does not get [`window::Event::CloseRequested`] from its caption
+/// close button or Alt+F4. Disable the owner after requesting the dialog's
+/// [`open`], so the runtime sees a window being created. If no other window
+/// is enabled and none is being created, the window is disabled for the
+/// runtime filter only, never natively, and a warning is logged.
 ///
-/// The runtime never leaves the user without an enabled window: closing a
-/// window that leaves only disabled ones enables them all again.
+/// Elsewhere only the runtime filter applies, and it also eats `Escape`:
+/// keep an in-window lock if the application needs one there.
 ///
-/// A mouse drag that began before the window was disabled stays stuck until
-/// the first button release after the window is enabled again.
+/// The runtime never leaves the user without an enabled window: shortly after
+/// a close, once the application handled [`window::Event::Closed`], it
+/// enables all open windows again if none is enabled and none is being
+/// created, and logs a warning.
+///
+/// A mouse drag, or a key held, when the window is disabled loses its release:
+/// the drag stays stuck until the first button release after the window is
+/// enabled again.
+///
+/// [`open`]: open
 ///
 /// [`window::Event::CloseRequested`]: crate::core::window::Event::CloseRequested
+/// [`window::Event::Closed`]: crate::core::window::Event::Closed
 pub fn set_enabled<T>(id: Id, enabled: bool) -> Task<T> {
     task::effect(crate::Action::Window(Action::SetEnabled(id, enabled)))
 }

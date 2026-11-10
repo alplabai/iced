@@ -42,6 +42,27 @@ where
     entries: BTreeMap<Id, Window<P, C>>,
     family: Family,
     disabled: Disabled,
+    stranded_check_at: Option<Instant>,
+    /// Windows being destroyed, and the disabled owner to disable again then.
+    owner_to_restore: BTreeMap<winit::window::WindowId, Id>,
+}
+
+/// How long after a close the runtime waits for the application to enable
+/// another window before it does so itself.
+const STRANDED_CHECK_DELAY: Duration = Duration::from_millis(100);
+
+/// What [`Manager::set_enabled`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnabledChange {
+    /// No such window is open (yet).
+    NotOpen,
+    /// The window already was in the requested state.
+    Unchanged,
+    /// The state changed.
+    Changed,
+    /// The window was disabled, but it is the last enabled one, so it was not
+    /// disabled natively.
+    ChangedLast,
 }
 
 /// The owner relation between windows.
@@ -108,19 +129,29 @@ impl Family {
     }
 
     /// Returns the window that should take the focus away from the disabled
-    /// window `id`: its most recently opened enabled descendant. Returns
-    /// `None` if `id` is enabled or has no enabled descendant, so a disabled
-    /// window is never a target and two windows never pass focus back and forth.
+    /// window `id`: the most recently opened enabled descendant that holds a
+    /// lock (its own owner is disabled), else the most recently opened enabled
+    /// descendant. Returns `None` if `id` is enabled or has no enabled
+    /// descendant, so a disabled window is never a target and two windows
+    /// never pass focus back and forth.
     fn focus_redirect(&self, id: Id, is_enabled: impl Fn(Id) -> bool) -> Option<Id> {
         if is_enabled(id) {
             return None;
         }
 
         // Ids grow with every window opened.
-        self.descendants(id)
+        let enabled: Vec<Id> = self
+            .descendants(id)
             .into_iter()
             .filter(|id| is_enabled(*id))
+            .collect();
+
+        enabled
+            .iter()
+            .copied()
+            .filter(|id| self.parent(*id).is_some_and(|owner| !is_enabled(owner)))
             .max()
+            .or_else(|| enabled.iter().copied().max())
     }
 }
 
@@ -136,6 +167,8 @@ where
             entries: BTreeMap::new(),
             family: Family::default(),
             disabled: Disabled::default(),
+            stranded_check_at: None,
+            owner_to_restore: BTreeMap::new(),
         }
     }
 
@@ -151,17 +184,36 @@ where
             .is_some_and(|id| !self.disabled.is_enabled(*id))
     }
 
-    /// Enables or disables the window `id`. Returns `false` if it is not open.
-    pub fn set_enabled(&mut self, id: Id, enabled: bool) -> bool {
+    /// Enables or disables the window `id`; `pending` tells whether a window
+    /// is being created.
+    ///
+    /// Disabling the last enabled window while none is being created would
+    /// leave the user unable to close or save: on Windows a natively disabled
+    /// window ignores even its caption close button and Alt+F4. So that window
+    /// is disabled for the runtime filter only, and never natively.
+    pub fn set_enabled(&mut self, id: Id, enabled: bool, pending: bool) -> EnabledChange {
         if !self.entries.contains_key(&id) {
-            return false;
+            return EnabledChange::NotOpen;
         }
 
-        self.disabled.set_enabled(id, enabled);
-        self.sync_enabled(id);
-        self.set_native_enabled(id, enabled);
+        let last = !enabled && self.disabled.would_strand(id, &self.open_ids(), pending);
 
-        true
+        if !self.disabled.set_enabled(id, enabled) {
+            return EnabledChange::Unchanged;
+        }
+
+        self.sync_enabled(id);
+
+        if last {
+            EnabledChange::ChangedLast
+        } else {
+            self.set_native_enabled(id, enabled);
+            EnabledChange::Changed
+        }
+    }
+
+    fn open_ids(&self) -> Vec<Id> {
+        self.entries.keys().copied().collect()
     }
 
     /// Mirrors the flag of `id` onto its entry, which draws without a cursor
@@ -202,11 +254,29 @@ where
             .focus_redirect(id, |id| self.disabled.is_enabled(id))
     }
 
-    /// Enables every remaining window if all of them are disabled, and
-    /// returns them.
-    pub fn reenable_stranded(&mut self) -> Vec<Id> {
-        let open: Vec<Id> = self.entries.keys().copied().collect();
-        let stranded = self.disabled.reenable_stranded(&open);
+    /// Asks for a check that some window is still enabled, a moment from
+    /// `now`: the application first gets to react to the `Closed` event.
+    pub fn schedule_stranded_check(&mut self, now: Instant) {
+        self.stranded_check_at = Some(now + STRANDED_CHECK_DELAY);
+    }
+
+    /// Runs the scheduled check once it is due: enables every open window if
+    /// all of them are disabled and none is being created (`pending`), and
+    /// returns them. While a window is being created the check is postponed.
+    pub fn reenable_stranded(&mut self, now: Instant, pending: bool) -> Vec<Id> {
+        match self.stranded_check_at {
+            Some(at) if at <= now => {}
+            _ => return Vec::new(),
+        }
+
+        if pending {
+            self.stranded_check_at = Some(now + STRANDED_CHECK_DELAY);
+            return Vec::new();
+        }
+
+        self.stranded_check_at = None;
+
+        let stranded = self.disabled.reenable_stranded(&self.open_ids(), false);
 
         for id in &stranded {
             self.sync_enabled(*id);
@@ -214,6 +284,37 @@ where
         }
 
         stranded
+    }
+
+    /// Re-enables the native state of the disabled owner of the window `id`,
+    /// which is about to be destroyed, and remembers to disable it again once
+    /// the window is gone. Windows activates another application if a window
+    /// is destroyed while its owner is disabled. The destruction is posted by
+    /// winit when the window is dropped, so it has not happened yet by then.
+    pub fn enable_owner_for_destroy(&mut self, id: Id) {
+        let Some(owner) = self.disabled_owner(id) else {
+            return;
+        };
+
+        if let Some(window) = self.entries.get(&id) {
+            self.set_native_enabled(owner, true);
+            let _ = self.owner_to_restore.insert(window.raw.id(), owner);
+        }
+    }
+
+    /// Called when winit reports a window destroyed: disables the owner
+    /// natively again if the application still wants it disabled and another
+    /// window can take input.
+    pub fn window_destroyed(&mut self, window: winit::window::WindowId) {
+        let Some(owner) = self.owner_to_restore.remove(&window) else {
+            return;
+        };
+
+        if !self.disabled.is_enabled(owner)
+            && !self.disabled.would_strand(owner, &self.open_ids(), false)
+        {
+            self.set_native_enabled(owner, false);
+        }
     }
 
     /// Records that `parent` owns the window `id`.
@@ -317,6 +418,7 @@ where
         self.entries
             .values()
             .filter_map(|window| window.redraw_at)
+            .chain(self.stranded_check_at)
             .min()
     }
 
@@ -1192,6 +1294,18 @@ mod redirect_tests {
     use super::*;
 
     #[test]
+    fn focus_redirect_prefers_the_window_that_holds_the_lock() {
+        let (root, dialog, popup) = (Id::unique(), Id::unique(), Id::unique());
+
+        let mut family = Family::default();
+        family.set_parent(dialog, root);
+        family.set_parent(popup, dialog);
+
+        // `popup` is newer, but `dialog` is the one whose owner is disabled.
+        assert_eq!(family.focus_redirect(root, |id| id != root), Some(dialog));
+    }
+
+    #[test]
     fn focus_redirect_picks_latest_enabled_descendant() {
         let (root, first, second, third) = (Id::unique(), Id::unique(), Id::unique(), Id::unique());
 
@@ -1202,9 +1316,10 @@ mod redirect_tests {
 
         // `root` is disabled by its dialogs, which are enabled.
         assert_eq!(family.focus_redirect(root, |id| id != root), Some(third));
+        // `second` is newer than `first`, but only `first` holds the lock.
         assert_eq!(
             family.focus_redirect(root, |id| id != root && id != third),
-            Some(second)
+            Some(first)
         );
     }
 
