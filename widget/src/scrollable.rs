@@ -3760,8 +3760,8 @@ mod tests {
     }
 
     /// A minimum-length scroller moves in step with the scroll position over
-    /// the whole free track: it ends at the track end only when fully
-    /// scrolled, and sits halfway at half scroll.
+    /// the whole free track: it ends at the track end when fully scrolled,
+    /// and sits halfway at half scroll.
     #[test]
     fn minimum_length_scrollers_move_linearly_over_the_free_track() {
         let bounds = Rectangle::new(Point::ORIGIN, Size::new(100.0, 100.0));
@@ -3822,7 +3822,7 @@ mod tests {
             let got = y.scroll_percentage(Axis::Y, 0.0, start);
             assert!(
                 (got - relative).abs() < 1e-3,
-                "vertical {got} vs {relative}"
+                "vertical {got} vs {relative} ({anchor:?}, content {content_len})"
             );
 
             let x = scrollbars.x.expect("horizontal scrollbar");
@@ -3830,7 +3830,7 @@ mod tests {
             let got = x.scroll_percentage(Axis::X, 0.0, start);
             assert!(
                 (got - relative).abs() < 1e-3,
-                "horizontal {got} vs {relative}"
+                "horizontal {got} vs {relative} ({anchor:?}, content {content_len})"
             );
         }
     }
