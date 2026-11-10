@@ -353,7 +353,7 @@ pub fn window_attributes(
     {
         use window::settings::platform;
         use winit::platform::windows::{
-            BackdropType, CornerPreference, WindowAttributesExtWindows,
+            BackdropType, Color, CornerPreference, WindowAttributesExtWindows,
         };
 
         attributes = attributes.with_drag_and_drop(settings.platform_specific.drag_and_drop);
@@ -370,6 +370,21 @@ pub fn window_attributes(
                 platform::CornerPreference::Round => CornerPreference::Round,
                 platform::CornerPreference::RoundSmall => CornerPreference::RoundSmall,
             });
+
+        let colors = &settings.platform_specific;
+
+        if let Some([r, g, b]) = title_color_rgb(colors.title_background_color) {
+            attributes = attributes.with_title_background_color(Some(Color::from_rgb(r, g, b)));
+        }
+
+        // winit takes a plain colour here, so only call it for `Some`.
+        if let Some([r, g, b]) = title_color_rgb(colors.title_text_color) {
+            attributes = attributes.with_title_text_color(Color::from_rgb(r, g, b));
+        }
+
+        if let Some([r, g, b]) = title_color_rgb(colors.border_color) {
+            attributes = attributes.with_border_color(Some(Color::from_rgb(r, g, b)));
+        }
 
         if settings.blur {
             attributes = attributes.with_system_backdrop(BackdropType::TransientWindow);
@@ -754,6 +769,16 @@ pub fn theme_mode(theme: winit::window::Theme) -> theme::Mode {
         winit::window::Theme::Light => theme::Mode::Light,
         winit::window::Theme::Dark => theme::Mode::Dark,
     }
+}
+
+/// Converts an optional title bar colour into sRGB bytes; alpha is ignored.
+///
+/// `None` stays `None`: the system default.
+pub fn title_color_rgb(color: Option<crate::core::Color>) -> Option<[u8; 3]> {
+    color.map(|color| {
+        let [r, g, b, _] = color.into_rgba8();
+        [r, g, b]
+    })
 }
 
 /// Converts a [`theme::Mode`] into a window theme.
@@ -1529,9 +1554,29 @@ fn is_private_use(c: char) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_monitor_list, device_event, is_primary_monitor};
-    use crate::core::Size;
+    use super::{
+        build_monitor_list, device_event, is_primary_monitor, title_color_rgb, window_theme,
+    };
     use crate::core::window::MonitorData;
+    use crate::core::{Color, Size, theme};
+
+    #[test]
+    fn title_colors_convert_to_rgb_and_ignore_alpha() {
+        assert_eq!(title_color_rgb(None), None);
+        assert_eq!(
+            title_color_rgb(Some(Color::from_rgba(1.0, 0.0, 0.5, 0.2))),
+            Some([255, 0, 128])
+        );
+    }
+
+    #[test]
+    fn theme_mode_maps_to_window_theme_and_system_stays_none() {
+        use winit::window::Theme;
+
+        assert_eq!(window_theme(theme::Mode::None), None);
+        assert_eq!(window_theme(theme::Mode::Light), Some(Theme::Light));
+        assert_eq!(window_theme(theme::Mode::Dark), Some(Theme::Dark));
+    }
 
     #[test]
     fn raw_mouse_motion_converts_to_raw_motion() {

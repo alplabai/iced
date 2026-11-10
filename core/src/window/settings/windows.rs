@@ -1,7 +1,8 @@
 //! Platform specific settings for Windows.
+use crate::Color;
 
 /// The platform specific window settings of an application.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PlatformSpecific {
     /// Drag and drop support
     pub drag_and_drop: bool,
@@ -19,6 +20,24 @@ pub struct PlatformSpecific {
     ///
     /// Supported starting with Windows 11 Build 22000.
     pub corner_preference: CornerPreference,
+
+    /// The background colour of the title bar. `None` is the system default.
+    ///
+    /// Supported starting with Windows 11 Build 22000; Windows 10 ignores it.
+    /// The alpha channel is ignored.
+    pub title_background_color: Option<Color>,
+
+    /// The colour of the title bar text. `None` is the system default.
+    ///
+    /// Supported starting with Windows 11 Build 22000; Windows 10 ignores it.
+    /// The alpha channel is ignored.
+    pub title_text_color: Option<Color>,
+
+    /// The colour of the window border. `None` is the system default.
+    ///
+    /// Supported starting with Windows 11 Build 22000; Windows 10 ignores it.
+    /// The alpha channel is ignored.
+    pub border_color: Option<Color>,
 }
 
 impl Default for PlatformSpecific {
@@ -28,6 +47,9 @@ impl Default for PlatformSpecific {
             skip_taskbar: false,
             undecorated_shadow: false,
             corner_preference: CornerPreference::default(),
+            title_background_color: None,
+            title_text_color: None,
+            border_color: None,
         }
     }
 }
