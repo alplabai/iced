@@ -3253,9 +3253,9 @@ impl Scrollbars {
                 None
             } else {
                 // min height for easier grabbing with super tall content
-                let scroller_height = (scrollbar_bounds.height * ratio)
-                    .max(MIN_SCROLLER_LENGTH)
-                    .min(scrollbar_bounds.height);
+                // Half the track at most, so the free track never collapses to 0
+                let min_length = MIN_SCROLLER_LENGTH.min(scrollbar_bounds.height / 2.0);
+                let scroller_height = (scrollbar_bounds.height * ratio).max(min_length);
                 let max_offset = (scrollbar_bounds.height - scroller_height).max(0.0);
                 // Relative scroll over the free track, like `scroll_percentage` drags it
                 let scroller_offset = translation.y / (content.height - bounds.height) * max_offset;
@@ -3327,9 +3327,9 @@ impl Scrollbars {
                 None
             } else {
                 // min width for easier grabbing with extra wide content
-                let scroller_length = (scrollbar_bounds.width * ratio)
-                    .max(MIN_SCROLLER_LENGTH)
-                    .min(scrollbar_bounds.width);
+                // Half the track at most, so the free track never collapses to 0
+                let min_length = MIN_SCROLLER_LENGTH.min(scrollbar_bounds.width / 2.0);
+                let scroller_length = (scrollbar_bounds.width * ratio).max(min_length);
                 let max_offset = (scrollbar_bounds.width - scroller_length).max(0.0);
                 // Relative scroll over the free track, like `scroll_percentage` drags it
                 let scroller_offset = translation.x / (content.width - bounds.width) * max_offset;
@@ -3783,9 +3783,11 @@ mod tests {
         let scrollbars = Scrollbars::new(max, direction, bounds, content);
         let y = scrollbars.y.expect("vertical scrollbar");
         let y_scroller = y.scroller.expect("vertical scroller").bounds;
+        assert!((y_scroller.height - MIN_SCROLLER_LENGTH).abs() < 1e-3);
         assert!((y_scroller.y + y_scroller.height - (y.bounds.y + y.bounds.height)).abs() < 1e-3);
         let x = scrollbars.x.expect("horizontal scrollbar");
         let x_scroller = x.scroller.expect("horizontal scroller").bounds;
+        assert!((x_scroller.width - MIN_SCROLLER_LENGTH).abs() < 1e-3);
         assert!((x_scroller.x + x_scroller.width - (x.bounds.x + x.bounds.width)).abs() < 1e-3);
 
         let scrollbars = Scrollbars::new(max * 0.5, direction, bounds, content);
@@ -3799,38 +3801,10 @@ mod tests {
         assert!((x_scroller.x - x.bounds.x - free * 0.5).abs() < 1e-3);
     }
 
-    /// With huge content the scrollers are `MIN_SCROLLER_LENGTH` long and
-    /// still span the whole free track.
+    /// On a track shorter than twice `MIN_SCROLLER_LENGTH` the scroller is
+    /// half the track, so the free track stays positive and drags stay finite.
     #[test]
-    fn scrollers_are_at_least_min_length_long() {
-        let bounds = Rectangle::new(Point::ORIGIN, Size::new(200.0, 200.0));
-        let content = Size::new(100_000.0, 100_000.0);
-        let direction = Direction::Both {
-            vertical: Scrollbar::default(),
-            horizontal: Scrollbar::default(),
-        };
-        let max = Vector::new(content.width - bounds.width, content.height - bounds.height);
-
-        for factor in [0.5, 1.0] {
-            let scrollbars = Scrollbars::new(max * factor, direction, bounds, content);
-
-            let y = scrollbars.y.expect("vertical scrollbar");
-            let s = y.scroller.expect("vertical scroller").bounds;
-            assert!((s.height - MIN_SCROLLER_LENGTH).abs() < 1e-3);
-            let free = y.bounds.height - s.height;
-            assert!((s.y - y.bounds.y - free * factor).abs() < 1e-3);
-
-            let x = scrollbars.x.expect("horizontal scrollbar");
-            let s = x.scroller.expect("horizontal scroller").bounds;
-            assert!((s.width - MIN_SCROLLER_LENGTH).abs() < 1e-3);
-            let free = x.bounds.width - s.width;
-            assert!((s.x - x.bounds.x - free * factor).abs() < 1e-3);
-        }
-    }
-
-    /// A track shorter than `MIN_SCROLLER_LENGTH` never gets a longer scroller.
-    #[test]
-    fn scrollers_never_exceed_short_tracks() {
+    fn scrollers_are_half_of_short_tracks() {
         let bounds = Rectangle::new(Point::ORIGIN, Size::new(15.0, 15.0));
         let content = Size::new(100_000.0, 100_000.0);
         let end = Vector::new(content.width - bounds.width, content.height - bounds.height);
@@ -3845,8 +3819,11 @@ mod tests {
             let y = vertical.y.expect("vertical scrollbar");
             let s = y.scroller.expect("vertical scroller").bounds;
             assert!(y.bounds.height < MIN_SCROLLER_LENGTH);
-            assert!((s.height - y.bounds.height).abs() < 1e-3);
-            assert!((s.y - y.bounds.y).abs() < 1e-3);
+            assert!((s.height - y.bounds.height / 2.0).abs() < 1e-3);
+            assert!(s.y.is_finite() && (y.bounds.height - s.height) > 0.0);
+            assert!(
+                s.y >= y.bounds.y - 1e-3 && s.y + s.height <= y.bounds.y + y.bounds.height + 1e-3
+            );
 
             let horizontal = Scrollbars::new(
                 translation,
@@ -3857,8 +3834,11 @@ mod tests {
             let x = horizontal.x.expect("horizontal scrollbar");
             let s = x.scroller.expect("horizontal scroller").bounds;
             assert!(x.bounds.width < MIN_SCROLLER_LENGTH);
-            assert!((s.width - x.bounds.width).abs() < 1e-3);
-            assert!((s.x - x.bounds.x).abs() < 1e-3);
+            assert!((s.width - x.bounds.width / 2.0).abs() < 1e-3);
+            assert!(s.x.is_finite() && (x.bounds.width - s.width) > 0.0);
+            assert!(
+                s.x >= x.bounds.x - 1e-3 && s.x + s.width <= x.bounds.x + x.bounds.width + 1e-3
+            );
         }
     }
 

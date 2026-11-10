@@ -1338,6 +1338,38 @@ fn notifications_report_the_scrollbar_source() {
     );
 }
 
+/// On a track shorter than the minimum scroller length the scroller is half
+/// the track, so dragging it 1 px moves the content by a finite fraction of
+/// the range rather than jumping to the start or the end.
+#[test]
+fn dragging_a_scroller_on_a_short_track_stays_finite() {
+    let mut simulator = simulate(element(3000, 18));
+
+    let mut instant = Instant::now();
+    step_frames(&mut simulator, &mut instant, 2);
+
+    simulator.point_at(Point::new(1019.0, 2.0));
+    let _ = simulator.simulate([Event::Mouse(mouse::Event::ButtonPressed(
+        mouse::Button::Left,
+    ))]);
+
+    simulator.point_at(Point::new(1019.0, 3.0));
+    let _ = simulator.simulate([Event::Mouse(mouse::Event::CursorMoved {
+        position: Point::new(1019.0, 3.0),
+    })]);
+
+    let offsets: Vec<f32> = simulator
+        .into_messages()
+        .map(|scroll| scroll.viewport.absolute_offset().y)
+        .collect();
+
+    let last = *offsets.last().unwrap();
+    assert!(
+        last.is_finite() && last > 0.0 && last < 2982.0 / 2.0,
+        "a 1 px drag must move the content by a small finite amount: {offsets:?}"
+    );
+}
+
 #[test]
 fn notifications_report_the_auto_scroll_source() {
     let element = Scrollable::new(space().height(Length::Fixed(3000.0)))
