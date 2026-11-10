@@ -34,6 +34,15 @@ impl Disabled {
         let _ = self.0.remove(&id);
     }
 
+    /// Returns the `open` windows that are disabled and can be disabled
+    /// natively: another window is enabled or being created.
+    pub fn natively_disableable(&self, open: &[window::Id], pending: bool) -> Vec<window::Id> {
+        open.iter()
+            .copied()
+            .filter(|id| !self.is_enabled(*id) && !self.would_strand(*id, open, pending))
+            .collect()
+    }
+
     /// If windows remain open, none is `pending` (being created) and every
     /// open one is disabled, the user could not interact with the application
     /// any more: enables them all and returns them.
@@ -51,6 +60,38 @@ impl Disabled {
         }
 
         open.to_vec()
+    }
+}
+
+/// How many windows are being created, and whether the application is still
+/// starting (a non-daemon application opens its first window then).
+#[derive(Debug, Default)]
+pub struct Opening {
+    starting: bool,
+    requested: usize,
+}
+
+impl Opening {
+    pub fn new(starting: bool) -> Self {
+        Self {
+            starting,
+            requested: 0,
+        }
+    }
+
+    /// A window was requested.
+    pub fn requested(&mut self) {
+        self.requested += 1;
+    }
+
+    /// A requested window was created or cancelled.
+    pub fn finished(&mut self) {
+        self.starting = false;
+        self.requested = self.requested.saturating_sub(1);
+    }
+
+    pub fn is_opening(&self) -> bool {
+        self.starting || self.requested > 0
     }
 }
 
@@ -101,6 +142,49 @@ mod tests {
         assert!(!disabled.set_enabled(id, false), "already disabled");
         assert!(disabled.set_enabled(id, true));
         assert!(disabled.is_enabled(id));
+    }
+
+    #[test]
+    fn a_window_disabled_as_the_last_one_is_disabled_natively_once_another_exists() {
+        let (owner, dialog) = (window::Id::unique(), window::Id::unique());
+        let mut disabled = Disabled::default();
+
+        let _ = disabled.set_enabled(owner, false);
+
+        assert!(disabled.natively_disableable(&[owner], false).is_empty());
+        assert_eq!(
+            disabled.natively_disableable(&[owner, dialog], false),
+            [owner]
+        );
+        assert_eq!(disabled.natively_disableable(&[owner], true), [owner]);
+
+        let _ = disabled.set_enabled(dialog, false);
+        assert!(
+            disabled
+                .natively_disableable(&[owner, dialog], false)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn two_concurrent_opens_keep_opening_until_both_finish() {
+        let mut opening = Opening::new(false);
+        assert!(!opening.is_opening());
+
+        opening.requested();
+        opening.requested();
+        opening.finished();
+        assert!(opening.is_opening());
+
+        opening.finished();
+        assert!(!opening.is_opening());
+
+        // The first window of a starting application.
+        let mut opening = Opening::new(true);
+        assert!(opening.is_opening());
+        opening.requested();
+        opening.finished();
+        assert!(!opening.is_opening());
     }
 
     #[test]

@@ -513,7 +513,8 @@ pub fn gain_focus<T>(id: Id) -> Task<T> {
 /// close button or Alt+F4. Disable the owner after requesting the dialog's
 /// [`open`], so the runtime sees a window being created. If no other window
 /// is enabled and none is being created, the window is disabled for the
-/// runtime filter only, never natively, and a warning is logged.
+/// runtime filter only, never natively, and a warning is logged; about 100 ms
+/// later it is enabled again unless another window has opened by then.
 ///
 /// Elsewhere only the runtime filter applies, and it also eats `Escape`:
 /// keep an in-window lock if the application needs one there.

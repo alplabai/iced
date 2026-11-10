@@ -649,7 +649,7 @@ async fn run_instance<P>(
 
     let mut window_manager = window::Manager::new();
     let mut cursors = window::Cursors::new();
-    let mut is_window_opening = !is_daemon;
+    let mut is_window_opening = window::Opening::new(!is_daemon);
 
     let mut compositor = None;
     let mut events = Vec::new();
@@ -735,7 +735,7 @@ async fn run_instance<P>(
                     // `window::open` set this when the window was requested.
                     // Skipping the normal path below must clear it, or a
                     // non-daemon app never exits once its windows are gone.
-                    is_window_opening = false;
+                    is_window_opening.finished();
 
                     continue;
                 }
@@ -868,7 +868,11 @@ async fn run_instance<P>(
                 ));
 
                 let _ = on_open.send(id);
-                is_window_opening = false;
+                is_window_opening.finished();
+
+                // A window that was disabled while it was the last enabled
+                // one can be disabled natively now that another one exists.
+                window_manager.disable_natively(is_window_opening.is_opening());
             }
             Event::CursorCreated {
                 id,
@@ -1243,12 +1247,13 @@ async fn run_instance<P>(
                         window_id,
                     } => {
                         if matches!(window_event, winit::event::WindowEvent::Destroyed) {
-                            window_manager.window_destroyed(window_id);
+                            window_manager
+                                .window_destroyed(window_id, is_window_opening.is_opening());
                         }
 
                         if !is_daemon
                             && matches!(window_event, winit::event::WindowEvent::Destroyed)
-                            && !is_window_opening
+                            && !is_window_opening.is_opening()
                             && window_manager.is_empty()
                         {
                             // Deliver any pending events (e.g. the last `Closed`
@@ -1369,8 +1374,8 @@ async fn run_instance<P>(
                             }
                         }
 
-                        let stranded =
-                            window_manager.reenable_stranded(Instant::now(), is_window_opening);
+                        let stranded = window_manager
+                            .reenable_stranded(Instant::now(), is_window_opening.is_opening());
 
                         if !stranded.is_empty() {
                             log::warn!(
@@ -1635,7 +1640,7 @@ fn run_action<'a, P, C>(
     interfaces: &mut FxHashMap<window::Id, UserInterface<'a, P::Message, P::Theme, P::Renderer>>,
     window_manager: &mut window::Manager<P, C>,
     ui_caches: &mut FxHashMap<window::Id, user_interface::Cache>,
-    is_window_opening: &mut bool,
+    is_window_opening: &mut crate::window::Opening,
     system_theme: &mut theme::Mode,
     renderer_settings: &mut renderer::Settings,
 ) where
@@ -1705,7 +1710,7 @@ fn run_action<'a, P, C>(
                     })
                     .expect("Send control action");
 
-                *is_window_opening = true;
+                is_window_opening.requested();
             }
             window::Action::ListMonitors(channel) => {
                 control_sender
@@ -1974,7 +1979,7 @@ fn run_action<'a, P, C>(
             window::Action::SetEnabled(id, enabled) => {
                 use crate::window::EnabledChange;
 
-                match window_manager.set_enabled(id, enabled, *is_window_opening) {
+                match window_manager.set_enabled(id, enabled, is_window_opening.is_opening()) {
                     EnabledChange::NotOpen => {
                         log::warn!(
                             "Ignoring `set_enabled` for window `{id:?}`: \
@@ -1986,8 +1991,11 @@ fn run_action<'a, P, C>(
                         if change == EnabledChange::ChangedLast {
                             log::warn!(
                                 "Window `{id:?}` is the last enabled window: it is not \
-                                 disabled natively, so it can still be closed"
+                                 disabled natively, so it can still be closed, and it \
+                                 is enabled again shortly unless another window opens"
                             );
+
+                            window_manager.schedule_stranded_check(Instant::now());
                         }
 
                         if let Some(window) = window_manager.get_mut(id) {

@@ -3,7 +3,7 @@ mod enablement;
 mod mode_flags;
 mod state;
 
-pub use enablement::{is_press, passes_when_disabled};
+pub use enablement::{Opening, is_press, passes_when_disabled};
 
 use enablement::Disabled;
 use mode_flags::ModeFlags;
@@ -139,19 +139,14 @@ impl Family {
             return None;
         }
 
-        // Ids grow with every window opened.
-        let enabled: Vec<Id> = self
-            .descendants(id)
+        // Ids grow with every window opened. If `id` has an enabled
+        // descendant, the topmost enabled one in its chain has a disabled
+        // owner, so a lock holder always exists and no fallback is needed.
+        self.descendants(id)
             .into_iter()
             .filter(|id| is_enabled(*id))
-            .collect();
-
-        enabled
-            .iter()
-            .copied()
             .filter(|id| self.parent(*id).is_some_and(|owner| !is_enabled(owner)))
             .max()
-            .or_else(|| enabled.iter().copied().max())
     }
 }
 
@@ -305,15 +300,30 @@ where
     /// Called when winit reports a window destroyed: disables the owner
     /// natively again if the application still wants it disabled and another
     /// window can take input.
-    pub fn window_destroyed(&mut self, window: winit::window::WindowId) {
+    pub fn window_destroyed(&mut self, window: winit::window::WindowId, pending: bool) {
         let Some(owner) = self.owner_to_restore.remove(&window) else {
             return;
         };
 
         if !self.disabled.is_enabled(owner)
-            && !self.disabled.would_strand(owner, &self.open_ids(), false)
+            && !self.disabled.would_strand(owner, &self.open_ids(), pending)
         {
             self.set_native_enabled(owner, false);
+        }
+    }
+
+    /// Disables natively every runtime-disabled window that was left natively
+    /// enabled because it was the last enabled one, now that another window
+    /// is enabled or being created. Windows about to be restored by
+    /// [`Manager::window_destroyed`] are left alone.
+    pub fn disable_natively(&self, pending: bool) {
+        for id in self
+            .disabled
+            .natively_disableable(&self.open_ids(), pending)
+        {
+            if !self.owner_to_restore.values().any(|owner| *owner == id) {
+                self.set_native_enabled(id, false);
+            }
         }
     }
 
@@ -1306,7 +1316,7 @@ mod redirect_tests {
     }
 
     #[test]
-    fn focus_redirect_picks_latest_enabled_descendant() {
+    fn focus_redirect_prefers_latest_lock_holder() {
         let (root, first, second, third) = (Id::unique(), Id::unique(), Id::unique(), Id::unique());
 
         let mut family = Family::default();
