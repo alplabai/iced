@@ -312,7 +312,14 @@ pub fn window_attributes(
         .with_window_level(window_level(settings.level))
         .with_visible(settings.visible);
 
-    if let Some(position) = position(primary_monitor.as_ref(), settings.size, settings.position) {
+    // The window is created `scale_factor` times larger than `settings.size`
+    // (above), so centre the size it actually has.
+    let size = Size::new(
+        settings.size.width * scale_factor,
+        settings.size.height * scale_factor,
+    );
+
+    if let Some(position) = position(primary_monitor.as_ref(), size, settings.position) {
         attributes = attributes.with_position(position);
     }
 

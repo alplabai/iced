@@ -115,6 +115,20 @@ pub enum Action {
     /// - **Web / Wayland:** Unsupported.
     GainFocus(Id),
 
+    /// Enable or disable user input for the window.
+    ///
+    /// A disabled window keeps drawing and receiving lifecycle events
+    /// (`CloseRequested`, `Focused`, `Resized`, ...) but ignores keyboard,
+    /// mouse, touch, IME and file-drop input. Enabled by default.
+    ///
+    /// ## Platform-specific
+    ///
+    /// - **Windows:** also disabled natively (`EnableWindow`), so the system
+    ///   stops routing input to it.
+    /// - **Elsewhere:** the runtime drops the input events, and focus moves
+    ///   to the most recently opened enabled window owned by this one.
+    SetEnabled(Id, bool),
+
     /// Change the window [`Level`].
     SetLevel(Id, Level),
 
@@ -483,6 +497,29 @@ pub fn gain_focus<T>(id: Id) -> Task<T> {
     task::effect(crate::Action::Window(Action::GainFocus(id)))
 }
 
+/// Enables or disables user input for the window.
+///
+/// This is how an application makes a dialog modal: disable the owner while
+/// the dialog is open and enable it again when the dialog closes. A disabled
+/// window still draws and still receives lifecycle events such as
+/// [`window::Event::CloseRequested`], but keyboard, mouse, touch, IME and
+/// file-drop input is dropped, and the window is drawn without a cursor.
+///
+/// On Windows the window is also disabled natively. Elsewhere only the
+/// runtime filter applies, and it also eats `Escape`: keep an in-window lock
+/// if the application needs one there.
+///
+/// The runtime never leaves the user without an enabled window: closing a
+/// window that leaves only disabled ones enables them all again.
+///
+/// A mouse drag that began before the window was disabled stays stuck until
+/// the first button release after the window is enabled again.
+///
+/// [`window::Event::CloseRequested`]: crate::core::window::Event::CloseRequested
+pub fn set_enabled<T>(id: Id, enabled: bool) -> Task<T> {
+    task::effect(crate::Action::Window(Action::SetEnabled(id, enabled)))
+}
+
 /// Changes the window [`Level`].
 pub fn set_level<T>(id: Id, level: Level) -> Task<T> {
     task::effect(crate::Action::Window(Action::SetLevel(id, level)))
@@ -578,4 +615,28 @@ pub fn create_cursor(
             channel,
         })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::futures::futures::{FutureExt, StreamExt};
+
+    #[test]
+    fn set_enabled_runs_the_set_enabled_action() {
+        let id = Id::unique();
+
+        for enabled in [true, false] {
+            let mut stream = task::into_stream(set_enabled::<()>(id, enabled)).expect("a stream");
+
+            let action = stream.next().now_or_never().expect("ready");
+
+            assert!(matches!(
+                action,
+                Some(crate::Action::Window(Action::SetEnabled(window, value)))
+                    if window == id && value == enabled
+            ));
+        }
+    }
 }

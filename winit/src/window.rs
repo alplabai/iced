@@ -1,6 +1,11 @@
+pub mod centering;
+mod enablement;
 mod mode_flags;
 mod state;
 
+pub use enablement::{is_press, passes_when_disabled};
+
+use enablement::Disabled;
 use mode_flags::ModeFlags;
 use state::State;
 
@@ -36,6 +41,7 @@ where
     aliases: BTreeMap<winit::window::WindowId, Id>,
     entries: BTreeMap<Id, Window<P, C>>,
     family: Family,
+    disabled: Disabled,
 }
 
 /// The owner relation between windows.
@@ -95,6 +101,27 @@ impl Family {
 
         result
     }
+
+    /// Returns the owner of `id`, if any.
+    fn parent(&self, id: Id) -> Option<Id> {
+        self.parents.get(&id).copied()
+    }
+
+    /// Returns the window that should take the focus away from the disabled
+    /// window `id`: its most recently opened enabled descendant. Returns
+    /// `None` if `id` is enabled or has no enabled descendant, so a disabled
+    /// window is never a target and two windows never pass focus back and forth.
+    fn focus_redirect(&self, id: Id, is_enabled: impl Fn(Id) -> bool) -> Option<Id> {
+        if is_enabled(id) {
+            return None;
+        }
+
+        // Ids grow with every window opened.
+        self.descendants(id)
+            .into_iter()
+            .filter(|id| is_enabled(*id))
+            .max()
+    }
 }
 
 impl<P, C> Manager<P, C>
@@ -108,7 +135,85 @@ where
             aliases: BTreeMap::new(),
             entries: BTreeMap::new(),
             family: Family::default(),
+            disabled: Disabled::default(),
         }
+    }
+
+    /// Returns whether the window `id` accepts user input.
+    pub fn is_enabled(&self, id: Id) -> bool {
+        self.disabled.is_enabled(id)
+    }
+
+    /// Returns whether the window with the winit id `id` is disabled.
+    pub fn is_disabled_alias(&self, id: winit::window::WindowId) -> bool {
+        self.aliases
+            .get(&id)
+            .is_some_and(|id| !self.disabled.is_enabled(*id))
+    }
+
+    /// Enables or disables the window `id`. Returns `false` if it is not open.
+    pub fn set_enabled(&mut self, id: Id, enabled: bool) -> bool {
+        if !self.entries.contains_key(&id) {
+            return false;
+        }
+
+        self.disabled.set_enabled(id, enabled);
+        self.sync_enabled(id);
+        self.set_native_enabled(id, enabled);
+
+        true
+    }
+
+    /// Mirrors the flag of `id` onto its entry, which draws without a cursor
+    /// while disabled.
+    fn sync_enabled(&mut self, id: Id) {
+        let enabled = self.disabled.is_enabled(id);
+
+        if let Some(window) = self.entries.get_mut(&id) {
+            window.enabled = enabled;
+        }
+    }
+
+    /// Sets only the native enabled state of `id`, leaving the runtime flag
+    /// alone. Only Windows has one.
+    pub fn set_native_enabled(&self, id: Id, enabled: bool) {
+        #[cfg(target_os = "windows")]
+        if let Some(window) = self.entries.get(&id) {
+            use winit::platform::windows::WindowExtWindows;
+
+            window.raw.set_enable(enabled);
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        let _ = (id, enabled);
+    }
+
+    /// Returns the disabled owner of `id`, if it has one.
+    pub fn disabled_owner(&self, id: Id) -> Option<Id> {
+        self.family
+            .parent(id)
+            .filter(|owner| !self.disabled.is_enabled(*owner))
+    }
+
+    /// Returns the enabled window that should take the focus from the
+    /// disabled window `id`, if any.
+    pub fn focus_redirect(&self, id: Id) -> Option<Id> {
+        self.family
+            .focus_redirect(id, |id| self.disabled.is_enabled(id))
+    }
+
+    /// Enables every remaining window if all of them are disabled, and
+    /// returns them.
+    pub fn reenable_stranded(&mut self) -> Vec<Id> {
+        let open: Vec<Id> = self.entries.keys().copied().collect();
+        let stranded = self.disabled.reenable_stranded(&open);
+
+        for id in &stranded {
+            self.sync_enabled(*id);
+            self.set_native_enabled(*id, true);
+        }
+
+        stranded
     }
 
     /// Records that `parent` owns the window `id`.
@@ -173,6 +278,7 @@ where
                 waker,
                 state,
                 exit_on_close_request,
+                enabled: true,
                 surface,
                 surface_version,
                 surface_error_at: None,
@@ -248,6 +354,7 @@ where
         // window keeps it, so closing its owner later still closes it.
         let window = self.entries.remove(&id)?;
         self.family.forget(id);
+        self.disabled.forget(id);
         let _ = self.aliases.remove(&window.raw.id());
 
         Some(window)
@@ -282,6 +389,8 @@ where
     pub waker: shell::Waker,
     pub state: State<P>,
     pub exit_on_close_request: bool,
+    /// Mirrors the [`Manager`]'s disabled set; see `window::set_enabled`.
+    enabled: bool,
     pub mouse_interaction: mouse::Interaction,
     cursor_grab: CursorGrab,
     release_grab_on_escape: bool,
@@ -362,6 +471,16 @@ where
 
         if let Some(period) = period {
             self.frame_clock.reanchor(now, period);
+        }
+    }
+
+    /// Returns the cursor the widgets see: none while the window is disabled,
+    /// so nothing in it shows a hover.
+    pub fn cursor(&self) -> mouse::Cursor {
+        if self.enabled {
+            self.state.cursor()
+        } else {
+            mouse::Cursor::Unavailable
         }
     }
 
@@ -1065,5 +1184,48 @@ mod tests {
         family.forget(child);
 
         assert!(family.descendants(root).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod redirect_tests {
+    use super::*;
+
+    #[test]
+    fn focus_redirect_picks_latest_enabled_descendant() {
+        let (root, first, second, third) = (Id::unique(), Id::unique(), Id::unique(), Id::unique());
+
+        let mut family = Family::default();
+        family.set_parent(first, root);
+        family.set_parent(second, first);
+        family.set_parent(third, root);
+
+        // `root` is disabled by its dialogs, which are enabled.
+        assert_eq!(family.focus_redirect(root, |id| id != root), Some(third));
+        assert_eq!(
+            family.focus_redirect(root, |id| id != root && id != third),
+            Some(second)
+        );
+    }
+
+    #[test]
+    fn focus_redirect_none_when_descendants_all_disabled() {
+        let (root, child) = (Id::unique(), Id::unique());
+
+        let mut family = Family::default();
+        family.set_parent(child, root);
+
+        assert_eq!(family.focus_redirect(root, |_| false), None);
+    }
+
+    #[test]
+    fn focus_redirect_none_for_enabled_window() {
+        let (root, child) = (Id::unique(), Id::unique());
+
+        let mut family = Family::default();
+        family.set_parent(child, root);
+
+        // An enabled window keeps its focus.
+        assert_eq!(family.focus_redirect(root, |_| true), None);
     }
 }

@@ -394,6 +394,10 @@ where
 
                                 let visible = settings.visible;
 
+                                let centered_size =
+                                    matches!(settings.position, core::window::Position::Centered)
+                                        .then_some(settings.size);
+
                                 #[cfg(target_arch = "wasm32")]
                                 let target = settings.platform_specific.target.clone();
 
@@ -408,6 +412,31 @@ where
 
                                 let window_attributes =
                                     conversion::with_parent(window_attributes, parent.as_deref());
+
+                                // A centred window with a parent centres on the
+                                // parent; if the parent's position is unknown
+                                // it keeps the monitor centring.
+                                let window_attributes = match centered_size
+                                    .zip(parent.as_deref())
+                                    .and_then(|(size, parent)| {
+                                        let scale = f64::from(scale_factor)
+                                            * parent
+                                                .current_monitor()
+                                                .map_or(parent.scale_factor(), |monitor| {
+                                                    monitor.scale_factor()
+                                                });
+
+                                        window::centering::on_parent(
+                                            parent,
+                                            core::Size::new(
+                                                f64::from(size.width) * scale,
+                                                f64::from(size.height) * scale,
+                                            ),
+                                        )
+                                    }) {
+                                    Some(position) => window_attributes.with_position(position),
+                                    None => window_attributes,
+                                };
 
                                 #[cfg(target_arch = "wasm32")]
                                 let window_attributes = {
@@ -975,7 +1004,7 @@ async fn run_instance<P>(
                             window.tick(frame_time),
                         ));
 
-                        let cursor = window.state.cursor();
+                        let cursor = window.cursor();
 
                         let mut interface =
                             user_interfaces.get_mut(&id).expect("Get user interface");
@@ -1245,6 +1274,10 @@ async fn run_instance<P>(
                             continue;
                         }
 
+                        let disabled = window_manager.is_disabled_alias(window_id);
+                        let mut redirect_focus = disabled
+                            && matches!(window_event, winit::event::WindowEvent::Focused(true));
+
                         let Some((id, window)) = window_manager.get_mut_alias(window_id) else {
                             continue;
                         };
@@ -1315,7 +1348,18 @@ async fn run_instance<P>(
                                 window.state.scale_factor(),
                                 window.state.modifiers(),
                             ) {
-                                events.push((id, event));
+                                if !disabled || window::passes_when_disabled(&event) {
+                                    events.push((id, event));
+                                } else if window::is_press(&event) {
+                                    redirect_focus = true;
+                                }
+                            }
+
+                            if redirect_focus
+                                && let Some(target) = window_manager.focus_redirect(id)
+                                && let Some(target) = window_manager.get(target)
+                            {
+                                target.raw.focus_window();
                             }
                         }
                     }
@@ -1361,7 +1405,7 @@ async fn run_instance<P>(
                                     &window.raw,
                                     &window.waker,
                                     &window_events,
-                                    window.state.cursor(),
+                                    window.cursor(),
                                     &mut window.renderer,
                                     &mut messages,
                                 );
@@ -1675,8 +1719,31 @@ fn run_action<'a, P, C>(
                     let _ = ui_caches.remove(&id);
                     let _ = interfaces.remove(&id);
 
+                    // Windows moves the activation to another application if
+                    // a window is destroyed while its owner is disabled.
+                    let owner = window_manager.disabled_owner(id);
+
+                    if let Some(owner) = owner {
+                        window_manager.set_native_enabled(owner, true);
+                    }
+
                     if window_manager.remove(id).is_some() {
                         events.push((id, core::Event::Window(core::window::Event::Closed)));
+                    }
+
+                    if let Some(owner) = owner {
+                        window_manager.set_native_enabled(owner, false);
+                    }
+                }
+
+                if !window_manager.is_empty() {
+                    let stranded = window_manager.reenable_stranded();
+
+                    if !stranded.is_empty() {
+                        log::warn!(
+                            "Closing window `{id:?}` left only disabled windows; \
+                             enabled {stranded:?} again"
+                        );
                     }
                 }
 
@@ -1905,6 +1972,12 @@ fn run_action<'a, P, C>(
             window::Action::GainFocus(id) => {
                 if let Some(window) = window_manager.get_mut(id) {
                     window.raw.focus_window();
+                }
+            }
+            window::Action::SetEnabled(id, enabled) => {
+                if window_manager.set_enabled(id, enabled) && !enabled {
+                    // The pointer no longer reaches the window: end any hover.
+                    events.push((id, core::Event::Mouse(mouse::Event::CursorLeft)));
                 }
             }
             window::Action::SetLevel(id, level) => {
