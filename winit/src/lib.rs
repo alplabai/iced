@@ -394,6 +394,10 @@ where
 
                                 let visible = settings.visible;
 
+                                let centered_size =
+                                    matches!(settings.position, core::window::Position::Centered)
+                                        .then_some(settings.size);
+
                                 #[cfg(target_arch = "wasm32")]
                                 let target = settings.platform_specific.target.clone();
 
@@ -408,6 +412,21 @@ where
 
                                 let window_attributes =
                                     conversion::with_parent(window_attributes, parent.as_deref());
+
+                                // A centred window with a parent centres on the
+                                // parent; if the parent's position is unknown
+                                // it keeps the monitor centring.
+                                let window_attributes = match centered_size
+                                    .zip(parent.as_deref())
+                                    .and_then(|(size, parent)| {
+                                        window::centering::on_parent(
+                                            parent,
+                                            window::centering::logical_size(size, scale_factor),
+                                        )
+                                    }) {
+                                    Some(position) => window_attributes.with_position(position),
+                                    None => window_attributes,
+                                };
 
                                 #[cfg(target_arch = "wasm32")]
                                 let window_attributes = {
@@ -630,7 +649,7 @@ async fn run_instance<P>(
 
     let mut window_manager = window::Manager::new();
     let mut cursors = window::Cursors::new();
-    let mut is_window_opening = !is_daemon;
+    let mut is_window_opening = window::Opening::new(!is_daemon);
 
     let mut compositor = None;
     let mut events = Vec::new();
@@ -716,7 +735,7 @@ async fn run_instance<P>(
                     // `window::open` set this when the window was requested.
                     // Skipping the normal path below must clear it, or a
                     // non-daemon app never exits once its windows are gone.
-                    is_window_opening = false;
+                    is_window_opening.finished();
 
                     continue;
                 }
@@ -849,7 +868,11 @@ async fn run_instance<P>(
                 ));
 
                 let _ = on_open.send(id);
-                is_window_opening = false;
+                is_window_opening.finished();
+
+                // A window that was disabled while it was the last enabled
+                // one can be disabled natively now that another one exists.
+                window_manager.disable_natively(is_window_opening.is_opening());
             }
             Event::CursorCreated {
                 id,
@@ -975,7 +998,7 @@ async fn run_instance<P>(
                             window.tick(frame_time),
                         ));
 
-                        let cursor = window.state.cursor();
+                        let cursor = window.cursor();
 
                         let mut interface =
                             user_interfaces.get_mut(&id).expect("Get user interface");
@@ -1223,9 +1246,14 @@ async fn run_instance<P>(
                         event: window_event,
                         window_id,
                     } => {
+                        if matches!(window_event, winit::event::WindowEvent::Destroyed) {
+                            window_manager
+                                .window_destroyed(window_id, is_window_opening.is_opening());
+                        }
+
                         if !is_daemon
                             && matches!(window_event, winit::event::WindowEvent::Destroyed)
-                            && !is_window_opening
+                            && !is_window_opening.is_opening()
                             && window_manager.is_empty()
                         {
                             // Deliver any pending events (e.g. the last `Closed`
@@ -1244,6 +1272,10 @@ async fn run_instance<P>(
 
                             continue;
                         }
+
+                        let disabled = window_manager.is_disabled_alias(window_id);
+                        let mut redirect_focus = disabled
+                            && matches!(window_event, winit::event::WindowEvent::Focused(true));
 
                         let Some((id, window)) = window_manager.get_mut_alias(window_id) else {
                             continue;
@@ -1315,7 +1347,18 @@ async fn run_instance<P>(
                                 window.state.scale_factor(),
                                 window.state.modifiers(),
                             ) {
-                                events.push((id, event));
+                                if !disabled || window::passes_when_disabled(&event) {
+                                    events.push((id, event));
+                                } else if window::is_press(&event) {
+                                    redirect_focus = true;
+                                }
+                            }
+
+                            if redirect_focus
+                                && let Some(target) = window_manager.focus_redirect(id)
+                                && let Some(target) = window_manager.get(target)
+                            {
+                                target.raw.focus_window();
                             }
                         }
                     }
@@ -1328,6 +1371,22 @@ async fn run_instance<P>(
                         for (id, window) in window_manager.iter_mut() {
                             if let Some(event) = window.state.poll_mode_change(&window.raw) {
                                 events.push((id, core::Event::Window(event)));
+                            }
+                        }
+
+                        let stranded = window_manager
+                            .reenable_stranded(Instant::now(), is_window_opening.is_opening());
+
+                        if !stranded.is_empty() {
+                            log::warn!(
+                                "No enabled window was left and none is opening; \
+                                 enabled {stranded:?} again"
+                            );
+
+                            for id in stranded {
+                                if let Some(window) = window_manager.get(id) {
+                                    window.raw.request_redraw();
+                                }
                             }
                         }
 
@@ -1361,7 +1420,7 @@ async fn run_instance<P>(
                                     &window.raw,
                                     &window.waker,
                                     &window_events,
-                                    window.state.cursor(),
+                                    window.cursor(),
                                     &mut window.renderer,
                                     &mut messages,
                                 );
@@ -1581,7 +1640,7 @@ fn run_action<'a, P, C>(
     interfaces: &mut FxHashMap<window::Id, UserInterface<'a, P::Message, P::Theme, P::Renderer>>,
     window_manager: &mut window::Manager<P, C>,
     ui_caches: &mut FxHashMap<window::Id, user_interface::Cache>,
-    is_window_opening: &mut bool,
+    is_window_opening: &mut crate::window::Opening,
     system_theme: &mut theme::Mode,
     renderer_settings: &mut renderer::Settings,
 ) where
@@ -1651,7 +1710,7 @@ fn run_action<'a, P, C>(
                     })
                     .expect("Send control action");
 
-                *is_window_opening = true;
+                is_window_opening.requested();
             }
             window::Action::ListMonitors(channel) => {
                 control_sender
@@ -1675,10 +1734,20 @@ fn run_action<'a, P, C>(
                     let _ = ui_caches.remove(&id);
                     let _ = interfaces.remove(&id);
 
+                    // Windows moves the activation to another application if
+                    // a window is destroyed while its owner is disabled. The
+                    // owner is disabled again when winit reports the
+                    // destruction (`WindowEvent::Destroyed`).
+                    window_manager.enable_owner_for_destroy(id);
+
                     if window_manager.remove(id).is_some() {
                         events.push((id, core::Event::Window(core::window::Event::Closed)));
                     }
                 }
+
+                // Once the application handled `Closed`, make sure the user
+                // still has an enabled window.
+                window_manager.schedule_stranded_check(Instant::now());
 
                 if window_manager.is_empty() {
                     *compositor = None;
@@ -1905,6 +1974,40 @@ fn run_action<'a, P, C>(
             window::Action::GainFocus(id) => {
                 if let Some(window) = window_manager.get_mut(id) {
                     window.raw.focus_window();
+                }
+            }
+            window::Action::SetEnabled(id, enabled) => {
+                use crate::window::EnabledChange;
+
+                match window_manager.set_enabled(id, enabled, is_window_opening.is_opening()) {
+                    EnabledChange::NotOpen => {
+                        log::warn!(
+                            "Ignoring `set_enabled` for window `{id:?}`: \
+                             no such window is open"
+                        );
+                    }
+                    EnabledChange::Unchanged => {}
+                    change => {
+                        if change == EnabledChange::ChangedLast {
+                            log::warn!(
+                                "Window `{id:?}` is the last enabled window: it is not \
+                                 disabled natively, so it can still be closed, and it \
+                                 is enabled again shortly unless another window opens"
+                            );
+
+                            window_manager.schedule_stranded_check(Instant::now());
+                        }
+
+                        if let Some(window) = window_manager.get_mut(id) {
+                            if enabled {
+                                // Redraw with the cursor, so hover updates at once.
+                                window.raw.request_redraw();
+                            } else {
+                                // The pointer no longer reaches the window: end any hover.
+                                events.push((id, core::Event::Mouse(mouse::Event::CursorLeft)));
+                            }
+                        }
+                    }
                 }
             }
             window::Action::SetLevel(id, level) => {

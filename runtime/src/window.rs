@@ -115,6 +115,23 @@ pub enum Action {
     /// - **Web / Wayland:** Unsupported.
     GainFocus(Id),
 
+    /// Enable or disable user input for the window.
+    ///
+    /// A disabled window keeps drawing and receiving lifecycle events
+    /// (`CloseRequested`, `Focused`, `Resized`, ...) but ignores keyboard,
+    /// mouse, touch, IME and file-drop input. Enabled by default.
+    ///
+    /// ## Platform-specific
+    ///
+    /// - **Windows:** also disabled natively (`EnableWindow`), so the system
+    ///   stops routing input to it. A natively disabled window gets no
+    ///   `CloseRequested` from its caption close button or Alt+F4. So the last
+    ///   enabled window is only disabled for the runtime filter, never
+    ///   natively, and a warning is logged.
+    /// - **Elsewhere:** the runtime drops the input events, and focus moves
+    ///   to the most recently opened enabled window owned by this one.
+    SetEnabled(Id, bool),
+
     /// Change the window [`Level`].
     SetLevel(Id, Level),
 
@@ -483,6 +500,42 @@ pub fn gain_focus<T>(id: Id) -> Task<T> {
     task::effect(crate::Action::Window(Action::GainFocus(id)))
 }
 
+/// Enables or disables user input for the window.
+///
+/// This is how an application makes a dialog modal: disable the owner while
+/// the dialog is open and enable it again when the dialog closes. A disabled
+/// window still draws and still receives lifecycle events such as
+/// [`window::Event::CloseRequested`], but keyboard, mouse, touch, IME and
+/// file-drop input is dropped, and the window is drawn without a cursor.
+///
+/// On Windows the window is also disabled natively, and a natively disabled
+/// window does not get [`window::Event::CloseRequested`] from its caption
+/// close button or Alt+F4. Disable the owner after requesting the dialog's
+/// [`open`], so the runtime sees a window being created. If no other window
+/// is enabled and none is being created, the window is disabled for the
+/// runtime filter only, never natively, and a warning is logged; about 100 ms
+/// later it is enabled again unless another window has opened by then.
+///
+/// Elsewhere only the runtime filter applies, and it also eats `Escape`:
+/// keep an in-window lock if the application needs one there.
+///
+/// The runtime never leaves the user without an enabled window: shortly after
+/// a close, once the application handled [`window::Event::Closed`], it
+/// enables all open windows again if none is enabled and none is being
+/// created, and logs a warning.
+///
+/// A mouse drag, or a key held, when the window is disabled loses its release:
+/// the drag stays stuck until the first button release after the window is
+/// enabled again.
+///
+/// [`open`]: open
+///
+/// [`window::Event::CloseRequested`]: crate::core::window::Event::CloseRequested
+/// [`window::Event::Closed`]: crate::core::window::Event::Closed
+pub fn set_enabled<T>(id: Id, enabled: bool) -> Task<T> {
+    task::effect(crate::Action::Window(Action::SetEnabled(id, enabled)))
+}
+
 /// Changes the window [`Level`].
 pub fn set_level<T>(id: Id, level: Level) -> Task<T> {
     task::effect(crate::Action::Window(Action::SetLevel(id, level)))
@@ -578,4 +631,28 @@ pub fn create_cursor(
             channel,
         })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::futures::futures::{FutureExt, StreamExt};
+
+    #[test]
+    fn set_enabled_runs_the_set_enabled_action() {
+        let id = Id::unique();
+
+        for enabled in [true, false] {
+            let mut stream = task::into_stream(set_enabled::<()>(id, enabled)).expect("a stream");
+
+            let action = stream.next().now_or_never().expect("ready");
+
+            assert!(matches!(
+                action,
+                Some(crate::Action::Window(Action::SetEnabled(window, value)))
+                    if window == id && value == enabled
+            ));
+        }
+    }
 }

@@ -7,6 +7,11 @@ pub enum Position {
     #[default]
     Default,
     /// The window is completely centered on the default screen.
+    ///
+    /// If the window has a [`Settings::parent`](crate::window::Settings::parent),
+    /// it is centered on the parent's outer frame instead, kept inside the
+    /// parent's monitor. If the platform cannot tell where the parent is
+    /// (Wayland), it is centered on the screen.
     Centered,
     /// The windows is positioned with specific coordinates on a given monitor
     Specific(PositionOnMonitor),

@@ -4,6 +4,7 @@
 //! [`iced_runtime`]: https://github.com/iced-rs/iced/tree/master/runtime
 
 use crate::core::gesture;
+use crate::window::centering;
 use iced_debug::core::window::MonitorData;
 use iced_debug::core::window::MonitorList;
 
@@ -312,7 +313,11 @@ pub fn window_attributes(
         .with_window_level(window_level(settings.level))
         .with_visible(settings.visible);
 
-    if let Some(position) = position(primary_monitor.as_ref(), settings.size, settings.position) {
+    // The window is created `scale_factor` times larger than `settings.size`
+    // (above), so centre the size it actually has.
+    let size = centering::logical_size(settings.size, scale_factor);
+
+    if let Some(position) = position(primary_monitor.as_ref(), size, settings.position) {
         attributes = attributes.with_position(position);
     }
 
@@ -685,21 +690,22 @@ pub fn position(
         }
         window::Position::Centered => {
             if let Some(monitor) = monitor {
-                let start = monitor.position();
+                let (start, resolution) = (monitor.position(), monitor.size());
 
-                let resolution: winit::dpi::LogicalSize<f64> =
-                    monitor.size().to_logical(monitor.scale_factor());
-
-                let centered: winit::dpi::PhysicalPosition<i32> = winit::dpi::LogicalPosition {
-                    x: (resolution.width - f64::from(size.width)) / 2.0,
-                    y: (resolution.height - f64::from(size.height)) / 2.0,
-                }
-                .to_physical(monitor.scale_factor());
+                let centered = centering::centered_on_monitor(
+                    crate::core::Rectangle {
+                        x: f64::from(start.x),
+                        y: f64::from(start.y),
+                        width: f64::from(resolution.width),
+                        height: f64::from(resolution.height),
+                    },
+                    centering::physical_size(size, monitor.scale_factor()),
+                );
 
                 Some(winit::dpi::Position::Physical(
                     winit::dpi::PhysicalPosition {
-                        x: start.x + centered.x,
-                        y: start.y + centered.y,
+                        x: centered.x.round() as i32,
+                        y: centered.y.round() as i32,
                     },
                 ))
             } else {
