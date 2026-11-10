@@ -44,8 +44,9 @@ pub enum Event {
     ///
     /// ## Platform-specific
     ///
-    /// - **macOS:** a fullscreen change started by the OS (green button,
-    ///   Ctrl+Cmd+F, menu) flips `fullscreen` when the animation ends. One
+    /// - **macOS:** a fullscreen exit started by the OS (green button,
+    ///   Ctrl+Cmd+F, menu) flips `fullscreen` when the exit animation ends.
+    ///   An OS-started enter flips when the animation starts; a change
     ///   requested by the application flips when it is requested.
     /// - **X11:** `fullscreen` reports the requested state, so it flips when
     ///   the transition starts, not when it ends.
