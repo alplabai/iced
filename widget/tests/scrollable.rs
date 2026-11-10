@@ -1365,8 +1365,44 @@ fn dragging_a_scroller_on_a_short_track_stays_finite() {
 
     let last = *offsets.last().unwrap();
     assert!(
-        last.is_finite() && last > 0.0 && last < 2982.0 / 2.0,
-        "a 1 px drag must move the content by a small finite amount: {offsets:?}"
+        (last - 2982.0 / 9.0).abs() < 1.0,
+        "a 1 px drag must move the content by 1/9 of the range (free track is 9 px): {offsets:?}"
+    );
+}
+
+/// Grabbing the scroller on a short track must not move the content.
+#[test]
+fn grabbing_a_scroller_on_a_short_track_does_not_jump() {
+    let mut simulator = simulate(element(3000, 18));
+
+    let mut operation = operation::scrollable::scroll_to(
+        ELEMENT_ID,
+        AbsoluteOffset {
+            x: None,
+            y: Some(1491.0),
+        },
+        operation::Animation::Instant,
+    );
+    simulator.operate(&mut operation);
+
+    let mut instant = Instant::now();
+    step_frames(&mut simulator, &mut instant, 2);
+
+    // At half scroll the 9 px scroller sits at y in [4.5, 13.5]
+    simulator.point_at(Point::new(1019.0, 9.0));
+    let _ = simulator.simulate([Event::Mouse(mouse::Event::ButtonPressed(
+        mouse::Button::Left,
+    ))]);
+    step_frames(&mut simulator, &mut instant, 2);
+
+    let offsets: Vec<f32> = simulator
+        .into_messages()
+        .map(|scroll| scroll.viewport.absolute_offset().y)
+        .collect();
+
+    assert!(
+        offsets.iter().all(|&offset| (offset - 1491.0).abs() < 1.0),
+        "grabbing the scroller must not move the content: {offsets:?}"
     );
 }
 

@@ -3821,8 +3821,15 @@ mod tests {
             assert!(y.bounds.height < MIN_SCROLLER_LENGTH);
             assert!((s.height - y.bounds.height / 2.0).abs() < 1e-3);
             assert!(s.y.is_finite() && (y.bounds.height - s.height) > 0.0);
+            let edge = if translation == end {
+                s.y + s.height - (y.bounds.y + y.bounds.height)
+            } else {
+                s.y - y.bounds.y
+            };
             assert!(
-                s.y >= y.bounds.y - 1e-3 && s.y + s.height <= y.bounds.y + y.bounds.height + 1e-3
+                edge.abs() < 1e-3,
+                "vertical scroller {s:?} in {:?}",
+                y.bounds
             );
 
             let horizontal = Scrollbars::new(
@@ -3836,8 +3843,15 @@ mod tests {
             assert!(x.bounds.width < MIN_SCROLLER_LENGTH);
             assert!((s.width - x.bounds.width / 2.0).abs() < 1e-3);
             assert!(s.x.is_finite() && (x.bounds.width - s.width) > 0.0);
+            let edge = if translation == end {
+                s.x + s.width - (x.bounds.x + x.bounds.width)
+            } else {
+                s.x - x.bounds.x
+            };
             assert!(
-                s.x >= x.bounds.x - 1e-3 && s.x + s.width <= x.bounds.x + x.bounds.width + 1e-3
+                edge.abs() < 1e-3,
+                "horizontal scroller {s:?} in {:?}",
+                x.bounds
             );
         }
     }
