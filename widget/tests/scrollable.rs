@@ -1620,7 +1620,7 @@ fn rail_hold_autoscrolls_to_pointer() {
 
     // Hold the button down: past the 250 ms press delay the autoscroll
     // slides the scroller toward the pointer and stops with its bottom edge
-    // at y = 60 (offset 700)
+    // at y = 60 (offset 622.22: the scroller is 20 px long)
     step_frames(&mut simulator, &mut instant, 120);
 
     let _ = simulator.simulate([Event::Mouse(mouse::Event::ButtonReleased(
@@ -1635,11 +1635,11 @@ fn rail_hold_autoscrolls_to_pointer() {
 
     let last = *offsets.last().unwrap();
     assert!(
-        (last - 700.0).abs() < 1.0,
-        "the autoscroll must stop with the scroller's edge at the pointer (offset 700): {offsets:?}"
+        (last - 622.22).abs() < 1.0,
+        "the autoscroll must stop with the scroller's edge at the pointer (offset 622.22): {offsets:?}"
     );
     assert!(
-        offsets.iter().all(|&offset| offset <= 700.0 + 1.0),
+        offsets.iter().all(|&offset| offset <= 622.22 + 1.0),
         "the autoscroll must not overshoot the pointer: {offsets:?}"
     );
 }
@@ -1661,11 +1661,11 @@ fn rail_hold_follows_pointer_movement() {
     ))]);
 
     // Hold until the autoscroll settles at the first stop (scroller at y = 60,
-    // offset 700)
+    // offset 622.22)
     step_frames(&mut simulator, &mut instant, 60);
 
     // Drag the pointer down while keeping the button pressed: the target
-    // moves to y = 150 (offset 2050) and the autoscroll resumes
+    // moves to y = 150 (offset 2022.22) and the autoscroll resumes
     simulator.point_at(Point::new(1019.0, 150.0));
     let _ = simulator.simulate([Event::Mouse(mouse::Event::CursorMoved {
         position: Point::new(1019.0, 150.0),
@@ -1684,11 +1684,11 @@ fn rail_hold_follows_pointer_movement() {
 
     let last = *offsets.last().unwrap();
     assert!(
-        (last - 2050.0).abs() < 1.0,
-        "the autoscroll must follow the pointer to its new stop (offset 2050): {offsets:?}"
+        (last - 2022.22).abs() < 1.0,
+        "the autoscroll must follow the pointer to its new stop (offset 2022.22): {offsets:?}"
     );
     assert!(
-        offsets.iter().all(|&offset| offset <= 2050.0 + 1.0),
+        offsets.iter().all(|&offset| offset <= 2022.22 + 1.0),
         "the autoscroll must not overshoot the pointer: {offsets:?}"
     );
 }
@@ -1703,7 +1703,7 @@ fn rail_hold_autoscrolls_to_pointer_with_end_anchor() {
     // Render a frame so that the scroller is at its position for the
     // current offset before the press: with `Anchor::End`, at the top of the
     // content the scroller sits at the bottom of the track
-    // (y ∈ [186.67, 200)), so y = 60 is on the rail above it
+    // (y ∈ [180, 200)), so y = 60 is on the rail above it
     let mut instant = Instant::now();
     step_frames(&mut simulator, &mut instant, 1);
 
@@ -1713,7 +1713,7 @@ fn rail_hold_autoscrolls_to_pointer_with_end_anchor() {
     ))]);
 
     // Holding slides the scroller up toward the pointer; it stops with its
-    // top edge at y = 60, i.e. at offset 1900
+    // top edge at y = 60, i.e. at offset 1866.67
     step_frames(&mut simulator, &mut instant, 120);
 
     let _ = simulator.simulate([Event::Mouse(mouse::Event::ButtonReleased(
@@ -1728,11 +1728,11 @@ fn rail_hold_autoscrolls_to_pointer_with_end_anchor() {
 
     let last = *offsets.last().unwrap();
     assert!(
-        (last - 1900.0).abs() < 1.0,
-        "the autoscroll must slide the mirrored scroller toward the pointer (offset 1900): {offsets:?}"
+        (last - 1866.67).abs() < 1.0,
+        "the autoscroll must slide the mirrored scroller toward the pointer (offset 1866.67): {offsets:?}"
     );
     assert!(
-        offsets.iter().all(|&offset| offset <= 1900.0 + 1.0),
+        offsets.iter().all(|&offset| offset <= 1866.67 + 1.0),
         "the autoscroll must not overshoot the pointer: {offsets:?}"
     );
 }
@@ -1803,7 +1803,7 @@ fn shift_rail_click_jumps_to_pointer() {
     ))]);
 
     // The jump is immediate: no further frames are needed, the scroller is
-    // centered on the pointer (offset 800), with no in-flight animation
+    // centered on the pointer (offset 777.78), with no in-flight animation
     let (offsets, animating): (Vec<f32>, Vec<bool>) = simulator
         .into_messages()
         .map(|scroll| (scroll.viewport.absolute_offset().y, scroll.target.is_some()))
@@ -1811,8 +1811,8 @@ fn shift_rail_click_jumps_to_pointer() {
 
     let last = *offsets.last().unwrap();
     assert!(
-        (last - 800.0).abs() < 1.0,
-        "a `Shift` rail click must center the scroller on the pointer (offset 800): {offsets:?}"
+        (last - 777.78).abs() < 1.0,
+        "a `Shift` rail click must center the scroller on the pointer (offset 777.78): {offsets:?}"
     );
     assert!(
         !animating.last().unwrap(),
@@ -1839,7 +1839,7 @@ fn click_to_scroll_rail_click_jumps_to_pointer() {
     ))]);
 
     // The jump is immediate: no further frames are needed, the scroller is
-    // centered on the pointer (offset 800), with no in-flight animation
+    // centered on the pointer (offset 777.78), with no in-flight animation
     let (offsets, animating): (Vec<f32>, Vec<bool>) = simulator
         .into_messages()
         .map(|scroll| (scroll.viewport.absolute_offset().y, scroll.target.is_some()))
@@ -1847,8 +1847,8 @@ fn click_to_scroll_rail_click_jumps_to_pointer() {
 
     let last = *offsets.last().unwrap();
     assert!(
-        (last - 800.0).abs() < 1.0,
-        "a rail click must center the scroller on the pointer (offset 800): {offsets:?}"
+        (last - 777.78).abs() < 1.0,
+        "a rail click must center the scroller on the pointer (offset 777.78): {offsets:?}"
     );
     assert!(
         !animating.last().unwrap(),

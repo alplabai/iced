@@ -1767,6 +1767,10 @@ impl<Message> From<Option<Message>> for Action<Message> {
 /// `cc::kPixelsPerLineStep`) is the equivalent value.
 const WHEEL_PX_PER_LINE: f32 = 120.0;
 
+/// The shortest a scroller gets along its track, so it stays visible and
+/// grabbable with huge content (upstream uses 2 px).
+const MIN_SCROLLER_LENGTH: f32 = 20.0;
+
 // The smooth scrolling behavior below (the easing curve, the animation
 // durations, and the velocity-preserving retargeting) is derived from
 // the Chromium project's wheel scroll animation
@@ -3249,7 +3253,9 @@ impl Scrollbars {
                 None
             } else {
                 // min height for easier grabbing with super tall content
-                let scroller_height = (scrollbar_bounds.height * ratio).max(2.0);
+                let scroller_height = (scrollbar_bounds.height * ratio)
+                    .max(MIN_SCROLLER_LENGTH)
+                    .min(scrollbar_bounds.height);
                 let max_offset = (scrollbar_bounds.height - scroller_height).max(0.0);
                 // Relative scroll over the free track, like `scroll_percentage` drags it
                 let scroller_offset = translation.y / (content.height - bounds.height) * max_offset;
@@ -3321,7 +3327,9 @@ impl Scrollbars {
                 None
             } else {
                 // min width for easier grabbing with extra wide content
-                let scroller_length = (scrollbar_bounds.width * ratio).max(2.0);
+                let scroller_length = (scrollbar_bounds.width * ratio)
+                    .max(MIN_SCROLLER_LENGTH)
+                    .min(scrollbar_bounds.width);
                 let max_offset = (scrollbar_bounds.width - scroller_length).max(0.0);
                 // Relative scroll over the free track, like `scroll_percentage` drags it
                 let scroller_offset = translation.x / (content.width - bounds.width) * max_offset;
@@ -3789,6 +3797,69 @@ mod tests {
         let x_scroller = x.scroller.expect("horizontal scroller").bounds;
         let free = x.bounds.width - x_scroller.width;
         assert!((x_scroller.x - x.bounds.x - free * 0.5).abs() < 1e-3);
+    }
+
+    /// With huge content the scrollers are `MIN_SCROLLER_LENGTH` long and
+    /// still span the whole free track.
+    #[test]
+    fn scrollers_are_at_least_min_length_long() {
+        let bounds = Rectangle::new(Point::ORIGIN, Size::new(200.0, 200.0));
+        let content = Size::new(100_000.0, 100_000.0);
+        let direction = Direction::Both {
+            vertical: Scrollbar::default(),
+            horizontal: Scrollbar::default(),
+        };
+        let max = Vector::new(content.width - bounds.width, content.height - bounds.height);
+
+        for factor in [0.5, 1.0] {
+            let scrollbars = Scrollbars::new(max * factor, direction, bounds, content);
+
+            let y = scrollbars.y.expect("vertical scrollbar");
+            let s = y.scroller.expect("vertical scroller").bounds;
+            assert!((s.height - MIN_SCROLLER_LENGTH).abs() < 1e-3);
+            let free = y.bounds.height - s.height;
+            assert!((s.y - y.bounds.y - free * factor).abs() < 1e-3);
+
+            let x = scrollbars.x.expect("horizontal scrollbar");
+            let s = x.scroller.expect("horizontal scroller").bounds;
+            assert!((s.width - MIN_SCROLLER_LENGTH).abs() < 1e-3);
+            let free = x.bounds.width - s.width;
+            assert!((s.x - x.bounds.x - free * factor).abs() < 1e-3);
+        }
+    }
+
+    /// A track shorter than `MIN_SCROLLER_LENGTH` never gets a longer scroller.
+    #[test]
+    fn scrollers_never_exceed_short_tracks() {
+        let bounds = Rectangle::new(Point::ORIGIN, Size::new(15.0, 15.0));
+        let content = Size::new(100_000.0, 100_000.0);
+        let end = Vector::new(content.width - bounds.width, content.height - bounds.height);
+
+        for translation in [Vector::new(0.0, 0.0), end] {
+            let vertical = Scrollbars::new(
+                translation,
+                Direction::Vertical(Scrollbar::default()),
+                bounds,
+                content,
+            );
+            let y = vertical.y.expect("vertical scrollbar");
+            let s = y.scroller.expect("vertical scroller").bounds;
+            assert!(y.bounds.height < MIN_SCROLLER_LENGTH);
+            assert!((s.height - y.bounds.height).abs() < 1e-3);
+            assert!((s.y - y.bounds.y).abs() < 1e-3);
+
+            let horizontal = Scrollbars::new(
+                translation,
+                Direction::Horizontal(Scrollbar::default()),
+                bounds,
+                content,
+            );
+            let x = horizontal.x.expect("horizontal scrollbar");
+            let s = x.scroller.expect("horizontal scroller").bounds;
+            assert!(x.bounds.width < MIN_SCROLLER_LENGTH);
+            assert!((s.width - x.bounds.width).abs() < 1e-3);
+            assert!((s.x - x.bounds.x).abs() < 1e-3);
+        }
     }
 
     /// Dragging maps the cursor over the free track, so the drawn scroller
