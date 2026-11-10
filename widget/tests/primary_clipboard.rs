@@ -248,6 +248,31 @@ fn text_input_middle_click_on_another_input_unfocuses_the_focused_one() {
 }
 
 #[test]
+fn text_input_middle_click_on_another_input_unfocuses_a_focused_secure_one() {
+    let mut simulator = Simulator::new(
+        column![field(1, "aaaa", true, false), field(2, "bbbb", true, true)].spacing(40),
+    );
+
+    click(&mut simulator, B_AT);
+    let _ = simulator.drain().count();
+
+    press(&mut simulator, A_AT, mouse::Button::Middle);
+    paste(&mut simulator, "X");
+    let _ = simulator.typewrite("z");
+
+    // Where supported the plain input took the focus; the secure one must
+    // receive neither the paste nor the typing.
+    let messages = inputs(&mut simulator);
+
+    assert!(
+        messages
+            .iter()
+            .all(|message| matches!(message, Message::Input(n, _) if *n == on_supported(1, 2))),
+        "{messages:?}"
+    );
+}
+
+#[test]
 fn text_input_middle_click_outside_does_nothing() {
     let mut simulator = input(true, false);
 

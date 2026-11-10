@@ -230,8 +230,10 @@ impl<R: text::Renderer> Input<R> {
         }
 
         // Placing the caret from a pixel position needs the secure layout, so
-        // a secure input ignores middle-click paste altogether.
+        // a secure input ignores middle-click paste over it. A press outside
+        // still reaches the state, which unfocuses the input.
         if self.secure.is_some()
+            && cursor.is_over(bounds)
             && matches!(
                 event,
                 Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Middle))
