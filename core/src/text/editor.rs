@@ -16,6 +16,7 @@ use crate::{
 };
 
 use std::borrow::Cow;
+use std::mem;
 use std::sync::Arc;
 
 /// A component that can be used by widgets to edit multi-line text.
@@ -317,6 +318,7 @@ pub struct State {
     preedit: Option<input_method::Preedit>,
     last_click: Option<mouse::Click>,
     is_dragging: bool,
+    is_selecting: bool,
     partial_scroll: f32,
 }
 
@@ -399,6 +401,7 @@ impl State {
                         self.focus = Some(Focus::now());
                         self.last_click = Some(click);
                         self.is_dragging = true;
+                        self.is_selecting = click.kind() != mouse::click::Kind::Single;
 
                         Some(Update::Action(Action::Click(
                             click.position(),
@@ -415,11 +418,34 @@ impl State {
                 mouse::Event::ButtonReleased(mouse::Button::Left) => {
                     self.is_dragging = false;
 
-                    Some(Update::Release)
+                    // A pointer selection also becomes the primary selection.
+                    if mem::take(&mut self.is_selecting)
+                        && let Some(selection) = editor.copy()
+                    {
+                        Some(Update::CopyPrimary(selection))
+                    } else {
+                        Some(Update::Release)
+                    }
+                }
+                mouse::Event::ButtonPressed(mouse::Button::Middle) => {
+                    // Like a left click, but pastes the primary selection once
+                    // the caret is placed.
+                    let cursor_position =
+                        cursor.position_in(bounds)? - Vector::new(padding.left, padding.top);
+
+                    self.focus = Some(Focus::now());
+                    self.is_selecting = false;
+
+                    Some(Update::Sequence(vec![
+                        Update::Action(Action::Click(cursor_position, mouse::click::Kind::Single)),
+                        Update::PastePrimary,
+                    ]))
                 }
                 mouse::Event::CursorMoved { .. } if self.is_dragging => {
                     let position = cursor.position_from(bounds.position())?
                         - Vector::new(padding.left, padding.top);
+
+                    self.is_selecting = true;
 
                     Some(Update::Action(Action::Drag(position)))
                 }
@@ -957,6 +983,10 @@ pub enum Update<Message> {
     Copy(String),
     /// The [`Editor`] must paste the clipboard contents.
     Paste,
+    /// The [`Editor`] must copy some text to the primary clipboard.
+    CopyPrimary(String),
+    /// The [`Editor`] must paste the primary clipboard contents.
+    PastePrimary,
     /// The [`Editor`] must be redrawn at the given [`Instant`].
     RedrawAt(Instant),
     /// The [`Editor`] produced a custom message that must be published.

@@ -430,6 +430,14 @@ where
                     shell.read_clipboard(clipboard::Kind::Text);
                     shell.capture_event();
                 }
+                // The release that ends a selection is not captured.
+                editor::Update::CopyPrimary(content) => {
+                    shell.write_clipboard_primary(clipboard::Content::Text(content));
+                }
+                editor::Update::PastePrimary => {
+                    shell.read_clipboard_primary(clipboard::Kind::Text);
+                    shell.capture_event();
+                }
                 editor::Update::RedrawAt(at) => {
                     shell.request_redraw_at(at);
                 }

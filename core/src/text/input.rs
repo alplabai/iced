@@ -195,6 +195,14 @@ impl<R: text::Renderer> Input<R> {
                     shell.read_clipboard(clipboard::Kind::Text);
                     shell.capture_event();
                 }
+                // The release that ends a selection is not captured.
+                editor::Update::CopyPrimary(text) => {
+                    shell.write_clipboard_primary(text);
+                }
+                editor::Update::PastePrimary => {
+                    shell.read_clipboard_primary(clipboard::Kind::Text);
+                    shell.capture_event();
+                }
                 editor::Update::RedrawAt(at) => {
                     shell.request_redraw_at(at);
                 }
@@ -290,6 +298,18 @@ impl<R: text::Renderer> Input<R> {
 
                     shell.request_redraw();
 
+                    None
+                }
+                // The secure editor only holds placeholder characters, and the
+                // real value must never leave through the primary selection.
+                editor::Update::CopyPrimary(_) => None,
+                // Placing the caret from a pixel position needs the secure
+                // layout, so a middle-click paste is not supported here.
+                editor::Update::Sequence(updates)
+                    if updates
+                        .iter()
+                        .any(|update| matches!(update, editor::Update::PastePrimary)) =>
+                {
                     None
                 }
                 _ => apply(&mut self.editor, shell, update, self.multiline.is_some()),

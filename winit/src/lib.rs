@@ -1599,13 +1599,21 @@ fn run_action<'a, P, C>(
             let _ = messages.push(message);
         }
         Action::Clipboard(action) => match action {
-            clipboard::Action::Read { kind, channel } => {
-                clipboard.read(kind, move |result| {
+            clipboard::Action::Read {
+                clipboard_kind,
+                kind,
+                channel,
+            } => {
+                clipboard.read(clipboard_kind, kind, move |result| {
                     let _ = channel.send(result);
                 });
             }
-            clipboard::Action::Write { content, channel } => {
-                clipboard.write(content, move |result| {
+            clipboard::Action::Write {
+                clipboard_kind,
+                content,
+                channel,
+            } => {
+                clipboard.write(clipboard_kind, content, move |result| {
                     let _ = channel.send(result);
                 });
             }
@@ -2323,10 +2331,19 @@ fn run_clipboard<Message: Send>(
     requests: core::Clipboard,
     window: window::Id,
 ) {
-    for kind in requests.reads {
+    // Widgets request the primary clipboard unconditionally; outside of Linux
+    // it does not exist, so those requests are dropped without any event.
+    let is_supported =
+        |kind| kind == core::clipboard::ClipboardKind::Standard || cfg!(target_os = "linux");
+
+    for (clipboard_kind, kind) in requests.reads {
+        if !is_supported(clipboard_kind) {
+            continue;
+        }
+
         let proxy = proxy.clone();
 
-        clipboard.read(kind, move |result| {
+        clipboard.read(clipboard_kind, kind, move |result| {
             proxy.send_action(Action::Event {
                 window,
                 event: core::Event::Clipboard(core::clipboard::Event::Read(result.map(Arc::new))),
@@ -2334,10 +2351,12 @@ fn run_clipboard<Message: Send>(
         });
     }
 
-    if let Some(content) = requests.write {
+    if let Some((clipboard_kind, content)) = requests.write
+        && is_supported(clipboard_kind)
+    {
         let proxy = proxy.clone();
 
-        clipboard.write(content, move |result| {
+        clipboard.write(clipboard_kind, content, move |result| {
             proxy.send_action(Action::Event {
                 window,
                 event: core::Event::Clipboard(core::clipboard::Event::Written(result)),
