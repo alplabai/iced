@@ -1,5 +1,5 @@
 //! Access the clipboard.
-use crate::core::clipboard::{Content, Error, Kind};
+use crate::core::clipboard::{ClipboardKind, Content, Error, Kind};
 use crate::futures::futures::channel::oneshot;
 use crate::task::{self, Task};
 
@@ -13,6 +13,8 @@ use std::sync::Arc;
 pub enum Action {
     /// Read the clipboard and produce `T` with the result.
     Read {
+        /// The [`ClipboardKind`] to read from.
+        clipboard_kind: ClipboardKind,
         /// The [`Kind`] of [`Content`] to read.
         kind: Kind,
         /// The channel to send the read contents.
@@ -21,6 +23,8 @@ pub enum Action {
 
     /// Write the given contents to the clipboard.
     Write {
+        /// The [`ClipboardKind`] to write to.
+        clipboard_kind: ClipboardKind,
         /// The [`Content`] to be written.
         content: Content,
 
@@ -29,21 +33,41 @@ pub enum Action {
     },
 }
 
+fn read_from(clipboard_kind: ClipboardKind, kind: Kind) -> Task<Result<Content, Error>> {
+    task::oneshot(move |channel| {
+        crate::Action::Clipboard(Action::Read {
+            clipboard_kind,
+            kind,
+            channel,
+        })
+    })
+}
+
+fn write_to(clipboard_kind: ClipboardKind, content: Content) -> Task<Result<(), Error>> {
+    task::oneshot(move |channel| {
+        crate::Action::Clipboard(Action::Write {
+            clipboard_kind,
+            content,
+            channel,
+        })
+    })
+}
+
 /// Read the given [`Kind`] of [`Content`] from the clipboard.
 pub fn read(kind: Kind) -> Task<Result<Arc<Content>, Error>> {
-    task::oneshot(|channel| crate::Action::Clipboard(Action::Read { kind, channel }))
-        .map(|result| result.map(Arc::new))
+    read_from(ClipboardKind::Standard, kind).map(|result| result.map(Arc::new))
+}
+
+/// Read the given [`Kind`] of [`Content`] from the primary clipboard.
+///
+/// It fails with [`Error::ClipboardUnavailable`] outside of X11 and Wayland.
+pub fn read_primary(kind: Kind) -> Task<Result<Arc<Content>, Error>> {
+    read_from(ClipboardKind::Primary, kind).map(|result| result.map(Arc::new))
 }
 
 /// Read the current text contents of the clipboard.
 pub fn read_text() -> Task<Result<Arc<String>, Error>> {
-    task::oneshot(|channel| {
-        crate::Action::Clipboard(Action::Read {
-            kind: Kind::Text,
-            channel,
-        })
-    })
-    .map(|result| {
+    read_from(ClipboardKind::Standard, Kind::Text).map(|result| {
         let Ok(Content::Text(text)) = result else {
             return Err(Error::ContentNotAvailable);
         };
@@ -54,13 +78,7 @@ pub fn read_text() -> Task<Result<Arc<String>, Error>> {
 
 /// Read the current HTML contents of the clipboard.
 pub fn read_html() -> Task<Result<Arc<String>, Error>> {
-    task::oneshot(|channel| {
-        crate::Action::Clipboard(Action::Read {
-            kind: Kind::Html,
-            channel,
-        })
-    })
-    .map(|result| {
+    read_from(ClipboardKind::Standard, Kind::Html).map(|result| {
         let Ok(Content::Html(html)) = result else {
             return Err(Error::ContentNotAvailable);
         };
@@ -71,13 +89,7 @@ pub fn read_html() -> Task<Result<Arc<String>, Error>> {
 
 /// Read the current file paths of the clipboard.
 pub fn read_files() -> Task<Result<Arc<[PathBuf]>, Error>> {
-    task::oneshot(|channel| {
-        crate::Action::Clipboard(Action::Read {
-            kind: Kind::Files,
-            channel,
-        })
-    })
-    .map(|result| {
+    read_from(ClipboardKind::Standard, Kind::Files).map(|result| {
         let Ok(Content::Files(files)) = result else {
             return Err(Error::ContentNotAvailable);
         };
@@ -89,13 +101,7 @@ pub fn read_files() -> Task<Result<Arc<[PathBuf]>, Error>> {
 /// Read the current [`Image`](crate::core::clipboard::Image) of the clipboard.
 #[cfg(feature = "image")]
 pub fn read_image() -> Task<Result<crate::core::clipboard::Image, Error>> {
-    task::oneshot(|channel| {
-        crate::Action::Clipboard(Action::Read {
-            kind: Kind::Image,
-            channel,
-        })
-    })
-    .map(|result| {
+    read_from(ClipboardKind::Standard, Kind::Image).map(|result| {
         let Ok(Content::Image(image)) = result else {
             return Err(Error::ContentNotAvailable);
         };
@@ -106,7 +112,12 @@ pub fn read_image() -> Task<Result<crate::core::clipboard::Image, Error>> {
 
 /// Write the given [`Content`] to the clipboard.
 pub fn write(content: impl Into<Content>) -> Task<Result<(), Error>> {
-    let content = content.into();
+    write_to(ClipboardKind::Standard, content.into())
+}
 
-    task::oneshot(|channel| crate::Action::Clipboard(Action::Write { content, channel }))
+/// Write the given [`Content`] to the primary clipboard.
+///
+/// It fails with [`Error::ClipboardUnavailable`] outside of X11 and Wayland.
+pub fn write_primary(content: impl Into<Content>) -> Task<Result<(), Error>> {
+    write_to(ClipboardKind::Primary, content.into())
 }

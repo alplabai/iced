@@ -31,6 +31,7 @@ pub struct Simulator<'a, Message, Theme = core::Theme, Renderer = renderer::Rend
     scale_factor: f32,
     cursor: mouse::Cursor,
     messages: shell::Bus<Message>,
+    clipboard: core::Clipboard,
 }
 
 /// The scale factor used by a [`Simulator`] unless changed with
@@ -97,7 +98,15 @@ where
             scale_factor: DEFAULT_SCALE_FACTOR,
             cursor: mouse::Cursor::Unavailable,
             messages: shell::Bus::new(),
+            clipboard: core::Clipboard::new(),
         }
+    }
+
+    /// Returns the clipboard requests produced so far, clearing them.
+    ///
+    /// Nothing is read or written for real; the requests are only recorded.
+    pub fn take_clipboard(&mut self) -> core::Clipboard {
+        std::mem::take(&mut self.clipboard)
     }
 
     /// Sets the scale factor used when taking a [`Snapshot`] (2.0 by default).
@@ -174,6 +183,7 @@ where
             scale_factor: self.scale_factor,
             cursor: self.cursor,
             messages: self.messages,
+            clipboard: self.clipboard,
         }
     }
 
@@ -248,7 +258,7 @@ where
     pub fn simulate(&mut self, events: impl IntoIterator<Item = Event>) -> Vec<event::Status> {
         let events: Vec<Event> = events.into_iter().collect();
 
-        let (_state, statuses) = self.raw.update(
+        let (state, statuses) = self.raw.update(
             &window::Headless,
             &shell::Waker::noop(),
             &events,
@@ -256,6 +266,10 @@ where
             &mut self.renderer,
             &mut self.messages,
         );
+
+        if let user_interface::State::Updated { mut clipboard, .. } = state {
+            self.clipboard.merge(&mut clipboard);
+        }
 
         statuses
     }

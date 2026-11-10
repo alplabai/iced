@@ -421,7 +421,8 @@ where
                     if let operation::Outcome::Some(text) = copy.finish()
                         && !text.is_empty()
                     {
-                        clipboard.write = Some(text.into());
+                        clipboard.write =
+                            Some((crate::core::clipboard::ClipboardKind::Standard, text.into()));
                     }
                 }
                 _ => {}

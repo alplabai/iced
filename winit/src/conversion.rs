@@ -4,6 +4,7 @@
 //! [`iced_runtime`]: https://github.com/iced-rs/iced/tree/master/runtime
 
 use crate::core::gesture;
+use crate::window::centering;
 use iced_debug::core::window::MonitorData;
 use iced_debug::core::window::MonitorList;
 
@@ -312,7 +313,11 @@ pub fn window_attributes(
         .with_window_level(window_level(settings.level))
         .with_visible(settings.visible);
 
-    if let Some(position) = position(primary_monitor.as_ref(), settings.size, settings.position) {
+    // The window is created `scale_factor` times larger than `settings.size`
+    // (above), so centre the size it actually has.
+    let size = centering::logical_size(settings.size, scale_factor);
+
+    if let Some(position) = position(primary_monitor.as_ref(), size, settings.position) {
         attributes = attributes.with_position(position);
     }
 
@@ -348,7 +353,7 @@ pub fn window_attributes(
     {
         use window::settings::platform;
         use winit::platform::windows::{
-            BackdropType, CornerPreference, WindowAttributesExtWindows,
+            BackdropType, Color, CornerPreference, WindowAttributesExtWindows,
         };
 
         attributes = attributes.with_drag_and_drop(settings.platform_specific.drag_and_drop);
@@ -365,6 +370,21 @@ pub fn window_attributes(
                 platform::CornerPreference::Round => CornerPreference::Round,
                 platform::CornerPreference::RoundSmall => CornerPreference::RoundSmall,
             });
+
+        let colors = &settings.platform_specific;
+
+        if let Some([r, g, b]) = title_color_rgb(colors.title_background_color) {
+            attributes = attributes.with_title_background_color(Some(Color::from_rgb(r, g, b)));
+        }
+
+        // winit takes a plain colour here, so only call it for `Some`.
+        if let Some([r, g, b]) = title_color_rgb(colors.title_text_color) {
+            attributes = attributes.with_title_text_color(Color::from_rgb(r, g, b));
+        }
+
+        if let Some([r, g, b]) = title_color_rgb(colors.border_color) {
+            attributes = attributes.with_border_color(Some(Color::from_rgb(r, g, b)));
+        }
 
         if settings.blur {
             attributes = attributes.with_system_backdrop(BackdropType::TransientWindow);
@@ -685,21 +705,22 @@ pub fn position(
         }
         window::Position::Centered => {
             if let Some(monitor) = monitor {
-                let start = monitor.position();
+                let (start, resolution) = (monitor.position(), monitor.size());
 
-                let resolution: winit::dpi::LogicalSize<f64> =
-                    monitor.size().to_logical(monitor.scale_factor());
-
-                let centered: winit::dpi::PhysicalPosition<i32> = winit::dpi::LogicalPosition {
-                    x: (resolution.width - f64::from(size.width)) / 2.0,
-                    y: (resolution.height - f64::from(size.height)) / 2.0,
-                }
-                .to_physical(monitor.scale_factor());
+                let centered = centering::centered_on_monitor(
+                    crate::core::Rectangle {
+                        x: f64::from(start.x),
+                        y: f64::from(start.y),
+                        width: f64::from(resolution.width),
+                        height: f64::from(resolution.height),
+                    },
+                    centering::physical_size(size, monitor.scale_factor()),
+                );
 
                 Some(winit::dpi::Position::Physical(
                     winit::dpi::PhysicalPosition {
-                        x: start.x + centered.x,
-                        y: start.y + centered.y,
+                        x: centered.x.round() as i32,
+                        y: centered.y.round() as i32,
                     },
                 ))
             } else {
@@ -748,6 +769,16 @@ pub fn theme_mode(theme: winit::window::Theme) -> theme::Mode {
         winit::window::Theme::Light => theme::Mode::Light,
         winit::window::Theme::Dark => theme::Mode::Dark,
     }
+}
+
+/// Converts an optional title bar colour into sRGB bytes; alpha is ignored.
+///
+/// `None` stays `None`: the system default.
+pub fn title_color_rgb(color: Option<crate::core::Color>) -> Option<[u8; 3]> {
+    color.map(|color| {
+        let [r, g, b, _] = color.into_rgba8();
+        [r, g, b]
+    })
 }
 
 /// Converts a [`theme::Mode`] into a window theme.
@@ -1523,9 +1554,29 @@ fn is_private_use(c: char) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_monitor_list, device_event, is_primary_monitor};
-    use crate::core::Size;
+    use super::{
+        build_monitor_list, device_event, is_primary_monitor, title_color_rgb, window_theme,
+    };
     use crate::core::window::MonitorData;
+    use crate::core::{Color, Size, theme};
+
+    #[test]
+    fn title_colors_convert_to_rgb_and_ignore_alpha() {
+        assert_eq!(title_color_rgb(None), None);
+        assert_eq!(
+            title_color_rgb(Some(Color::from_rgba(1.0, 0.0, 0.5, 0.2))),
+            Some([255, 0, 128])
+        );
+    }
+
+    #[test]
+    fn theme_mode_maps_to_window_theme_and_system_stays_none() {
+        use winit::window::Theme;
+
+        assert_eq!(window_theme(theme::Mode::None), None);
+        assert_eq!(window_theme(theme::Mode::Light), Some(Theme::Light));
+        assert_eq!(window_theme(theme::Mode::Dark), Some(Theme::Dark));
+    }
 
     #[test]
     fn raw_mouse_motion_converts_to_raw_motion() {
