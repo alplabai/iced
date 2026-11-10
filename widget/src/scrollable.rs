@@ -3250,10 +3250,9 @@ impl Scrollbars {
             } else {
                 // min height for easier grabbing with super tall content
                 let scroller_height = (scrollbar_bounds.height * ratio).max(2.0);
-                let scroller_offset =
-                    translation.y * ratio * scrollbar_bounds.height / bounds.height;
-
                 let max_offset = (scrollbar_bounds.height - scroller_height).max(0.0);
+                // Relative scroll over the free track, like `scroll_percentage` drags it
+                let scroller_offset = translation.y / (content.height - bounds.height) * max_offset;
 
                 let scroller_bounds = Rectangle {
                     x: bounds.x + bounds.width - total_scrollbar_width / 2.0 - scroller_width / 2.0,
@@ -3323,9 +3322,9 @@ impl Scrollbars {
             } else {
                 // min width for easier grabbing with extra wide content
                 let scroller_length = (scrollbar_bounds.width * ratio).max(2.0);
-                let scroller_offset = translation.x * ratio * scrollbar_bounds.width / bounds.width;
-
                 let max_offset = (scrollbar_bounds.width - scroller_length).max(0.0);
+                // Relative scroll over the free track, like `scroll_percentage` drags it
+                let scroller_offset = translation.x / (content.width - bounds.width) * max_offset;
 
                 let scroller_bounds = Rectangle {
                     x: scrollbar_bounds.x + scroller_offset.clamp(0.0, max_offset),
@@ -3758,5 +3757,81 @@ mod tests {
         let ((y_scroller, y_track), (x_scroller, x_track)) = at(Vector::new(300.0, 300.0));
         assert!((y_scroller.y + y_scroller.height - (y_track.y + y_track.height)).abs() < 1e-3);
         assert!((x_scroller.x + x_scroller.width - (x_track.x + x_track.width)).abs() < 1e-3);
+    }
+
+    /// A minimum-length scroller moves in step with the scroll position over
+    /// the whole free track: it ends at the track end when fully scrolled,
+    /// and sits halfway at half scroll.
+    #[test]
+    fn minimum_length_scrollers_move_linearly_over_the_free_track() {
+        let bounds = Rectangle::new(Point::ORIGIN, Size::new(100.0, 100.0));
+        let content = Size::new(100_000.0, 100_000.0);
+        let direction = Direction::Both {
+            vertical: Scrollbar::default(),
+            horizontal: Scrollbar::default(),
+        };
+        let max = Vector::new(content.width - bounds.width, content.height - bounds.height);
+
+        let scrollbars = Scrollbars::new(max, direction, bounds, content);
+        let y = scrollbars.y.expect("vertical scrollbar");
+        let y_scroller = y.scroller.expect("vertical scroller").bounds;
+        assert!((y_scroller.y + y_scroller.height - (y.bounds.y + y.bounds.height)).abs() < 1e-3);
+        let x = scrollbars.x.expect("horizontal scrollbar");
+        let x_scroller = x.scroller.expect("horizontal scroller").bounds;
+        assert!((x_scroller.x + x_scroller.width - (x.bounds.x + x.bounds.width)).abs() < 1e-3);
+
+        let scrollbars = Scrollbars::new(max * 0.5, direction, bounds, content);
+        let y = scrollbars.y.expect("vertical scrollbar");
+        let y_scroller = y.scroller.expect("vertical scroller").bounds;
+        let free = y.bounds.height - y_scroller.height;
+        assert!((y_scroller.y - y.bounds.y - free * 0.5).abs() < 1e-3);
+        let x = scrollbars.x.expect("horizontal scrollbar");
+        let x_scroller = x.scroller.expect("horizontal scroller").bounds;
+        let free = x.bounds.width - x_scroller.width;
+        assert!((x_scroller.x - x.bounds.x - free * 0.5).abs() < 1e-3);
+    }
+
+    /// Dragging maps the cursor over the free track, so the drawn scroller
+    /// must agree with it: grabbing a scroller at its start reproduces the
+    /// current relative offset, for minimum-length and normal scrollers.
+    #[test]
+    fn drawn_scrollers_agree_with_the_drag_mapping() {
+        let bounds = Rectangle::new(Point::ORIGIN, Size::new(100.0, 100.0));
+
+        for (content_len, anchor) in [
+            (100_000.0, Anchor::Start),
+            (400.0, Anchor::Start),
+            (100_000.0, Anchor::End),
+            (400.0, Anchor::End),
+        ] {
+            let content = Size::new(content_len, content_len);
+            let direction = Direction::Both {
+                vertical: Scrollbar::default().anchor(anchor),
+                horizontal: Scrollbar::default().anchor(anchor),
+            };
+            let relative = 0.3;
+            let translation = Vector::new(
+                Offset::Relative(relative).translation(bounds.width, content.width, anchor),
+                Offset::Relative(relative).translation(bounds.height, content.height, anchor),
+            );
+
+            let scrollbars = Scrollbars::new(translation, direction, bounds, content);
+
+            let y = scrollbars.y.expect("vertical scrollbar");
+            let start = y.scroller.expect("vertical scroller").bounds.position();
+            let got = y.scroll_percentage(Axis::Y, 0.0, start);
+            assert!(
+                (got - relative).abs() < 1e-3,
+                "vertical {got} vs {relative} ({anchor:?}, content {content_len})"
+            );
+
+            let x = scrollbars.x.expect("horizontal scrollbar");
+            let start = x.scroller.expect("horizontal scroller").bounds.position();
+            let got = x.scroll_percentage(Axis::X, 0.0, start);
+            assert!(
+                (got - relative).abs() < 1e-3,
+                "horizontal {got} vs {relative} ({anchor:?}, content {content_len})"
+            );
+        }
     }
 }
