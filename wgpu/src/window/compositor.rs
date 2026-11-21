@@ -525,6 +525,10 @@ pub struct Settings {
     pub present_mode: wgpu::PresentMode,
 
     /// The graphics backends to use.
+    ///
+    /// On Windows the default is DirectX 12, then OpenGL; Vulkan is not
+    /// tried unless asked for (`WGPU_BACKEND=vulkan` or an explicit
+    /// [`backend::Api::Vulkan`]). Elsewhere it is every backend.
     pub backends: wgpu::Backends,
 
     /// The power-usage preference for graphics adapters.
@@ -635,11 +639,31 @@ fn adapter_report(
     )
 }
 
+/// Picks the default backend set: DirectX 12 and OpenGL on Windows, where
+/// some Vulkan drivers crash during device creation, `other` elsewhere.
+pub(crate) fn default_backends_for(is_windows: bool, other: wgpu::Backends) -> wgpu::Backends {
+    if is_windows {
+        wgpu::Backends::DX12 | wgpu::Backends::GL
+    } else {
+        other
+    }
+}
+
+/// The default backend set of this platform.
+pub(crate) fn default_backends() -> wgpu::Backends {
+    default_backends_for(cfg!(target_os = "windows"), wgpu::Backends::all())
+}
+
+/// The backend set for the headless renderer.
+pub(crate) fn default_headless_backends() -> wgpu::Backends {
+    default_backends_for(cfg!(target_os = "windows"), wgpu::Backends::PRIMARY)
+}
+
 impl Default for Settings {
     fn default() -> Settings {
         Settings {
             present_mode: wgpu::PresentMode::AutoVsync,
-            backends: wgpu::Backends::all(),
+            backends: default_backends(),
             power_preference: backend::PowerPreference::None,
             antialiasing: None,
             software_fallback: SoftwareFallback::default(),
@@ -653,14 +677,14 @@ impl From<backend::Settings> for Settings {
             .backend
             .hardware()
             .map(|api| match api {
-                backend::Api::Best => wgpu::Backends::all(),
+                backend::Api::Best => default_backends(),
                 backend::Api::Vulkan => wgpu::Backends::VULKAN,
                 backend::Api::Metal => wgpu::Backends::METAL,
                 backend::Api::DirectX12 => wgpu::Backends::DX12,
                 backend::Api::OpenGL => wgpu::Backends::GL,
                 backend::Api::WebGPU => wgpu::Backends::BROWSER_WEBGPU,
             })
-            .unwrap_or_else(wgpu::Backends::all);
+            .unwrap_or_else(default_backends);
 
         Self {
             present_mode: if settings.vsync {
@@ -715,6 +739,42 @@ mod tests {
         // after a resize must not be configured with it.
         assert_eq!(alpha_mode(&[Opaque, PostMultiplied]), Auto);
         assert_eq!(alpha_mode(&[]), Auto);
+    }
+
+    #[test]
+    fn windows_defaults_to_dx12_then_gl_without_vulkan() {
+        let windows = default_backends_for(true, wgpu::Backends::all());
+
+        assert_eq!(windows, wgpu::Backends::DX12 | wgpu::Backends::GL);
+        assert!(!windows.contains(wgpu::Backends::VULKAN));
+    }
+
+    #[test]
+    fn other_platforms_keep_their_default_backends() {
+        assert_eq!(
+            default_backends_for(false, wgpu::Backends::all()),
+            wgpu::Backends::all()
+        );
+        assert_eq!(
+            default_backends_for(false, wgpu::Backends::PRIMARY),
+            wgpu::Backends::PRIMARY
+        );
+    }
+
+    #[test]
+    fn best_maps_to_default_and_explicit_apis_map_exactly() {
+        let settings = |api| {
+            Settings::from(backend::Settings {
+                backend: backend::Backend::Hardware(api),
+                ..backend::Settings::default()
+            })
+            .backends
+        };
+
+        assert_eq!(settings(backend::Api::Best), default_backends());
+        assert_eq!(settings(backend::Api::Vulkan), wgpu::Backends::VULKAN);
+        assert_eq!(settings(backend::Api::DirectX12), wgpu::Backends::DX12);
+        assert_eq!(settings(backend::Api::OpenGL), wgpu::Backends::GL);
     }
 
     /// Creates a device with an adapter, if the machine has one.
