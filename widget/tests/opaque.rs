@@ -1,91 +1,118 @@
-//! Tests for the `opaque` helper: it keeps mouse input from reaching the
-//! layers below it in a `Stack`.
-use iced_test::Simulator;
-use iced_widget::core::mouse::{self, ScrollDelta};
-use iced_widget::core::widget::{Meta, Tree};
-use iced_widget::core::{
-    Event, Layout, Length, Point, Rectangle, Shell, Size, Widget, layout, renderer,
-};
-use iced_widget::{mouse_area, opaque, scrollable, space, stack};
+//! Behavioral tests for the `Opaque` widget.
+//!
+//! These drive the `Widget` trait directly (using the null renderer `()`) to
+//! verify that an `Opaque` captures mouse button presses by default, and that
+//! it captures scroll wheel events only when its `capture_scroll` flag
+//! is enabled and the cursor is over its bounds.
+use iced_widget::core::event;
+use iced_widget::core::layout::{self, Layout, Limits};
+use iced_widget::core::mouse::{self, Button, Cursor};
+use iced_widget::core::renderer;
+use iced_widget::core::shell;
+use iced_widget::core::widget::{self, Tree, Widget};
+use iced_widget::core::window::Headless;
+use iced_widget::core::{Event, Length, Point, Rectangle, Size, Theme};
+use iced_widget::{Opaque, Space, opaque, space};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Message {
-    BehindScrolled,
-    BehindPressed,
-    InsideScrolled,
+type Message = u8;
+
+/// The message published by the [`WheelSpy`] when it receives a scroll wheel
+/// event.
+const WHEEL_SEEN: Message = 0x42;
+
+/// The size of the test viewport.
+const VIEWPORT: Size = Size::new(1000.0, 1000.0);
+
+/// A left-button press at the given position.
+fn press(position: Point) -> (Event, Cursor) {
+    (
+        Event::Mouse(mouse::Event::ButtonPressed(Button::Left)),
+        Cursor::Available(position),
+    )
 }
 
-/// A full-size area that reports wheel and press events, with an opaque
-/// full-size layer on top of it.
-fn covered<'a>() -> Simulator<'a, Message> {
-    Simulator::new(stack![
-        mouse_area(space().width(Length::Fill).height(Length::Fill))
-            .on_scroll(|_| Message::BehindScrolled)
-            .on_press(Message::BehindPressed),
-        opaque(space().width(Length::Fill).height(Length::Fill)),
-    ])
+/// A scroll wheel event at the given position.
+fn scroll(position: Point) -> (Event, Cursor) {
+    (
+        Event::Mouse(mouse::Event::WheelScrolled {
+            delta: mouse::ScrollDelta::Lines { x: 0.0, y: 1.0 },
+        }),
+        Cursor::Available(position),
+    )
 }
 
-#[test]
-fn wheel_scrolling_does_not_reach_the_layer_below() {
-    let mut simulator = covered();
-    simulator.point_at(Point::new(100.0, 100.0));
+/// An `Opaque` wrapping a 50x50 `space`, optionally capturing the scroll wheel.
+fn new_opaque(capture_scroll: bool) -> Opaque<Space> {
+    let space = space().width(50).height(50);
 
-    let _ = simulator.scroll(ScrollDelta::Lines { x: 0.0, y: -1.0 });
-
-    assert_eq!(simulator.into_messages().collect::<Vec<_>>(), []);
+    if capture_scroll {
+        opaque(space).capture_scroll(true)
+    } else {
+        opaque(space)
+    }
 }
 
-#[test]
-fn mouse_presses_do_not_reach_the_layer_below() {
-    let mut simulator = covered();
-    simulator.point_at(Point::new(100.0, 100.0));
-
-    let _ = simulator.simulate([Event::Mouse(mouse::Event::ButtonPressed(
-        mouse::Button::Left,
-    ))]);
-
-    assert_eq!(simulator.into_messages().collect::<Vec<_>>(), []);
-}
-
-#[test]
-fn the_layer_below_still_scrolls_without_the_opaque_layer() {
-    let mut simulator: Simulator<'_, Message> = Simulator::new(
-        mouse_area(space().width(Length::Fill).height(Length::Fill))
-            .on_scroll(|_| Message::BehindScrolled),
-    );
-    simulator.point_at(Point::new(100.0, 100.0));
-
-    let _ = simulator.scroll(ScrollDelta::Lines { x: 0.0, y: -1.0 });
-
-    assert_eq!(
-        simulator.into_messages().collect::<Vec<_>>(),
-        [Message::BehindScrolled]
-    );
-}
-
-/// A widget that reports every wheel event, whether or not the cursor is
-/// over it, so only a captured event can keep it quiet.
-struct WheelListener;
-
-impl Meta for WheelListener {}
-
-impl<Theme, Renderer> Widget<Message, Theme, Renderer> for WheelListener
+/// Builds the state tree and computes the (initial) layout for the widget.
+fn setup<W>(widget: &mut W) -> (Tree, Layout)
 where
-    Renderer: iced_widget::core::Renderer,
+    W: Widget<Message, Theme, ()>,
 {
+    let mut tree = Tree::new(widget);
+
+    widget.diff(&mut tree);
+    widget.layout(&mut tree, &(), &Limits::new(Size::ZERO, VIEWPORT));
+
+    let layout = Layout::new(tree.size);
+
+    (tree, layout)
+}
+
+/// Drives a single event through the widget and returns the resulting event
+/// status and the bus of published messages.
+fn drive<W>(
+    widget: &mut W,
+    tree: &mut Tree,
+    layout: Layout,
+    event: &Event,
+    cursor: Cursor,
+) -> (event::Status, shell::Bus<Message>)
+where
+    W: Widget<Message, Theme, ()>,
+{
+    let viewport = Rectangle::with_size(VIEWPORT);
+
+    let mut bus = shell::Bus::new();
+    let mut shell = shell::Shell::new(&Headless, shell::Waker::noop(), &mut bus);
+
+    widget.update(tree, event, layout, cursor, &(), &mut shell, &viewport);
+
+    (shell.event_status(), bus)
+}
+
+/// Collects the messages published on the bus.
+fn messages(bus: shell::Bus<Message>) -> Vec<Message> {
+    bus.into_iter().collect()
+}
+
+/// A 50x50 widget that publishes [`WHEEL_SEEN`] when it receives a scroll
+/// wheel event.
+struct WheelSpy;
+
+impl widget::Meta for WheelSpy {}
+
+impl Widget<Message, Theme, ()> for WheelSpy {
     fn size(&self) -> Size<Length> {
-        Size::new(Length::Fill, Length::Fill)
+        Size::new(Length::Fixed(50.0), Length::Fixed(50.0))
     }
 
-    fn layout(&mut self, tree: &mut Tree, _renderer: &Renderer, limits: &layout::Limits) {
-        tree.size = layout::atomic(limits, Length::Fill, Length::Fill);
+    fn layout(&mut self, tree: &mut Tree, _renderer: &(), limits: &layout::Limits) {
+        tree.size = layout::atomic(limits, 50, 50);
     }
 
     fn draw(
         &self,
         _tree: &Tree,
-        _renderer: &mut Renderer,
+        _renderer: &mut (),
         _theme: &Theme,
         _style: &renderer::Style,
         _layout: Layout,
@@ -100,79 +127,113 @@ where
         event: &Event,
         _layout: Layout,
         _cursor: mouse::Cursor,
-        _renderer: &Renderer,
-        shell: &mut Shell<'_, Message>,
+        _renderer: &(),
+        shell: &mut shell::Shell<'_, Message>,
         _viewport: &Rectangle,
     ) {
-        if let Event::Mouse(mouse::Event::WheelScrolled { .. }) = event {
-            shell.publish(Message::BehindScrolled);
+        if matches!(event, Event::Mouse(mouse::Event::WheelScrolled { .. })) {
+            shell.publish(WHEEL_SEEN);
         }
     }
 }
 
 #[test]
-fn wheel_scrolling_is_captured_before_cursor_unaware_layers() {
-    let mut simulator: Simulator<'_, Message> = Simulator::new(stack![
-        WheelListener,
-        opaque(space().width(Length::Fill).height(Length::Fill)),
-    ]);
-    simulator.point_at(Point::new(100.0, 100.0));
+fn mouse_press_is_captured_by_default() {
+    let mut element = new_opaque(false);
+    let (mut tree, layout) = setup(&mut element);
 
-    let _ = simulator.scroll(ScrollDelta::Lines { x: 0.0, y: -1.0 });
-
-    assert_eq!(simulator.into_messages().collect::<Vec<_>>(), []);
-}
-
-#[test]
-fn a_scrollable_below_does_not_scroll() {
-    // A scrollable lands the levitated cursor, so only a captured event
-    // keeps it from scrolling.
-    let mut simulator: Simulator<'_, Message> = Simulator::new(stack![
-        scrollable(space().height(3000))
-            .width(Length::Fill)
-            .height(200)
-            .smooth_scroll(false)
-            .on_scroll(|_| Message::BehindScrolled),
-        opaque(space().width(Length::Fill).height(Length::Fill)),
-    ]);
-    simulator.point_at(Point::new(100.0, 100.0));
-
-    let _ = simulator.scroll(ScrollDelta::Lines { x: 0.0, y: -1.0 });
-
-    assert_eq!(simulator.into_messages().collect::<Vec<_>>(), []);
-}
-
-#[test]
-fn content_inside_opaque_still_gets_the_wheel() {
-    let mut simulator: Simulator<'_, Message> = Simulator::new(opaque(
-        mouse_area(space().width(Length::Fill).height(Length::Fill))
-            .on_scroll(|_| Message::InsideScrolled),
-    ));
-    simulator.point_at(Point::new(100.0, 100.0));
-
-    let _ = simulator.scroll(ScrollDelta::Lines { x: 0.0, y: -1.0 });
+    // The 50x50 content occupies (0, 0) .. (50, 50); press inside it.
+    let (event, cursor) = press(Point::new(25.0, 25.0));
+    let (status, _) = drive(&mut element, &mut tree, layout, &event, cursor);
 
     assert_eq!(
-        simulator.into_messages().collect::<Vec<_>>(),
-        [Message::InsideScrolled]
+        status,
+        event::Status::Captured,
+        "an opaque layer should capture mouse button presses by default"
     );
 }
 
 #[test]
-fn a_scrollable_scrolls_without_the_opaque_layer() {
-    let mut simulator: Simulator<'_, Message> = Simulator::new(
-        scrollable(space().height(3000))
-            .width(Length::Fill)
-            .height(200)
-            .smooth_scroll(false)
-            .on_scroll(|_| Message::BehindScrolled),
-    );
-    simulator.point_at(Point::new(100.0, 100.0));
+fn wheel_scroll_is_not_captured_by_default() {
+    let mut element = new_opaque(false);
+    let (mut tree, layout) = setup(&mut element);
 
-    let _ = simulator.scroll(ScrollDelta::Lines { x: 0.0, y: -1.0 });
+    let (event, cursor) = scroll(Point::new(25.0, 25.0));
+    let (status, _) = drive(&mut element, &mut tree, layout, &event, cursor);
 
     assert_eq!(
-        simulator.into_messages().collect::<Vec<_>>(),
-        [Message::BehindScrolled]
+        status,
+        event::Status::Ignored,
+        "scroll wheel events should not be captured unless the flag is enabled"
+    );
+}
+
+#[test]
+fn wheel_scroll_is_captured_when_flag_enabled() {
+    let mut element = new_opaque(true);
+    let (mut tree, layout) = setup(&mut element);
+
+    let (event, cursor) = scroll(Point::new(25.0, 25.0));
+    let (status, _) = drive(&mut element, &mut tree, layout, &event, cursor);
+
+    assert_eq!(
+        status,
+        event::Status::Captured,
+        "scroll wheel events should be captured when the flag is enabled and hovered"
+    );
+}
+
+#[test]
+fn wheel_scroll_is_not_captured_when_not_hovered() {
+    let mut element = new_opaque(true);
+    let (mut tree, layout) = setup(&mut element);
+
+    // Scroll somewhere far away: outside the opaque bounds.
+    let (event, cursor) = scroll(Point::new(900.0, 900.0));
+    let (status, _) = drive(&mut element, &mut tree, layout, &event, cursor);
+
+    assert_eq!(
+        status,
+        event::Status::Ignored,
+        "scroll wheel events should only be captured when the cursor is hovered"
+    );
+}
+
+#[test]
+fn mouse_press_is_still_captured_when_flag_enabled() {
+    let mut element = new_opaque(true);
+    let (mut tree, layout) = setup(&mut element);
+
+    // The flag must not interfere with the default mouse press capture.
+    let (event, cursor) = press(Point::new(25.0, 25.0));
+    let (status, _) = drive(&mut element, &mut tree, layout, &event, cursor);
+
+    assert_eq!(
+        status,
+        event::Status::Captured,
+        "mouse button presses should still be captured when the flag is enabled"
+    );
+}
+
+#[test]
+fn wrapped_content_still_receives_wheel_scroll() {
+    // The flag must not swallow events from the wrapped content: the spy
+    // still receives the scroll, even though the event is then captured.
+    let mut element = opaque(WheelSpy).capture_scroll(true);
+    let (mut tree, layout) = setup(&mut element);
+
+    let (event, cursor) = scroll(Point::new(25.0, 25.0));
+    let (status, bus) = drive(&mut element, &mut tree, layout, &event, cursor);
+
+    assert_eq!(
+        messages(bus),
+        vec![WHEEL_SEEN],
+        "the wrapped content should still receive the scroll wheel event"
+    );
+
+    assert_eq!(
+        status,
+        event::Status::Captured,
+        "the event should be captured after being delegated to the content"
     );
 }
