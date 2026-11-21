@@ -632,10 +632,15 @@ fn adapter_report(
     format!(
         "backends: {backends:?}; power preference: {:?}; force fallback adapter: {}; \
          surface given: {}; available adapters: {available}. Set WGPU_BACKEND=gl to try the \
-         OpenGL backend, or install a Vulkan driver such as Mesa lavapipe",
+         OpenGL backend, or install a Vulkan driver such as Mesa lavapipe{}",
         options.power_preference,
         options.force_fallback_adapter,
         options.compatible_surface.is_some(),
+        if cfg!(target_os = "windows") {
+            " (on Windows, Vulkan is only tried with WGPU_BACKEND=vulkan)"
+        } else {
+            ""
+        },
     )
 }
 
