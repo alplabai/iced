@@ -80,9 +80,17 @@ impl Renderer {
 
         self.layers.merge();
 
+        let viewport_bounds = Rectangle::with_size(viewport.logical_size());
+
         for layer in self.layers.iter() {
+            // The root layer is unbounded until `reset`; an infinite clip path
+            // clips everything, so clip to the viewport instead.
+            let Some(layer_bounds) = layer.bounds.intersection(&viewport_bounds) else {
+                continue;
+            };
+
             renderer.set_transform(scale);
-            renderer.push_clip_path(&into_rect(layer.bounds).to_path(ACCURACY));
+            renderer.push_clip_path(&into_rect(layer_bounds).to_path(ACCURACY));
 
             for (quad, background) in &layer.quads {
                 let shadow = quad.shadow;
@@ -141,7 +149,7 @@ impl Renderer {
             for group in &layer.primitives {
                 use vello_cpu::kurbo;
 
-                let Some(clip_bounds) = group.clip_bounds().intersection(&layer.bounds) else {
+                let Some(clip_bounds) = group.clip_bounds().intersection(&layer_bounds) else {
                     continue;
                 };
 
@@ -289,7 +297,7 @@ impl Renderer {
                                 * item.transformation();
 
                             let Some(clip_bounds) = (*clip_bounds * transformation)
-                                .intersection(&(layer.bounds * transformation))
+                                .intersection(&(layer_bounds * transformation))
                             else {
                                 continue;
                             };
@@ -330,8 +338,8 @@ impl Renderer {
                             let clip_bounds = Rectangle::new(
                                 raw.position,
                                 Size::new(
-                                    width.unwrap_or(layer.bounds.width),
-                                    height.unwrap_or(layer.bounds.height),
+                                    width.unwrap_or(layer_bounds.width),
+                                    height.unwrap_or(layer_bounds.height),
                                 ),
                             );
 
@@ -635,10 +643,17 @@ pub struct Compositor {
 #[derive(Debug, Clone)]
 struct Frame {
     background: Color,
+    scale_factor: f32,
     layers: Vec<layer::Layer>,
 }
 
 impl Frame {
+    /// Whether layer damage against this frame is valid: a new background or
+    /// scale factor repaints everything (fork port of upstream #3531).
+    fn is_comparable(&self, background: Color, scale_factor: f32) -> bool {
+        self.background == background && self.scale_factor == scale_factor
+    }
+
     fn damage(&self, layers: &[layer::Layer]) -> Vec<Rectangle> {
         graphics::damage::diff(
             &self.layers,
@@ -751,7 +766,8 @@ impl graphics::Compositor for Compositor {
 
         let damage = old_frame
             .and_then(|last_frame| {
-                (last_frame.background == background_color)
+                last_frame
+                    .is_comparable(background_color, viewport.scale_factor())
                     .then(|| last_frame.damage(renderer.layers()))
             })
             .unwrap_or_else(|| vec![Rectangle::with_size(viewport.logical_size())]);
@@ -769,7 +785,8 @@ impl graphics::Compositor for Compositor {
                 .frames
                 .front()
                 .and_then(|current_frame| {
-                    (current_frame.background == background_color)
+                    current_frame
+                        .is_comparable(background_color, viewport.scale_factor())
                         .then(|| current_frame.damage(renderer.layers()))
                 })
                 .unwrap_or_else(|| vec![Rectangle::with_size(viewport.logical_size())]);
@@ -783,6 +800,7 @@ impl graphics::Compositor for Compositor {
 
         surface.frames.push_front(Frame {
             background: background_color,
+            scale_factor: viewport.scale_factor(),
             layers: renderer.layers().to_vec(),
         });
 
@@ -1365,4 +1383,45 @@ fn full_damage(viewport: &Viewport) -> Vec<softbuffer::Rect> {
         viewport,
     )
     .collect()
+}
+
+#[cfg(test)]
+mod fork {
+    use super::*;
+    use iced_graphics::core::Renderer as _;
+    use iced_graphics::core::renderer::Headless as _;
+    use iced_graphics::core::renderer::Quad;
+
+    fn red_quad(renderer: &mut Renderer) {
+        renderer.fill_quad(
+            Quad {
+                bounds: Rectangle::with_size(Size::new(8.0, 8.0)),
+                ..Quad::default()
+            },
+            Background::Color(Color::from_rgb(1.0, 0.0, 0.0)),
+        );
+    }
+
+    #[test]
+    fn a_headless_draw_without_reset_is_not_clipped_away() {
+        let mut renderer = Renderer::new(renderer::Settings::default());
+        red_quad(&mut renderer);
+
+        let rgba = renderer.screenshot(Size::new(8, 8), 1.0, Color::BLACK);
+
+        assert_eq!(rgba[..4], [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn a_new_scale_factor_invalidates_frame_damage() {
+        let frame = Frame {
+            background: Color::BLACK,
+            scale_factor: 1.0,
+            layers: Vec::new(),
+        };
+
+        assert!(frame.is_comparable(Color::BLACK, 1.0));
+        assert!(!frame.is_comparable(Color::BLACK, 2.0));
+        assert!(!frame.is_comparable(Color::WHITE, 1.0));
+    }
 }
