@@ -51,7 +51,7 @@ Statuses: fixed, already-fixed (code in this tree already handles it), not-repro
 | 15 | fixed | Pending events (including the final `Closed`) are flushed to subscriptions before exit (Batch A). No automated test. |
 | 16 | fixed | pane_grid title bar padded width sign bug (Batch D). Covered by existing pane_grid tests only as non-regression. |
 | 17 | skipped | Thin/degenerate line geometry not changed. |
-| 18 | fixed | Canvas frame sections keep draw order and child clips across shapes, images and text in graphics, wgpu and tiny_skia. tiny_skia and graphics have unit tests; the wgpu path has no automated test and was not seen on a real GPU. |
+| 18 | fixed | Canvas frame sections keep draw order and child clips across shapes, images and text in graphics, wgpu and tiny_skia. tiny_skia and graphics have unit tests; the wgpu path has no automated test and was not seen on a real GPU. On the upstream sync trial branch (tiny_skia replaced by vello_cpu) the software path loses it; see FORK.md, "Upstream sync trial 2026-11-21". |
 | 19 | skipped | Canvas cache regression not profiled. |
 | 20 | fixed | Progress bar fill radius clamped (Batch F, #3526). The lru advisory (#3440) is not addressed. |
 
