@@ -134,6 +134,17 @@ mod tests {
         );
     }
 
+    // The late re-read itself (an `Occluded` after `windowDidExitFullScreen`
+    // marks the mode dirty) needs a live macOS window; this pins the diff.
+    #[test]
+    fn fullscreen_exit_read_late_emits_one_event() {
+        let mut flags = ModeFlags::new(false, Some(false), true);
+        let exited = ModeFlags::new(false, Some(false), false);
+
+        assert_eq!(flags.update(exited), changed(false, Some(false), false));
+        assert_eq!(flags.update(exited), None);
+    }
+
     #[test]
     fn repeated_reads_emit_once() {
         let mut flags = ModeFlags::default();

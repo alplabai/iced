@@ -1,7 +1,12 @@
 //! Access the clipboard.
-use crate::core::clipboard::{Content, Error, Kind};
+use crate::core::clipboard::{ClipboardKind, Content, Error, Kind, primary_selection_supported};
 
 pub use platform::*;
+
+/// Whether the given [`ClipboardKind`] exists on this platform.
+pub fn is_supported(kind: ClipboardKind) -> bool {
+    kind == ClipboardKind::Standard || primary_selection_supported()
+}
 
 impl Default for Clipboard {
     fn default() -> Self {
@@ -47,6 +52,7 @@ mod platform {
         /// Reads the current content of the [`Clipboard`] as text.
         pub fn read(
             &self,
+            clipboard_kind: ClipboardKind,
             kind: Kind,
             callback: impl FnOnce(Result<Content, Error>) + Send + 'static,
         ) {
@@ -54,6 +60,13 @@ mod platform {
                 callback(Err(Error::ClipboardUnavailable));
                 return;
             };
+
+            // The primary clipboard only exists on Linux; elsewhere it must
+            // never fall back to the standard one.
+            if !is_supported(clipboard_kind) {
+                callback(Err(Error::ClipboardUnavailable));
+                return;
+            }
 
             let clipboard = clipboard.clone();
 
@@ -63,7 +76,7 @@ mod platform {
                     return;
                 };
 
-                let get = clipboard.get();
+                let get = get_clipboard(&mut clipboard, clipboard_kind);
 
                 let result = match kind {
                     Kind::Text => get.text().map(Content::Text),
@@ -94,6 +107,7 @@ mod platform {
         /// Writes the given text contents to the [`Clipboard`].
         pub fn write(
             &mut self,
+            clipboard_kind: ClipboardKind,
             content: Content,
             callback: impl FnOnce(Result<(), Error>) + Send + 'static,
         ) {
@@ -101,6 +115,11 @@ mod platform {
                 callback(Err(Error::ClipboardUnavailable));
                 return;
             };
+
+            if !is_supported(clipboard_kind) {
+                callback(Err(Error::ClipboardUnavailable));
+                return;
+            }
 
             let clipboard = clipboard.clone();
 
@@ -110,7 +129,7 @@ mod platform {
                     return;
                 };
 
-                let set = clipboard.set();
+                let set = set_clipboard(&mut clipboard, clipboard_kind);
 
                 let result = match content {
                     Content::Text(text) => set.text(text),
@@ -134,6 +153,72 @@ mod platform {
             });
         }
     }
+
+    // These `cfg`s must match `primary_selection_supported`: they are the
+    // platforms where arboard has `LinuxClipboardKind`.
+    #[cfg(all(
+        unix,
+        not(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "android",
+            target_os = "emscripten"
+        ))
+    ))]
+    mod backend {
+        use super::*;
+        use arboard::{GetExtLinux, SetExtLinux};
+
+        fn kind(kind: ClipboardKind) -> arboard::LinuxClipboardKind {
+            match kind {
+                ClipboardKind::Standard => arboard::LinuxClipboardKind::Clipboard,
+                ClipboardKind::Primary => arboard::LinuxClipboardKind::Primary,
+            }
+        }
+
+        pub fn get_clipboard(
+            clipboard: &mut arboard::Clipboard,
+            for_kind: ClipboardKind,
+        ) -> arboard::Get<'_> {
+            clipboard.get().clipboard(kind(for_kind))
+        }
+
+        pub fn set_clipboard(
+            clipboard: &mut arboard::Clipboard,
+            for_kind: ClipboardKind,
+        ) -> arboard::Set<'_> {
+            clipboard.set().clipboard(kind(for_kind))
+        }
+    }
+
+    #[cfg(not(all(
+        unix,
+        not(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "android",
+            target_os = "emscripten"
+        ))
+    )))]
+    mod backend {
+        use super::*;
+
+        pub fn get_clipboard(
+            clipboard: &mut arboard::Clipboard,
+            _kind: ClipboardKind,
+        ) -> arboard::Get<'_> {
+            clipboard.get()
+        }
+
+        pub fn set_clipboard(
+            clipboard: &mut arboard::Clipboard,
+            _kind: ClipboardKind,
+        ) -> arboard::Set<'_> {
+            clipboard.set()
+        }
+    }
+
+    use backend::{get_clipboard, set_clipboard};
 
     fn to_error(error: arboard::Error) -> Error {
         match error {
@@ -167,12 +252,22 @@ mod platform {
         }
 
         /// Reads the current content of the [`Clipboard`] as text.
-        pub fn read(&self, _kind: Kind, callback: impl FnOnce(Result<Content, Error>)) {
+        pub fn read(
+            &self,
+            _clipboard_kind: ClipboardKind,
+            _kind: Kind,
+            callback: impl FnOnce(Result<Content, Error>),
+        ) {
             callback(Err(Error::ClipboardUnavailable));
         }
 
         /// Writes the given text contents to the [`Clipboard`].
-        pub fn write(&mut self, _content: Content, callback: impl FnOnce(Result<(), Error>)) {
+        pub fn write(
+            &mut self,
+            _clipboard_kind: ClipboardKind,
+            _content: Content,
+            callback: impl FnOnce(Result<(), Error>),
+        ) {
             callback(Err(Error::ClipboardUnavailable));
         }
     }

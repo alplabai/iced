@@ -83,6 +83,10 @@ impl fmt::Display for Backend {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Api {
     /// Auto-detect and choose the best available graphics [`Api`].
+    ///
+    /// On Windows with the `wgpu` renderer this means DirectX 12, then
+    /// OpenGL; Vulkan is used only when chosen explicitly (`Api::Vulkan` or
+    /// `WGPU_BACKEND=vulkan`).
     #[default]
     Best,
     /// Vulkan API (Windows, Linux, Android, MacOS via vulkan-portability/MoltenVK)

@@ -36,6 +36,15 @@ use std::fmt::Debug;
 
 pub use raw_window_handle;
 
+/// Returns true if the platform maps [`Settings::parent`] to a native window
+/// relation (Windows and macOS).
+///
+/// Elsewhere (X11, Wayland, web) a parent is ignored, so an application that
+/// relies on an owned window staying above its owner needs another way.
+pub const fn parent_supported() -> bool {
+    cfg!(any(target_os = "windows", target_os = "macos"))
+}
+
 /// A window managed by iced.
 ///
 /// It implements both [`HasWindowHandle`] and [`HasDisplayHandle`].

@@ -338,7 +338,8 @@ where
 
     fn state(&self) -> widget::tree::State {
         widget::tree::State::new(State {
-            editor: editor::State::new(),
+            // The application applies `on_action` messages after the event.
+            editor: editor::State::with_deferred_primary_copy(),
             parser: RefCell::new(Parser::new(&self.parser_settings)),
             parser_settings: self.parser_settings.clone(),
             last_theme: RefCell::new(None),
@@ -428,6 +429,14 @@ where
                 }
                 editor::Update::Paste => {
                     shell.read_clipboard(clipboard::Kind::Text);
+                    shell.capture_event();
+                }
+                // The release that ends a selection is not captured.
+                editor::Update::CopyPrimary(content) => {
+                    shell.write_clipboard_primary(clipboard::Content::Text(content));
+                }
+                editor::Update::PastePrimary => {
+                    shell.read_clipboard_primary(clipboard::Kind::Text);
                     shell.capture_event();
                 }
                 editor::Update::RedrawAt(at) => {

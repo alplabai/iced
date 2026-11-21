@@ -16,23 +16,29 @@
 //! [`scrollable`](crate::core::widget::operation::scrollable) operations when
 //! given an [`Id`]. Use [`reveal_row`] to bring a row into view.
 //!
-//! A [`VirtualList`] does not draw a scrollbar. If you need to know its
-//! size, wrap it in a [`Sensor`](crate::Sensor).
+//! A [`VirtualList`] does not draw a scrollbar by itself. Wrap it in a
+//! [`scrollable`](crate::scrollable) to get one, along with dragging, the
+//! rail, smooth scrolling, anchors and reveal.
 //!
 //! # Sizing
-//! A [`VirtualList`] needs a bounded height. Do not put it inside a vertical
-//! [`scrollable`](crate::scrollable) (or in a column that is): the viewport
-//! would be unbounded and every row would have to be built. If it is laid
-//! out with an unbounded height anyway (an infinite maximum, or the
-//! `infinite` limits flag a vertical scrollable sets), it falls back to a
-//! viewport of 4096 logical pixels instead of building all of its rows.
+//! Given a bounded height, the list scrolls itself. Inside a vertical
+//! [`scrollable`](crate::scrollable) (the `infinite` limits flag it sets), it
+//! is as tall as all of its rows and only builds the
+//! ones in the viewport of the scrollable, so the scrollable does the
+//! scrolling. Scroll operations and [`reveal_row`] must then target the `Id`
+//! of the scrollable: the list has nothing left to scroll. [`reveal_row`]
+//! assumes the list is the direct content of the scrollable; anything above
+//! it (a header, padding) shifts the row.
+//!
+//! A list laid out with a truly infinite maximum height (no scrollable)
+//! falls back to a viewport of 4096 logical pixels and scrolls itself.
 //!
 //! # Precision
-//! The scroll offset is an `f32`, like in [`scrollable`](crate::scrollable).
-//! Beyond roughly 2^23 pixels of content (about 350 thousand rows of 24
-//! pixels) it cannot represent sub-pixel offsets, so slow scrolling deep in
-//! such a list may stall. Row positions are computed in `f64` and snapped to
-//! the pixel grid of the renderer.
+//! Offsets are `f32`, like in [`scrollable`](crate::scrollable): positions
+//! are exact to about 0.25 px up to 4.2 million pixels of content (about 175
+//! thousand rows of 24 pixels) and to 1 px at about 8.4 million. Row
+//! positions are computed in `f64` and snapped to the pixel grid of the
+//! renderer.
 //!
 //! # Example
 //! ```no_run
@@ -79,6 +85,9 @@ pub fn virtual_list<'a, W>(
 
 /// Produces an [`Operation`] that scrolls the [`VirtualList`] with the given
 /// [`Id`] by the minimum amount needed to bring the row at `index` into view.
+///
+/// Inside a [`scrollable`](crate::scrollable), pass the `Id` of the
+/// scrollable, not of the list.
 pub fn reveal_row<T>(id: Id, index: usize, row_height: f32) -> impl Operation<T> {
     // Only the vertical axis is revealed, so that the horizontal scroll of
     // any other scrollable with the same `Id` is left untouched.
@@ -134,6 +143,9 @@ impl<'a, W> VirtualList<'a, W> {
 
     /// Sets the [`Id`] of the [`VirtualList`], so it can be targeted by
     /// scrolling [`Operation`]s.
+    ///
+    /// Inside a `scrollable`, pass the scrollable's `Id` to scrolling
+    /// [`Operation`]s instead: the list has nothing left to scroll.
     pub fn id(mut self, id: impl Into<Id>) -> Self {
         self.id = Some(id.into());
         self
@@ -177,8 +189,16 @@ impl<'a, W> VirtualList<'a, W> {
     }
 
     fn content_height(&self) -> f32 {
-        self.len as f32 * self.row_height
+        (self.len as f64 * self.row_height as f64) as f32
     }
+}
+
+/// Returns the visible `(top, height)` of a list of `total` height, given the
+/// last reported `window` and the height to assume before there is one.
+fn window_of(window: Option<(f32, f32)>, default_height: f32, total: f32) -> (f32, f32) {
+    let (top, height) = window.unwrap_or((0.0, default_height));
+
+    (top.clamp(0.0, (total - height).max(0.0)), height)
 }
 
 /// Returns the range of rows to build for the given scroll `offset` and
@@ -219,6 +239,12 @@ struct State {
     max_offset: f32,
     /// The range of rows the children of the tree were built for.
     range: Range<usize>,
+    /// Whether the list is as tall as its content, so that a parent
+    /// `scrollable` does the scrolling.
+    windowed: bool,
+    /// The visible `(top, height)` of the list, in list coordinates, as
+    /// last reported by the viewport. `None` until the first update.
+    window: Option<(f32, f32)>,
 }
 
 impl State {
@@ -317,9 +343,22 @@ where
         let mut size = limits.resolve(self.width, self.height, Size::new(0.0, total));
 
         // A vertical `scrollable` does not hand out an infinite maximum, it
-        // sets the `infinite` flag on a finite viewport height, so the flag
-        // has to be checked as well as the resolved size.
-        if limits.infinite.height || !size.height.is_finite() {
+        // sets the `infinite` flag on a finite viewport height. Only that flag
+        // means a parent scrolls the list.
+        let windowed = limits.infinite.height;
+
+        // Which part of the list is visible, before any viewport is known.
+        let default_height = if windowed && limits.max.height.is_finite() {
+            limits.max.height
+        } else {
+            FALLBACK_HEIGHT
+        };
+
+        if windowed {
+            // The list is as tall as its content and a parent scrollable
+            // moves it; only the rows in its viewport are built.
+            size.height = total;
+        } else if !size.height.is_finite() {
             // An unbounded height would build every row.
             size.height = total.min(FALLBACK_HEIGHT);
         }
@@ -333,13 +372,20 @@ where
 
         let state = state.downcast_mut::<State>();
 
+        state.windowed = windowed;
         state.max_offset = (total - size.height).max(0.0);
         state.offset = state.offset.clamp(0.0, state.max_offset);
         state.laid_out = state.offset;
 
+        let (top, height) = if windowed {
+            window_of(state.window, default_height, total)
+        } else {
+            (0.0, size.height)
+        };
+
         let range = visible_range(
-            state.offset,
-            size.height,
+            state.offset + top,
+            height,
             self.row_height,
             self.len,
             self.overscan,
@@ -435,6 +481,31 @@ where
                 state, children, ..
             } = &mut *tree;
             let state = state.downcast_mut::<State>();
+
+            // Inside a scrollable, build the rows of the part of the list
+            // that the viewport shows.
+            if state.windowed
+                && let Some(local) = viewport.intersection(&bounds)
+            {
+                let window = (local.y - bounds.y, local.height);
+
+                if state.window != Some(window) {
+                    state.window = Some(window);
+
+                    let (top, height) = window_of(state.window, window.1, bounds.height);
+                    let range = visible_range(
+                        state.offset + top,
+                        height,
+                        self.row_height,
+                        self.len,
+                        self.overscan,
+                    );
+
+                    if range != state.range {
+                        shell.invalidate_layout();
+                    }
+                }
+            }
 
             if (state.offset - state.laid_out).abs() > f32::EPSILON {
                 // The offset was changed by an operation. Only a change of
@@ -577,14 +648,17 @@ where
         translation: Vector,
         window: Size,
     ) -> Vec<overlay::Element<'b, Message, Theme, Renderer>> {
-        let bounds = layout.bounds();
-
         // Rows that were built as overscan are off screen: their overlays
-        // must not outlive them.
+        // must not outlive them. Only the visible part of the list counts,
+        // which in a scrollable is much smaller than the list.
+        let visible = viewport.intersection(&layout.bounds());
+
         self.rows
             .iter_mut()
             .zip(layout.iter_mut(&mut tree.children))
-            .filter(|(_, (layout, _))| layout.bounds().intersects(&bounds))
+            .filter(|(_, (layout, _))| {
+                visible.is_some_and(|visible| layout.bounds().intersects(&visible))
+            })
             .flat_map(|(row, (layout, state))| {
                 row.overlay(state, layout, renderer, viewport, translation, window)
             })
