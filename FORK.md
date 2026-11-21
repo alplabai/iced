@@ -4,27 +4,36 @@ Branch workflow (`master` mirror, `dev` integration, `signex` release): see `.gi
 
 This branch carries upstream iced-rs/iced pull requests merged on top of the base.
 
-## Upstream sync trial 2026-11-21 (not merged)
+## Upstream sync 2026-11-21 (signex-v0.15.0-alpha.9)
 
-Trial only: this section lives on branch `sync/upstream-2026-11-21`, which merges upstream iced-rs/iced `master` at `98bd48fe0` (102 commits past `8ff48c42b`) and follows upstream fully. `dev` keeps tiny_skia unchanged. The branch exists so Signex can be tried against `vello_cpu` before deciding what happens to tiny_skia.
+Merges upstream iced-rs/iced `master` at `98bd48fe0` (102 commits past `8ff48c42b`) and follows upstream fully, including the switch from tiny_skia to vello_cpu (maintainer decision, after Signex was tried against it on a trial branch).
 
 What the merge brings:
 
 - [#3306](https://github.com/iced-rs/iced/pull/3306): `vello_cpu` replaces `tiny_skia` as the software renderer. The `tiny_skia` crate and `iced_tiny_skia` are deleted; the `tiny-skia` feature is renamed `vello-cpu` (plus `vello-cpu-multithreading`); the headless backend name is `vello_cpu` (`vello-cpu`, `vello_cpu` or `software` select it), so snapshots are `*-vello_cpu.sha256`.
 - [#3544](https://github.com/iced-rs/iced/pull/3544): `popover` widget and `overlay::Position` (with `Position::Auto { preference }` as the default). `tooltip(content, tip)` loses its `position` argument (use `.position(..)`) and its `padding`/`style`/`class` (style the tip itself); `Tooltip<W, V>` has no lifetime or theme parameter. `opaque` moves to its own module and returns `Opaque<W>`. `examples/tooltip` is folded into `tour`.
-- Smaller upstream fixes: e5c350f27 (text selection while scrolling), a46f0a93b (`Rectangle::snap` for negative coordinates), c3d2cfd0a (frame clock rounds up), bbd4c2601 (`Component` overlay layout invalidation), 8836286bc (`scrollable` translation takes `Size`), b2fbd3cb6 (`Daemon::font`/`fonts`), edb068eeb (bounded `debug` messages), 797c8cbcf (real screen damage to softbuffer). The root `iced` dev-dependency no longer enables `advanced`.
+- Smaller upstream fixes: e5c350f27 (text selection while scrolling), a46f0a93b (`Rectangle::snap` for negative coordinates), c3d2cfd0a (frame clock rounds up), bbd4c2601 (`Component` overlay layout invalidation), 8836286bc (`scrollable` translation takes `Size`), b2fbd3cb6 (`Daemon::font` now sets the default `Font`; `Daemon::fonts` loads font bytes), edb068eeb (bounded `debug` messages), 797c8cbcf (real screen damage to softbuffer). The root `iced` dev-dependency no longer enables `advanced`.
 
 Behaviour change: `opaque` now follows upstream. It captures mouse presses only; wheel scrolling passes through unless `.capture_scroll(true)` is set (fork #97 captured the wheel always). The fork's tests moved to `widget/tests/opaque_stack.rs` and opt in with `capture_scroll(true)`; upstream's `widget/tests/opaque.rs` is unchanged. Signex modals must add `.capture_scroll(true)`.
 
-Fork deltas inside `vello_cpu`: `src/text.rs` passes the font system version to the text cache (fork #3352/#3484); `tests/canvas_text_alignment.rs` (fork #100, ported from tiny_skia, `[[test]]` with `required-features = ["geometry"]`) passes all 6 cases.
+Fork deltas inside `vello_cpu` (each with a test):
 
-Fork tiny_skia work lost with the crate, and where `vello_cpu` stands. (a) = vello_cpu already does it; (b) = worth re-porting to vello_cpu; (c) = obsolete:
+- `src/text.rs` passes the font system version to the text cache (fork #3352/#3484).
+- `tests/canvas_text_alignment.rs` (fork #100, ported from tiny_skia, `[[test]]` with `required-features = ["geometry"]`) passes all 6 cases.
+- #3215: a failed image load (and a 0x0 image) stays cached as an error; upstream's vello_cpu stored `None` and panicked with "Image should be allocated" on the next lookup.
+- #3542 fork rule: an SVG color mask scales the pixel coverage by the mask alpha, as on wgpu (upstream's vello_cpu ignored the mask alpha).
+- #3486: changed text damages 1 px more, like quads.
+- #3531: a frame drawn at another scale factor is not used for damage.
+- Layers are clipped to the viewport, so a renderer drawn without `reset()` (headless screenshots, test helpers) is not clipped away by its unbounded root layer.
 
-- #3391 per-side border widths and colours: (b). vello_cpu strokes one uniform border and ignores `Border::top/right/bottom/left`; wgpu still draws them. Signex's `tab_pill` pixel tests rely on them.
-- #3215 failed image loads: (b), crash. vello_cpu's raster cache stores a failed load as `None` and the next lookup of that image panics with "Image should be allocated", the bug #3215 fixed in tiny_skia.
-- #3434 SVG `currentColor`: (b). vello_cpu ignores `Svg::current_color`, so a recoloured SVG draws with its own colours on the software path.
-- #18 canvas draw order and child clips: (b). vello_cpu's `Geometry::Live` keeps text, images and primitives in separate lists, so canvas text and images draw above shapes regardless of order.
+Fork tiny_skia work lost with the crate, and where `vello_cpu` stands. (a) = vello_cpu does it (upstream or a fork delta above); (b) = worth re-porting to vello_cpu, follow-up; (c) = obsolete:
+
+- #3391 per-side border widths and colours: (b). vello_cpu strokes one uniform border and ignores `Border::top/right/bottom/left`; wgpu still draws them. Signex's `tab_pill` pixel tests pass on vello_cpu.
+- #3215 failed image loads: (a), fork delta above.
+- #3434 SVG `currentColor`: (b). vello_cpu ignores `Svg::current_color`, so a recoloured SVG draws with its own colours on the software path. No Signex code sets it.
+- #18 canvas draw order and child clips: (b), follow-up issue. vello_cpu's `Geometry::Live` keeps text, images and primitives in separate lists, so canvas text and images draw above shapes regardless of order.
 - #22 canvas text past the glyph atlas limit as outlines: (b) or (c), not checked. vello_cpu has no glyph atlas, so it may not need it.
+- #3486, #3531, #3542 (dev #113, tiny_skia parts): (a), fork deltas above.
 - #3359 culling of shadowed quads: (a). vello_cpu draws shadows with `fill_blurred_rounded_rect` and does not cull shadowed quads.
 - #3360 clip text groups: (a). vello_cpu transforms the clip when drawing; the fork's layer-side transform was dropped in the merge (keeping both would transform twice).
 - #3412/#3445 raw text respects its clip bounds: (a), probably (upstream 4dce5c90e clips `fill_text`); no test ported.
