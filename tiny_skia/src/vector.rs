@@ -210,12 +210,13 @@ impl Cache {
                 log::warn!("SVG rendering for {handle:?} panicked: {error:?}");
             }
 
-            if let Some([r, g, b, _]) = key.color {
+            if let Some([r, g, b, mask_alpha]) = key.color {
                 // Apply color filter
                 for pixel in bytemuck::cast_slice_mut::<u8, u32>(image.data_mut()) {
-                    *pixel = bytemuck::cast(
-                        tiny_skia::ColorU8::from_rgba(b, g, r, (*pixel >> 24) as u8).premultiply(),
-                    );
+                    let alpha = scale_coverage((*pixel >> 24) as u8, mask_alpha);
+
+                    *pixel =
+                        bytemuck::cast(tiny_skia::ColorU8::from_rgba(b, g, r, alpha).premultiply());
                 }
             } else {
                 // Swap R and B channels for `softbuffer` presentation
@@ -242,6 +243,13 @@ impl Cache {
     }
 }
 
+/// Scales the coverage of a pixel by the alpha of a color mask, so that
+/// anti-aliased edges survive. Same rule as the wgpu renderer; a fork
+/// deviation from upstream #3542, which replaces the coverage.
+fn scale_coverage(coverage: u8, mask_alpha: u8) -> u8 {
+    ((u16::from(coverage) * u16::from(mask_alpha) + 127) / 255) as u8
+}
+
 impl std::fmt::Debug for Cache {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Cache")
@@ -255,6 +263,14 @@ impl std::fmt::Debug for Cache {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mask_alpha_scales_coverage() {
+        assert_eq!(scale_coverage(77, 255), 77);
+        assert_eq!(scale_coverage(255, 128), 128);
+        assert_eq!(scale_coverage(100, 128), 50);
+        assert_eq!(scale_coverage(0, 128), 0);
+    }
 
     const SQUARE: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4" fill="currentColor"/></svg>"#;
 

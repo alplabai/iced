@@ -203,15 +203,7 @@ impl Cache {
                 let mut rgba = img.take();
 
                 if let Some(color) = color {
-                    let (chunks, _) = rgba.as_chunks_mut::<4>();
-
-                    for [r, g, b, a] in chunks {
-                        if *a > 0 {
-                            *r = color[0];
-                            *g = color[1];
-                            *b = color[2];
-                        }
-                    }
+                    apply_color_mask(&mut rgba, color);
                 }
 
                 let allocation =
@@ -255,6 +247,24 @@ impl Cache {
     }
 }
 
+/// Paints every visible RGBA pixel with the color of a mask, scaling the
+/// pixel coverage by the alpha of the mask so that anti-aliased edges survive.
+///
+/// Fork deviation from upstream #3542, which replaces the coverage with the
+/// mask alpha.
+fn apply_color_mask(rgba: &mut [u8], color: [u8; 4]) {
+    let (pixels, _) = rgba.as_chunks_mut::<4>();
+
+    for [r, g, b, a] in pixels {
+        if *a > 0 {
+            *r = color[0];
+            *g = color[1];
+            *b = color[2];
+            *a = ((u16::from(*a) * u16::from(color[3]) + 127) / 255) as u8;
+        }
+    }
+}
+
 impl std::fmt::Debug for Svg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -267,6 +277,30 @@ impl std::fmt::Debug for Svg {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opaque_mask_keeps_coverage() {
+        let mut rgba = [1, 2, 3, 77, 9, 9, 9, 255];
+        apply_color_mask(&mut rgba, [10, 20, 30, 255]);
+
+        assert_eq!(rgba, [10, 20, 30, 77, 10, 20, 30, 255]);
+    }
+
+    #[test]
+    fn translucent_mask_scales_coverage() {
+        let mut rgba = [1, 2, 3, 255, 1, 2, 3, 100];
+        apply_color_mask(&mut rgba, [10, 20, 30, 128]);
+
+        assert_eq!(rgba, [10, 20, 30, 128, 10, 20, 30, 50]);
+    }
+
+    #[test]
+    fn zero_coverage_stays_zero() {
+        let mut rgba = [1, 2, 3, 0];
+        apply_color_mask(&mut rgba, [10, 20, 30, 128]);
+
+        assert_eq!(rgba, [1, 2, 3, 0]);
+    }
 
     const SQUARE: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4" fill="currentColor"/></svg>"#;
 
