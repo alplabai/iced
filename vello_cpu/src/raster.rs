@@ -110,7 +110,7 @@ impl Pipeline {
 
 #[derive(Debug, Default)]
 struct Cache {
-    entries: FxHashMap<raster::Id, Option<Entry>>,
+    entries: FxHashMap<raster::Id, Result<Entry, raster::Error>>,
     hits: FxHashSet<raster::Id>,
 }
 
@@ -125,13 +125,19 @@ impl Cache {
             let image = match graphics::image::load(handle) {
                 Ok(image) => image,
                 Err(error) => {
-                    let _ = entry.insert(None);
+                    // Kept as an error so the next lookup does not panic
+                    // (fork port of #3215) and is not decoded again.
+                    let _ = entry.insert(Err(error.clone()));
+                    let _ = self.hits.insert(id);
 
                     return Err(error);
                 }
             };
 
             if image.width() == 0 || image.height() == 0 {
+                let _ = entry.insert(Err(raster::Error::Empty));
+                let _ = self.hits.insert(id);
+
                 return Err(raster::Error::Empty);
             }
 
@@ -150,7 +156,7 @@ impl Cache {
                 buffer.set_pixel(x, y, color);
             }
 
-            let _ = entry.insert(Some(Entry {
+            let _ = entry.insert(Ok(Entry {
                 width: image.width(),
                 height: image.height(),
                 pixels: Arc::new(buffer),
@@ -159,13 +165,12 @@ impl Cache {
 
         let _ = self.hits.insert(id);
 
-        Ok(self
-            .entries
+        self.entries
             .get(&id)
-            .unwrap()
+            .expect("Image entry was just inserted")
             .as_ref()
             .map(|entry| entry.pixels.clone())
-            .expect("Image should be allocated"))
+            .map_err(Clone::clone)
     }
 
     fn trim(&mut self) {
@@ -179,4 +184,30 @@ struct Entry {
     width: u32,
     height: u32,
     pixels: Arc<vello_cpu::Pixmap>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_image_that_fails_to_load_is_an_error_every_time() {
+        let mut cache = Cache::default();
+        let empty = raster::Handle::from_rgba(0, 0, Vec::<u8>::new());
+        let garbage = raster::Handle::from_bytes(vec![1u8, 2, 3]);
+
+        // The second lookup hits the cached failure, which used to panic
+        // with "Image should be allocated" (fork #3215). A trim between
+        // frames keeps a failure that is still drawn.
+        for _ in 0..2 {
+            assert!(matches!(cache.allocate(&empty), Err(raster::Error::Empty)));
+            assert!(cache.allocate(&garbage).is_err());
+            cache.trim();
+            assert_eq!(cache.entries.len(), 2, "failures survive the trim");
+        }
+
+        // Not drawn in a frame: dropped like any other entry.
+        cache.trim();
+        assert!(cache.entries.is_empty());
+    }
 }
