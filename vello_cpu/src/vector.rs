@@ -220,11 +220,13 @@ impl Cache {
                 log::warn!("SVG rendering for {handle:?} panicked: {error:?}");
             }
 
-            if let Some([r, g, b, _]) = key.color {
+            if let Some([r, g, b, mask_alpha]) = key.color {
                 // Apply color filter
                 for pixel in image.data_mut() {
+                    let alpha = scale_coverage(pixel.a, mask_alpha);
+
                     *pixel =
-                        crate::into_color(Color::from_rgba8(r, g, b, f32::from(pixel.a) / 255.0))
+                        crate::into_color(Color::from_rgba8(r, g, b, f32::from(alpha) / 255.0))
                             .premultiply()
                             .to_rgba8();
                 }
@@ -251,6 +253,14 @@ impl Cache {
     }
 }
 
+/// Scales the coverage of a pixel by the alpha of a color mask, so that
+/// anti-aliased edges survive and a translucent mask stays translucent. Same
+/// rule as the wgpu renderer; a fork deviation from upstream #3542, which
+/// replaces the coverage.
+fn scale_coverage(coverage: u8, mask_alpha: u8) -> u8 {
+    ((u16::from(coverage) * u16::from(mask_alpha) + 127) / 255) as u8
+}
+
 impl std::fmt::Debug for Cache {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Cache")
@@ -258,5 +268,18 @@ impl std::fmt::Debug for Cache {
             .field("rasters", &self.rasters)
             .field("raster_hits", &self.raster_hits)
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mask_alpha_scales_coverage() {
+        assert_eq!(scale_coverage(77, 255), 77);
+        assert_eq!(scale_coverage(255, 128), 128);
+        assert_eq!(scale_coverage(100, 128), 50);
+        assert_eq!(scale_coverage(0, 128), 0);
     }
 }
