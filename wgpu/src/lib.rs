@@ -960,7 +960,8 @@ impl renderer::Headless for Renderer {
         }
 
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::from_env().unwrap_or(wgpu::Backends::PRIMARY),
+            backends: wgpu::Backends::from_env()
+                .unwrap_or_else(window::compositor::default_headless_backends),
             flags: wgpu::InstanceFlags::empty(),
             ..wgpu::InstanceDescriptor::new_without_display_handle()
         });

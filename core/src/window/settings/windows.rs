@@ -38,6 +38,14 @@ pub struct PlatformSpecific {
     /// Supported starting with Windows 11 Build 22000; Windows 10 ignores it.
     /// The alpha channel is ignored.
     pub border_color: Option<Color>,
+
+    /// Extends the client area over the title bar, keeping the native frame
+    /// (resize borders, shadow, rounded corners). The application draws its own
+    /// caption buttons; `window::drag` still moves the window.
+    ///
+    /// Only effective with `decorations: true` and outside fullscreen. Windows 11
+    /// is the primary target; Windows 10 works with native borders. See issue #105.
+    pub extend_content_into_title_bar: bool,
 }
 
 impl Default for PlatformSpecific {
@@ -50,6 +58,7 @@ impl Default for PlatformSpecific {
             title_background_color: None,
             title_text_color: None,
             border_color: None,
+            extend_content_into_title_bar: false,
         }
     }
 }
