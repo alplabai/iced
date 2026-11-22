@@ -18,6 +18,7 @@ Behaviour change: `opaque` now follows upstream. It captures mouse presses only;
 
 Fork deltas inside `vello_cpu` (each with a test):
 
+- #123 fork rule: vello_cpu renders on several threads by default. `vello_cpu/Cargo.toml` turns on `vello_cpu/multithreading` for every target except `wasm32` (no threads there), so it uses `available_parallelism() - 1` threads, at most 8; upstream renders on one thread unless the app enables `vello-cpu-multithreading`. That feature stays and is now a no-op outside wasm; do not enable it on wasm32, where vello_cpu's `available_parallelism().unwrap()` panics. Test: `tests/multithreading.rs`, run by Fork CI on default features because `--all-features` would mask a revert.
 - `src/text.rs` passes the font system version to the text cache (fork #3352/#3484).
 - `tests/canvas_text_alignment.rs` (fork #100, ported from tiny_skia, `[[test]]` with `required-features = ["geometry"]`) passes all 6 cases.
 - #3215: a failed image load (and a 0x0 image) stays cached as an error; upstream's vello_cpu stored `None` and panicked with "Image should be allocated" on the next lookup.

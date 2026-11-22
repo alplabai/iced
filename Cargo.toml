@@ -30,6 +30,7 @@ wgpu-bare = ["iced_renderer/wgpu-bare", "iced_widget/wgpu"]
 # Enables the `vello-cpu` software renderer
 vello-cpu = ["iced_renderer/vello-cpu"]
 # Enables multithreading in the `vello-cpu` software renderer
+# (fork: already on for every target except wasm32, #123)
 vello-cpu-multithreading = ["iced_renderer/vello-cpu-multithreading"]
 # Enables the `image` widget and image clipboard support
 image = ["image-without-codecs", "image/default"]

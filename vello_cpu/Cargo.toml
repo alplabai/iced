@@ -38,6 +38,10 @@ vello_cpu.workspace = true
 resvg.workspace = true
 resvg.optional = true
 
+# Fork rule (#123): render on several threads everywhere threads exist.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+vello_cpu = { workspace = true, features = ["multithreading"] }
+
 [[test]]
 name = "canvas_text_alignment"
 required-features = ["geometry"]
