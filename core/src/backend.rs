@@ -7,7 +7,7 @@ use std::fmt;
 /// You can override the default strategy by setting the `ICED_BACKEND` environment variable.
 /// If you are using the default renderer, the available options are:
 ///   - `wgpu` for the hardware accelerated backend.
-///   - `tiny-skia` for the software-based backend.
+///   - `vello-cpu` (or `software`) for the software-based backend.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Backend {
     /// Auto-detect and choose the best available [`Backend`].

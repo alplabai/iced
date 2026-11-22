@@ -112,7 +112,7 @@ where
     /// Sets the scale factor used when taking a [`Snapshot`] (2.0 by default).
     ///
     /// Snapshot reference files taken with a scale factor other than the default are
-    /// named with an `@<scale>x` suffix (e.g. `name-tiny-skia@1x.png` or `@1.5x.png`), so they never
+    /// named with an `@<scale>x` suffix (e.g. `name-vello_cpu@1x.png` or `@1.5x.png`), so they never
     /// collide with references taken at the default scale.
     ///
     /// The physical size of the snapshot (the logical size times the scale factor) must

@@ -209,7 +209,6 @@ impl<W> Meta for Row<W> {}
 impl<W, Message, Theme, Renderer> Widget<Message, Theme, Renderer> for Row<W>
 where
     W: Widget<Message, Theme, Renderer>,
-    Renderer: crate::core::Renderer,
 {
     fn tag(&self) -> tree::Tag {
         tree::Tag::of::<layout::flex::Cache>()
@@ -393,7 +392,6 @@ impl<W> Meta for Wrapping<W> {}
 impl<W, Message, Theme, Renderer> Widget<Message, Theme, Renderer> for Wrapping<W>
 where
     W: Widget<Message, Theme, Renderer>,
-    Renderer: crate::core::Renderer,
 {
     fn diff(&mut self, tree: &mut Tree) {
         self.row.diff(tree);
