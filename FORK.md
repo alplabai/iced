@@ -31,6 +31,7 @@ Fork deltas inside `vello_cpu` (each with a test):
 - `impl graphics::text::Renderer` (`fill_raw`), which upstream's vello_cpu dropped and tiny_skia had: the fallback renderer needs it from both backends.
 - #3391: per-side border widths and colours (`src/border_sides.rs`), same semantics as the old tiny_skia code: a border with no side overrides keeps the uniform stroke; zero-width sides paint nothing; rounded corners keep asymmetric widths (elliptical inner corners). Tests ported from tiny_skia.
 - #40: `impl DrawPrimitive<P> for Frame` as a no-op, so `canvas::Frame::draw_primitive` compiles with wgpu + vello-cpu (the fallback `Frame` needs both backends to implement it). Test: `primitives_are_skipped`.
+- #18: `Geometry` is a list of `Section`s (graphics `section::Kind`), as on tiny_skia: shapes, images and text keep call order (a later section draws in a new layer via `layers.split()`), and primitives are grouped by the clip of the frame that drew them, so `Frame::with_clip` clips shapes. Primitives are drawn with the group's transformation instead of a translation by the clip origin (which shifted clipped children). Tests: `vello_cpu/tests/canvas_order.rs`.
 
 Fork tiny_skia work lost with the crate, and where `vello_cpu` stands. (a) = vello_cpu does it (upstream or a fork delta above); (b) = worth re-porting to vello_cpu, follow-up; (c) = obsolete:
 
@@ -39,6 +40,9 @@ Fork tiny_skia work lost with the crate, and where `vello_cpu` stands. (a) = vel
 - #3434 SVG `currentColor`: (a), fork delta above.
 - #18 canvas draw order and child clips: (b), follow-up issue. vello_cpu's `Geometry::Live` keeps text, images and primitives in separate lists, so canvas text and images draw above shapes regardless of order, and `Frame::with_clip` child clips are ignored for shapes.
 - #22 canvas text past the glyph atlas limit as outlines: (b) or (c), not checked. vello_cpu has no glyph atlas, so it may not need it.
+- #3434 SVG `currentColor`: (b). vello_cpu ignores `Svg::current_color`, so a recoloured SVG draws with its own colours on the software path. No Signex code sets it.
+- #18 canvas draw order and child clips: (a), fork delta above. Tests in `vello_cpu/tests/canvas_order.rs`.
+- #22 canvas text past the glyph atlas limit as outlines: (c). vello_cpu has no glyph atlas; `oversize_canvas_text_still_renders_ink` (`vello_cpu/tests/canvas_order.rs`) passes with no code change.
 - #3486, #3531, #3542 (dev #113, tiny_skia parts): (a), fork deltas above.
 - #3359 culling of shadowed quads: (a). vello_cpu draws shadows with `fill_blurred_rounded_rect` and does not cull shadowed quads.
 - #3360 clip text groups: (a), with the fork delta above. vello_cpu transforms the clip when drawing, so the fork's layer-side transform was dropped in the merge (keeping both would transform twice); the canvas text clip itself needed the fix above.
@@ -54,6 +58,10 @@ tiny_skia tests not ported, and the feature each pinned:
 - `engine.rs`: `adjust_clip_mask_matches_a_fresh_mask` (#73 clip mask, (c)). Ported instead: `respects_clip_bounds_and_keeps_inner_ink`, `intersects_layer_clip_bounds`, `without_a_complete_size_is_masked` (#3412/#3445), and the five per-side border tests (#3391, in `src/border_sides.rs`).
 - `geometry.rs`: `text_past_the_glyph_cache_limit_is_primitives_and_ordinary_text_is_text` (#22, (b) or (c)). Ported instead: `primitives_are_skipped` (#40).
 - `lib.rs`: `cached_geometry_keeps_draw_order`, `image_then_shape_is_drawn_in_draw_order`, `pasted_frames_keep_draw_order`, `shapes_are_drawn_over_images_in_draw_order`, `shape_then_image_use_a_single_layer`, `shapes_only_use_a_single_layer`, `clipped_frames_clip_images`, `clipped_frames_clip_shapes` (#18 draw order and child clips, (b)); `clip_mask_is_reset_per_frame_and_tracked_through_images` (#73 clip mask, (c)).
+- `engine.rs`: `asymmetric_border_uses_each_side_and_allows_a_disabled_edge`, `resolved_uniform_border_uses_the_resolved_side_color`, `rounded_same_color_border_preserves_asymmetric_widths`, `zero_radius_multicolor_border_skips_zero_width_sides`, `zero_radius_one_sided_border_only_paints_the_enabled_side` (#3391 per-side borders, (b)); `adjust_clip_mask_matches_a_fresh_mask` (#73 clip mask, (c)). Ported instead: `respects_clip_bounds_and_keeps_inner_ink`, `intersects_layer_clip_bounds`, `without_a_complete_size_is_masked` (#3412/#3445).
+- `geometry.rs`: `text_past_the_glyph_cache_limit_is_primitives_and_ordinary_text_is_text` (#22, (c): no atlas, so the outline split does not exist). Ported instead: `primitives_are_skipped` (#40), `oversize_canvas_text_still_renders_ink` (#22).
+- `lib.rs`: `cached_geometry_keeps_draw_order`, `pasted_frames_keep_draw_order`, `shapes_only_use_a_single_layer` (#18, (a), ported as shape and text variants in `vello_cpu/tests/canvas_order.rs`, with `a_shape_drawn_after_text_covers_the_text` and `a_fill_inside_with_clip_does_not_paint_outside_the_clip`). Image variants (`image_then_shape_is_drawn_in_draw_order`, `shapes_are_drawn_over_images_in_draw_order`, `shape_then_image_use_a_single_layer`, `clipped_frames_clip_images`) not ported: the image path is covered by the same sections code but has no test; `clip_mask_is_reset_per_frame_and_tracked_through_images` (#73 clip mask, (c)).
+- `vector.rs`: `current_color_fills_svg`, `current_color_keeps_its_alpha` (#3434 SVG `currentColor`, (b)).
 
 ## signex-v0.15.0-alpha.4 (unreleased, not tagged)
 
