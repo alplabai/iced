@@ -131,7 +131,12 @@ impl Renderer {
                                 .min(quad.bounds.height / 2.0);
 
                             renderer.set_paint(into_color(color));
-                            renderer.set_stroke(vello_cpu::kurbo::Stroke::new(f64::from(width)));
+                            // Miter, as tiny_skia: kurbo's default round join
+                            // rounds square corners and hides the mask below.
+                            renderer.set_stroke(
+                                vello_cpu::kurbo::Stroke::new(f64::from(width))
+                                    .with_join(vello_cpu::kurbo::Join::Miter),
+                            );
 
                             let bounds = quad.bounds.shrink(width / 2.0);
 

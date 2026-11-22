@@ -354,10 +354,19 @@ mod tests {
         let pixels = draw_uniform(2.0, 10.0);
 
         assert_eq!(rgb_at(&pixels, 3, 3), [255, 0, 0]);
-        // Inside the curve, where a stroke rounded by the full radius is not.
-        assert!(rgb_at(&pixels, 1, 1)[0] > 50);
-        // No border colour outside the rounded corner.
-        assert_eq!(rgb_at(&pixels, 0, 0)[0], 0);
+        // Inside the r=2 curve: fully border-coloured, not rounded by the join.
+        assert_eq!(rgb_at(&pixels, 1, 1), [255, 0, 0]);
+        // Outside the r=2 curve the mask leaves only anti-aliased coverage.
+        assert!(rgb_at(&pixels, 0, 0)[0] < 255);
+    }
+
+    #[test]
+    fn a_square_wide_border_has_sharp_corners() {
+        // Radius 0: the corner pixel is border-coloured, as on wgpu.
+        let pixels = draw_uniform(0.0, 10.0);
+
+        assert_eq!(rgb_at(&pixels, 0, 0), [255, 0, 0]);
+        assert_eq!(rgb_at(&pixels, 20, 20), [0, 0, 255]);
     }
 
     #[test]
