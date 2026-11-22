@@ -4,6 +4,7 @@
 use iced_graphics as graphics;
 use iced_graphics::core;
 
+mod border_sides;
 mod layer;
 mod text;
 
@@ -114,33 +115,65 @@ impl Renderer {
 
                 renderer.set_paint(into_background(background, quad.bounds));
 
-                if quad.border.radius == border::Radius::default() {
+                let is_square = quad.border.radius == border::Radius::default();
+
+                if is_square {
                     renderer.fill_rect(&into_rect(quad.bounds));
-
-                    if quad.border.width > 0.0 && quad.border.color.a > 0.0 {
-                        renderer.set_paint(into_color(quad.border.color));
-                        renderer.set_stroke(vello_cpu::kurbo::Stroke::new(f64::from(
-                            quad.border.width,
-                        )));
-
-                        renderer
-                            .stroke_rect(&into_rect(quad.bounds.shrink(quad.border.width / 2.0)));
-                    }
                 } else {
                     renderer.fill_path(&into_rounded_rect(quad.bounds, quad.border.radius));
+                }
 
-                    if quad.border.width > 0.0 && quad.border.color.a > 0.0 {
-                        renderer.set_paint(into_color(quad.border.color));
-                        renderer.set_stroke(vello_cpu::kurbo::Stroke::new(f64::from(
-                            quad.border.width,
-                        )));
+                match border_sides::resolve(&quad.border, quad.bounds) {
+                    border_sides::Resolved::Uniform { width, color } => {
+                        if width > 0.0 && color.a > 0.0 {
+                            let width = width
+                                .min(quad.bounds.width / 2.0)
+                                .min(quad.bounds.height / 2.0);
 
-                        let border_rect = into_rounded_rect(
-                            quad.bounds.shrink(quad.border.width / 2.0),
+                            renderer.set_paint(into_color(color));
+                            // Miter, as tiny_skia: kurbo's default round join
+                            // rounds square corners and hides the mask below.
+                            renderer.set_stroke(
+                                vello_cpu::kurbo::Stroke::new(f64::from(width))
+                                    .with_join(vello_cpu::kurbo::Join::Miter),
+                            );
+
+                            let bounds = quad.bounds.shrink(width / 2.0);
+
+                            if is_square {
+                                renderer.stroke_rect(&into_rect(bounds));
+                            } else {
+                                // As tiny_skia did: the stroke runs along the
+                                // inset of the outer curve, so its outer edge
+                                // matches the background's.
+                                let (radius, has_small_corner) =
+                                    inset_radius(quad.border.radius, width, bounds);
+
+                                // Corners tighter than the half width are
+                                // stroked square and masked by the outer curve.
+                                if has_small_corner {
+                                    renderer.push_clip_path(&into_rounded_rect(
+                                        quad.bounds,
+                                        clamp_radius(quad.border.radius, quad.bounds),
+                                    ));
+                                }
+
+                                renderer.stroke_path(&into_rounded_rect(bounds, radius));
+
+                                if has_small_corner {
+                                    renderer.pop_clip();
+                                }
+                            }
+                        }
+                    }
+                    border_sides::Resolved::Sides { widths, colors } => {
+                        border_sides::draw_sides(
+                            renderer,
+                            quad.bounds,
                             quad.border.radius,
+                            widths,
+                            colors,
                         );
-
-                        renderer.stroke_path(&border_rect);
                     }
                 }
             }
@@ -158,11 +191,17 @@ impl Renderer {
                 renderer.push_clip_path(
                     &into_rect(clip_bounds * viewport.scale_factor()).to_path(ACCURACY),
                 );
+                // Primitives are in the coordinates of their frame, not of
+                // their clip, so a clipped child frame must not shift them.
+                let transformation =
+                    Transformation::scale(viewport.scale_factor()) * group.transformation();
+                let translation = transformation.translation();
+
                 renderer.set_transform(
-                    kurbo::Affine::scale(f64::from(viewport.scale_factor())).pre_translate(
+                    kurbo::Affine::scale(f64::from(transformation.scale_factor())).then_translate(
                         kurbo::Vec2 {
-                            x: f64::from(clip_bounds.x),
-                            y: f64::from(clip_bounds.y),
+                            x: f64::from(translation.x),
+                            y: f64::from(translation.y),
                         },
                     ),
                 );
@@ -452,6 +491,43 @@ fn into_vec2(vector: Vector) -> vello_cpu::kurbo::Vec2 {
     vello_cpu::kurbo::Vec2::new(f64::from(vector.x), f64::from(vector.y))
 }
 
+fn from_corners([top_left, top_right, bottom_right, bottom_left]: [f32; 4]) -> border::Radius {
+    border::Radius {
+        top_left,
+        top_right,
+        bottom_right,
+        bottom_left,
+    }
+}
+
+/// Limits each corner to what fits in `bounds`.
+fn clamp_radius(radius: border::Radius, bounds: Rectangle) -> border::Radius {
+    from_corners(
+        <[f32; 4]>::from(radius).map(|r| r.min(bounds.width / 2.0).min(bounds.height / 2.0)),
+    )
+}
+
+/// The radius of the stroke path of a uniform border `width` wide, inset by
+/// half of it, and whether any corner is too tight for that (stroked square).
+fn inset_radius(radius: border::Radius, width: f32, bounds: Rectangle) -> (border::Radius, bool) {
+    let mut has_small_corner = false;
+
+    let corners = <[f32; 4]>::from(radius).map(|r| {
+        let inset = if r == 0.0 {
+            0.0
+        } else if r > width / 2.0 {
+            r - width / 2.0
+        } else {
+            has_small_corner = true;
+            0.0
+        };
+
+        inset.min(bounds.width / 2.0).min(bounds.height / 2.0)
+    });
+
+    (from_corners(corners), has_small_corner)
+}
+
 fn into_rounded_rect(rectangle: Rectangle, radius: border::Radius) -> vello_cpu::kurbo::BezPath {
     use vello_cpu::kurbo::Shape;
 
@@ -582,31 +658,53 @@ impl graphics::geometry::Renderer for Renderer {
     fn draw_geometry(&mut self, geometry: Self::Geometry) {
         pub use geometry::Geometry;
 
-        let (layer, transformation) = self.layers.current_mut();
-
         match geometry {
             Geometry::Live {
-                primitives,
-                images,
-                text,
+                sections,
                 clip_bounds,
             } => {
-                layer.draw_primitive_group(primitives, clip_bounds, transformation);
+                for (i, section) in sections.into_iter().enumerate() {
+                    // A later section must draw above the earlier ones, which
+                    // a single layer cannot guarantee.
+                    if i > 0 {
+                        self.layers.split();
+                    }
 
-                for image in images {
-                    layer.draw_image(image, transformation);
+                    let (layer, transformation) = self.layers.current_mut();
+
+                    for group in section.primitives {
+                        layer.draw_primitive_group(group.items, group.clip_bounds, transformation);
+                    }
+
+                    for image in section.images {
+                        layer.draw_image(image, transformation);
+                    }
+
+                    layer.draw_text_group(section.text, clip_bounds, transformation);
                 }
-
-                layer.draw_text_group(text, clip_bounds, transformation);
             }
             Geometry::Cache(cache) => {
-                layer.draw_primitive_cache(cache.primitives, cache.clip_bounds, transformation);
+                for (i, section) in cache.sections.iter().enumerate() {
+                    if i > 0 {
+                        self.layers.split();
+                    }
 
-                for image in cache.images.iter() {
-                    layer.draw_image(image.clone(), transformation);
+                    let (layer, transformation) = self.layers.current_mut();
+
+                    for group in &section.primitives {
+                        layer.draw_primitive_cache(
+                            group.items.clone(),
+                            group.clip_bounds,
+                            transformation,
+                        );
+                    }
+
+                    for image in section.images.iter() {
+                        layer.draw_image(image.clone(), transformation);
+                    }
+
+                    layer.draw_text_cache(section.text.clone(), cache.clip_bounds, transformation);
                 }
-
-                layer.draw_text_cache(cache.text, cache.clip_bounds, transformation);
             }
         }
     }

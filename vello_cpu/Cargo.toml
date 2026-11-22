@@ -41,3 +41,7 @@ resvg.optional = true
 [[test]]
 name = "canvas_text_alignment"
 required-features = ["geometry"]
+
+[[test]]
+name = "canvas_order"
+required-features = ["geometry", "image"]
