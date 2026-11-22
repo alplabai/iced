@@ -2,6 +2,7 @@ use crate::core::text::LineHeight;
 use crate::core::{self, Pixels, Point, Radians, Rectangle, Size, Svg, Vector};
 use crate::graphics::cache::{self, Cached};
 use crate::graphics::geometry::fill::{self, Fill};
+use crate::graphics::geometry::section::{Kind, Sections};
 use crate::graphics::geometry::stroke::{self, Stroke};
 use crate::graphics::geometry::{self, Path, Style};
 use crate::graphics::{self, Gradient, Image, Text};
@@ -11,12 +12,30 @@ use vello_cpu::peniko;
 
 use std::sync::Arc;
 
+/// Some items that share the same clip bounds.
+#[derive(Debug, Clone)]
+pub struct Clipped<T> {
+    pub clip_bounds: Rectangle,
+    pub items: T,
+}
+
+/// A part of a [`Geometry`] that a single layer can draw in order: primitives
+/// first, then images, and text last. Text and images carry their own clip
+/// bounds, so only primitives are grouped by clip.
+#[derive(Debug, Default)]
+pub struct Section {
+    pub primitives: Vec<Clipped<Vec<Primitive>>>,
+    pub images: Vec<graphics::Image>,
+    pub text: Vec<Text>,
+}
+
+/// Normally a [`Geometry::Live`] has a single [`Section`]; more are only needed
+/// when drawing in call order cannot be done in one layer (e.g. a shape drawn
+/// over text).
 #[derive(Debug)]
 pub enum Geometry {
     Live {
-        text: Vec<Text>,
-        images: Vec<graphics::Image>,
-        primitives: Vec<Primitive>,
+        sections: Vec<Section>,
         clip_bounds: Rectangle,
     },
     Cache(Cache),
@@ -63,10 +82,15 @@ impl Primitive {
 
 #[derive(Debug, Clone)]
 pub struct Cache {
-    pub text: Arc<[Text]>,
-    pub images: Arc<[graphics::Image]>,
-    pub primitives: Arc<[Primitive]>,
+    pub sections: Arc<[CachedSection]>,
     pub clip_bounds: Rectangle,
+}
+
+#[derive(Debug, Clone)]
+pub struct CachedSection {
+    pub primitives: Vec<Clipped<Arc<[Primitive]>>>,
+    pub images: Arc<[graphics::Image]>,
+    pub text: Arc<[Text]>,
 }
 
 impl Cached for Geometry {
@@ -79,14 +103,24 @@ impl Cached for Geometry {
     fn cache(self, _group: cache::Group, _previous: Option<Cache>) -> Cache {
         match self {
             Self::Live {
-                primitives,
-                images,
-                text,
+                sections,
                 clip_bounds,
             } => Cache {
-                primitives: Arc::from(primitives),
-                images: Arc::from(images),
-                text: Arc::from(text),
+                sections: sections
+                    .into_iter()
+                    .map(|section| CachedSection {
+                        primitives: section
+                            .primitives
+                            .into_iter()
+                            .map(|group| Clipped {
+                                clip_bounds: group.clip_bounds,
+                                items: Arc::from(group.items),
+                            })
+                            .collect(),
+                        images: Arc::from(section.images),
+                        text: Arc::from(section.text),
+                    })
+                    .collect(),
                 clip_bounds,
             },
             Self::Cache(cache) => cache,
@@ -99,9 +133,7 @@ pub struct Frame {
     clip_bounds: Rectangle,
     transform: kurbo::Affine,
     stack: Vec<kurbo::Affine>,
-    primitives: Vec<Primitive>,
-    images: Vec<graphics::Image>,
-    text: Vec<Text>,
+    sections: Sections<Section>,
 }
 
 impl Frame {
@@ -109,11 +141,39 @@ impl Frame {
         Self {
             clip_bounds: bounds,
             stack: Vec::new(),
-            primitives: Vec::new(),
-            images: Vec::new(),
-            text: Vec::new(),
+            sections: Sections::new(),
             transform: kurbo::Affine::IDENTITY,
         }
+    }
+
+    fn push_primitive(&mut self, primitive: Primitive) {
+        let clip_bounds = self.clip_bounds;
+
+        push_clipped(
+            &mut self.sections.begin(Kind::Shape).primitives,
+            clip_bounds,
+            primitive,
+        );
+    }
+}
+
+/// Adds an item to the last group if it has the same clip bounds. Otherwise,
+/// it starts a new group.
+fn push_clipped<T>(groups: &mut Vec<Clipped<Vec<T>>>, clip_bounds: Rectangle, item: T) {
+    match groups.last_mut() {
+        Some(group) if group.clip_bounds == clip_bounds => group.items.push(item),
+        _ => groups.push(Clipped {
+            clip_bounds,
+            items: vec![item],
+        }),
+    }
+}
+
+/// Appends a group, merging it with the last one if it has the same clip bounds.
+fn append_clipped<T>(groups: &mut Vec<Clipped<Vec<T>>>, mut group: Clipped<Vec<T>>) {
+    match groups.last_mut() {
+        Some(last) if last.clip_bounds == group.clip_bounds => last.items.append(&mut group.items),
+        _ => groups.push(group),
     }
 }
 
@@ -147,7 +207,7 @@ impl geometry::frame::Backend for Frame {
         let path = self.transform * convert_path(path);
         let fill = fill.into();
 
-        self.primitives.push(Primitive::Fill {
+        self.push_primitive(Primitive::Fill {
             path,
             paint: into_paint(fill.style, self.transform),
             rule: into_fill_rule(fill.rule),
@@ -158,7 +218,7 @@ impl geometry::frame::Backend for Frame {
         let path = self.transform * convert_path(&Path::rectangle(top_left, size));
         let fill = fill.into();
 
-        self.primitives.push(Primitive::Fill {
+        self.push_primitive(Primitive::Fill {
             path,
             paint: into_paint(fill.style, self.transform),
             rule: into_fill_rule(fill.rule),
@@ -169,7 +229,7 @@ impl geometry::frame::Backend for Frame {
         let path = self.transform * convert_path(path);
         let stroke = stroke.into();
 
-        self.primitives.push(Primitive::Stroke {
+        self.push_primitive(Primitive::Stroke {
             path,
             paint: into_paint(stroke.style, self.transform),
             stroke: into_stroke(&stroke),
@@ -218,7 +278,9 @@ impl geometry::frame::Backend for Frame {
                 )
             };
 
-            self.text.push(Text::Cached {
+            let clip_bounds = self.clip_bounds;
+
+            self.sections.begin(Kind::Text).text.push(Text::Cached {
                 content: text.content,
                 bounds,
                 color: text.color,
@@ -230,7 +292,7 @@ impl geometry::frame::Backend for Frame {
                 shaping: text.shaping,
                 wrapping: text.wrapping,
                 ellipsis: text.ellipsis,
-                clip_bounds: self.clip_bounds,
+                clip_bounds,
             });
         } else {
             text.draw_with(|path, color| self.fill(&path, color));
@@ -257,9 +319,26 @@ impl geometry::frame::Backend for Frame {
     }
 
     fn paste(&mut self, frame: Self) {
-        self.primitives.extend(frame.primitives);
-        self.text.extend(frame.text);
-        self.images.extend(frame.images);
+        for section in frame.sections.finish(|_| {}) {
+            if !section.primitives.is_empty() {
+                let current = self.sections.begin(Kind::Shape);
+
+                for group in section.primitives {
+                    append_clipped(&mut current.primitives, group);
+                }
+            }
+
+            if !section.images.is_empty() {
+                self.sections
+                    .begin(Kind::Image)
+                    .images
+                    .extend(section.images);
+            }
+
+            if !section.text.is_empty() {
+                self.sections.begin(Kind::Text).text.extend(section.text);
+            }
+        }
     }
 
     fn translate(&mut self, translation: Vector) {
@@ -287,9 +366,7 @@ impl geometry::frame::Backend for Frame {
 
     fn into_geometry(self) -> Geometry {
         Geometry::Live {
-            primitives: self.primitives,
-            images: self.images,
-            text: self.text,
+            sections: self.sections.finish(|_| {}),
             clip_bounds: self.clip_bounds,
         }
     }
@@ -301,11 +378,16 @@ impl geometry::frame::Backend for Frame {
 
         image.rotation += external_rotation;
 
-        self.images.push(graphics::Image::Raster {
-            image,
-            bounds,
-            clip_bounds: self.clip_bounds,
-        });
+        let clip_bounds = self.clip_bounds;
+
+        self.sections
+            .begin(Kind::Image)
+            .images
+            .push(graphics::Image::Raster {
+                image,
+                bounds,
+                clip_bounds,
+            });
     }
 
     fn draw_svg(&mut self, bounds: Rectangle, svg: impl Into<Svg>) {
@@ -315,10 +397,12 @@ impl geometry::frame::Backend for Frame {
 
         svg.rotation += external_rotation;
 
-        self.images.push(Image::Vector {
+        let clip_bounds = self.clip_bounds;
+
+        self.sections.begin(Kind::Image).images.push(Image::Vector {
             svg,
             bounds,
-            clip_bounds: self.clip_bounds,
+            clip_bounds,
         });
     }
 }
@@ -456,16 +540,14 @@ mod tests {
 
         DrawPrimitive::draw_primitive(&mut frame, bounds, ());
 
-        let Geometry::Live {
-            primitives,
-            images,
-            text,
-            ..
-        } = frame.into_geometry()
-        else {
+        let Geometry::Live { sections, .. } = frame.into_geometry() else {
             unreachable!("a new frame is live");
         };
 
-        assert!(primitives.is_empty() && images.is_empty() && text.is_empty());
+        assert!(
+            sections
+                .iter()
+                .all(|s| s.primitives.is_empty() && s.images.is_empty() && s.text.is_empty())
+        );
     }
 }

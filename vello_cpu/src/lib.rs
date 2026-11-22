@@ -158,11 +158,17 @@ impl Renderer {
                 renderer.push_clip_path(
                     &into_rect(clip_bounds * viewport.scale_factor()).to_path(ACCURACY),
                 );
+                // Primitives are in the coordinates of their frame, not of
+                // their clip, so a clipped child frame must not shift them.
+                let transformation =
+                    Transformation::scale(viewport.scale_factor()) * group.transformation();
+                let translation = transformation.translation();
+
                 renderer.set_transform(
-                    kurbo::Affine::scale(f64::from(viewport.scale_factor())).pre_translate(
+                    kurbo::Affine::scale(f64::from(transformation.scale_factor())).then_translate(
                         kurbo::Vec2 {
-                            x: f64::from(clip_bounds.x),
-                            y: f64::from(clip_bounds.y),
+                            x: f64::from(translation.x),
+                            y: f64::from(translation.y),
                         },
                     ),
                 );
@@ -582,31 +588,53 @@ impl graphics::geometry::Renderer for Renderer {
     fn draw_geometry(&mut self, geometry: Self::Geometry) {
         pub use geometry::Geometry;
 
-        let (layer, transformation) = self.layers.current_mut();
-
         match geometry {
             Geometry::Live {
-                primitives,
-                images,
-                text,
+                sections,
                 clip_bounds,
             } => {
-                layer.draw_primitive_group(primitives, clip_bounds, transformation);
+                for (i, section) in sections.into_iter().enumerate() {
+                    // A later section must draw above the earlier ones, which
+                    // a single layer cannot guarantee.
+                    if i > 0 {
+                        self.layers.split();
+                    }
 
-                for image in images {
-                    layer.draw_image(image, transformation);
+                    let (layer, transformation) = self.layers.current_mut();
+
+                    for group in section.primitives {
+                        layer.draw_primitive_group(group.items, group.clip_bounds, transformation);
+                    }
+
+                    for image in section.images {
+                        layer.draw_image(image, transformation);
+                    }
+
+                    layer.draw_text_group(section.text, clip_bounds, transformation);
                 }
-
-                layer.draw_text_group(text, clip_bounds, transformation);
             }
             Geometry::Cache(cache) => {
-                layer.draw_primitive_cache(cache.primitives, cache.clip_bounds, transformation);
+                for (i, section) in cache.sections.iter().enumerate() {
+                    if i > 0 {
+                        self.layers.split();
+                    }
 
-                for image in cache.images.iter() {
-                    layer.draw_image(image.clone(), transformation);
+                    let (layer, transformation) = self.layers.current_mut();
+
+                    for group in &section.primitives {
+                        layer.draw_primitive_cache(
+                            group.items.clone(),
+                            group.clip_bounds,
+                            transformation,
+                        );
+                    }
+
+                    for image in section.images.iter() {
+                        layer.draw_image(image.clone(), transformation);
+                    }
+
+                    layer.draw_text_cache(section.text.clone(), cache.clip_bounds, transformation);
                 }
-
-                layer.draw_text_cache(cache.text, cache.clip_bounds, transformation);
             }
         }
     }
