@@ -46,20 +46,16 @@ pub struct Text {
     pub ellipsis: Ellipsis,
 }
 
-/// The largest size, in logical pixels after the frame transform, that
-/// `fill_text` draws from the glyph atlas (wgpu) or the glyph cache
-/// (tiny_skia); bigger text is drawn as vector outlines
-/// ([`Text::visit_glyphs`]), filled by the geometry backend, and stays sharp at
-/// any size.
+/// The largest size, in logical pixels after the frame transform, that the
+/// wgpu `fill_text` draws from the glyph atlas; bigger text is drawn as vector
+/// outlines ([`Text::visit_glyphs`]), filled by the geometry backend, and stays
+/// sharp at any size.
 ///
-/// wgpu: one glyph bitmap this size takes a large share of an atlas texture.
-/// The value assumes a desktop device whose `max_texture_dimension_2d` is at
-/// least 4096 at a display scale factor of 2 or less (the frame does not know
-/// the scale factor, so this compares logical pixels); a WebGL2 or downlevel
+/// One glyph bitmap this size takes a large share of an atlas texture. The
+/// value assumes a desktop device whose `max_texture_dimension_2d` is at least
+/// 4096 at a display scale factor of 2 or less (the frame does not know the
+/// scale factor, so this compares logical pixels); a WebGL2 or downlevel
 /// device (2048) needs a lower value.
-///
-/// tiny_skia has no atlas: the reason there is the memory of the CPU glyph
-/// cache, which holds a bitmap per glyph per size.
 ///
 /// The outlines are lyon meshes. Like every canvas mesh they are smoothed only
 /// when the application enables multisampling (`antialiasing(true)`); atlas

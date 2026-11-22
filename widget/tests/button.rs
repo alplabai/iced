@@ -237,8 +237,8 @@ fn focus_ring_is_drawn_over_an_image() {
             "image_ring_off"
         };
         let path = directory.join(format!("{name}.png"));
-        let tiny = directory.join(format!("{name}-tiny-skia.png"));
-        let _ = std::fs::remove_file(&tiny);
+        let rendered = directory.join(format!("{name}-vello_cpu.png"));
+        let _ = std::fs::remove_file(&rendered);
 
         let _ = simulator
             .snapshot(&theme)
@@ -246,13 +246,14 @@ fn focus_ring_is_drawn_over_an_image() {
             .matches_image(&path)
             .unwrap();
 
-        let mut reader =
-            png::Decoder::new(std::io::BufReader::new(std::fs::File::open(&tiny).unwrap()))
-                .read_info()
-                .unwrap();
+        let mut reader = png::Decoder::new(std::io::BufReader::new(
+            std::fs::File::open(&rendered).unwrap(),
+        ))
+        .read_info()
+        .unwrap();
         let mut bytes = vec![0; reader.output_buffer_size().unwrap()];
         let info = reader.next_frame(&mut bytes).unwrap();
-        let _ = std::fs::remove_file(&tiny);
+        let _ = std::fs::remove_file(&rendered);
 
         // Middle of the top edge at 2x.
         let i = (1 * info.width as usize + 30) * 4;
@@ -272,7 +273,7 @@ fn focus_ring_is_drawn_inside_the_button() {
 
     let render = |simulator: &mut Simulator<'_, Message>, name: &str| {
         let path = directory.join(format!("{name}.png"));
-        let _ = std::fs::remove_file(directory.join(format!("{name}-tiny-skia.png")));
+        let _ = std::fs::remove_file(directory.join(format!("{name}-vello_cpu.png")));
 
         let _ = simulator
             .snapshot(&theme)
@@ -280,7 +281,7 @@ fn focus_ring_is_drawn_inside_the_button() {
             .matches_image(&path)
             .unwrap();
 
-        let file = std::fs::File::open(directory.join(format!("{name}-tiny-skia.png"))).unwrap();
+        let file = std::fs::File::open(directory.join(format!("{name}-vello_cpu.png"))).unwrap();
         let mut reader = png::Decoder::new(std::io::BufReader::new(file))
             .read_info()
             .unwrap();
@@ -331,7 +332,7 @@ fn focus_ring_is_drawn_inside_the_button() {
     );
 
     for name in ["plain", "keyboard", "pointer"] {
-        let _ = std::fs::remove_file(directory.join(format!("button_ring_{name}-tiny-skia.png")));
+        let _ = std::fs::remove_file(directory.join(format!("button_ring_{name}-vello_cpu.png")));
     }
 }
 
@@ -375,8 +376,8 @@ fn focus_ring_is_clipped_by_the_viewport() {
             "clip_ring_off"
         };
         let path = directory.join(format!("{name}.png"));
-        let tiny = directory.join(format!("{name}-tiny-skia.png"));
-        let _ = std::fs::remove_file(&tiny);
+        let rendered = directory.join(format!("{name}-vello_cpu.png"));
+        let _ = std::fs::remove_file(&rendered);
 
         let _ = simulator
             .snapshot(&theme)
@@ -384,13 +385,14 @@ fn focus_ring_is_clipped_by_the_viewport() {
             .matches_image(&path)
             .unwrap();
 
-        let mut reader =
-            png::Decoder::new(std::io::BufReader::new(std::fs::File::open(&tiny).unwrap()))
-                .read_info()
-                .unwrap();
+        let mut reader = png::Decoder::new(std::io::BufReader::new(
+            std::fs::File::open(&rendered).unwrap(),
+        ))
+        .read_info()
+        .unwrap();
         let mut bytes = vec![0; reader.output_buffer_size().unwrap()];
         let info = reader.next_frame(&mut bytes).unwrap();
-        let _ = std::fs::remove_file(&tiny);
+        let _ = std::fs::remove_file(&rendered);
 
         // Bottom ring band (y 18..20 at 2x), below the 10px clip.
         let i = (38 * info.width as usize + 30) * 4;

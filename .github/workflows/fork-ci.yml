@@ -15,7 +15,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: --deny warnings
-  ICED_TEST_BACKEND: tiny-skia
+  ICED_TEST_BACKEND: vello_cpu
 jobs:
   fmt:
     name: fmt
