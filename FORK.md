@@ -22,6 +22,7 @@ Fork deltas inside `vello_cpu` (each with a test):
 - `tests/canvas_text_alignment.rs` (fork #100, ported from tiny_skia, `[[test]]` with `required-features = ["geometry"]`) passes all 6 cases.
 - #3215: a failed image load (and a 0x0 image) stays cached as an error; upstream's vello_cpu stored `None` and panicked with "Image should be allocated" on the next lookup.
 - #3542 fork rule: an SVG color mask scales the pixel coverage by the mask alpha, as on wgpu (upstream's vello_cpu ignored the mask alpha).
+- #3434: `vector.rs` honours `Svg::current_color`, as tiny_skia did: the color goes to usvg as a style sheet (alpha 0 to 1) and the tree and raster caches are keyed on it, so two current colors never share an entry. The #3542 mask still applies after rasterizing. Tests: `current_color_fills_svg`, `current_color_keeps_its_alpha`.
 - #3486: changed text damages 1 px more, like quads.
 - #3531: a frame drawn at another scale factor is not used for damage.
 - Layers are clipped to the viewport, so a renderer drawn without `reset()` (headless screenshots, test helpers) is not clipped away by its unbounded root layer.
@@ -34,7 +35,7 @@ Fork tiny_skia work lost with the crate, and where `vello_cpu` stands. (a) = vel
 
 - #3391 per-side border widths and colours: (b). vello_cpu strokes one uniform border and ignores `Border::top/right/bottom/left`; wgpu still draws them. Signex's `tab_pill` pixel tests pass on vello_cpu.
 - #3215 failed image loads: (a), fork delta above.
-- #3434 SVG `currentColor`: (b). vello_cpu ignores `Svg::current_color`, so a recoloured SVG draws with its own colours on the software path. No Signex code sets it.
+- #3434 SVG `currentColor`: (a), fork delta above.
 - #18 canvas draw order and child clips: (b), follow-up issue. vello_cpu's `Geometry::Live` keeps text, images and primitives in separate lists, so canvas text and images draw above shapes regardless of order, and `Frame::with_clip` child clips are ignored for shapes.
 - #22 canvas text past the glyph atlas limit as outlines: (b) or (c), not checked. vello_cpu has no glyph atlas, so it may not need it.
 - #3486, #3531, #3542 (dev #113, tiny_skia parts): (a), fork deltas above.
@@ -52,7 +53,6 @@ tiny_skia tests not ported, and the feature each pinned:
 - `engine.rs`: `asymmetric_border_uses_each_side_and_allows_a_disabled_edge`, `resolved_uniform_border_uses_the_resolved_side_color`, `rounded_same_color_border_preserves_asymmetric_widths`, `zero_radius_multicolor_border_skips_zero_width_sides`, `zero_radius_one_sided_border_only_paints_the_enabled_side` (#3391 per-side borders, (b)); `adjust_clip_mask_matches_a_fresh_mask` (#73 clip mask, (c)). Ported instead: `respects_clip_bounds_and_keeps_inner_ink`, `intersects_layer_clip_bounds`, `without_a_complete_size_is_masked` (#3412/#3445).
 - `geometry.rs`: `text_past_the_glyph_cache_limit_is_primitives_and_ordinary_text_is_text` (#22, (b) or (c)). Ported instead: `primitives_are_skipped` (#40).
 - `lib.rs`: `cached_geometry_keeps_draw_order`, `image_then_shape_is_drawn_in_draw_order`, `pasted_frames_keep_draw_order`, `shapes_are_drawn_over_images_in_draw_order`, `shape_then_image_use_a_single_layer`, `shapes_only_use_a_single_layer`, `clipped_frames_clip_images`, `clipped_frames_clip_shapes` (#18 draw order and child clips, (b)); `clip_mask_is_reset_per_frame_and_tracked_through_images` (#73 clip mask, (c)).
-- `vector.rs`: `current_color_fills_svg`, `current_color_keeps_its_alpha` (#3434 SVG `currentColor`, (b)).
 
 ## signex-v0.15.0-alpha.4 (unreleased, not tagged)
 
