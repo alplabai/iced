@@ -88,6 +88,8 @@ impl Renderer {
             let Some(layer_bounds) = layer.bounds.intersection(&viewport_bounds) else {
                 continue;
             };
+            let physical_layer_bounds =
+                layer_bounds * Transformation::scale(viewport.scale_factor());
 
             renderer.set_transform(scale);
             renderer.push_clip_path(&into_rect(layer_bounds).to_path(ACCURACY));
@@ -296,8 +298,10 @@ impl Renderer {
                             let transformation = Transformation::scale(viewport.scale_factor())
                                 * item.transformation();
 
+                            // `layer_bounds` is already in logical screen space:
+                            // only the scale applies, not the item transformation.
                             let Some(clip_bounds) = (*clip_bounds * transformation)
-                                .intersection(&(layer_bounds * transformation))
+                                .intersection(&physical_layer_bounds)
                             else {
                                 continue;
                             };
@@ -326,8 +330,10 @@ impl Renderer {
                             raw,
                             transformation,
                         } => {
+                            // Skip only this text: nothing is pushed yet, and the
+                            // rest of the layer still draws.
                             let Some(buffer) = raw.buffer.upgrade() else {
-                                return;
+                                continue;
                             };
 
                             let transformation =
@@ -335,17 +341,23 @@ impl Renderer {
 
                             let (width, height) = buffer.size();
 
-                            let clip_bounds = Rectangle::new(
+                            let text_bounds = Rectangle::new(
                                 raw.position,
                                 Size::new(
                                     width.unwrap_or(layer_bounds.width),
                                     height.unwrap_or(layer_bounds.height),
                                 ),
-                            );
+                            ) * transformation;
 
-                            renderer.push_clip_path(
-                                &into_rect(clip_bounds * transformation).to_path(ACCURACY),
-                            );
+                            // Fork #3412/#3445: raw text respects its own clip bounds.
+                            let Some(clip_bounds) = text_bounds
+                                .intersection(&(raw.clip_bounds * transformation))
+                                .and_then(|bounds| bounds.intersection(&physical_layer_bounds))
+                            else {
+                                continue;
+                            };
+
+                            renderer.push_clip_path(&into_rect(clip_bounds).to_path(ACCURACY));
 
                             self.text.draw_raw(
                                 &buffer,
@@ -546,6 +558,15 @@ impl core::text::Renderer for Renderer {
     ) {
         let (layer, transformation) = self.layers.current_mut();
         layer.draw_text(text, position, color, clip_bounds, transformation);
+    }
+}
+
+// Upstream's vello_cpu drops this impl, which tiny_skia had; the fallback
+// renderer needs it from both backends to draw raw `cosmic_text` buffers.
+impl graphics::text::Renderer for Renderer {
+    fn fill_raw(&mut self, raw: graphics::text::Raw) {
+        let (layer, transformation) = self.layers.current_mut();
+        layer.draw_text_raw(raw, transformation);
     }
 }
 
@@ -1423,5 +1444,184 @@ mod fork {
         assert!(frame.is_comparable(Color::BLACK, 1.0));
         assert!(!frame.is_comparable(Color::BLACK, 2.0));
         assert!(!frame.is_comparable(Color::WHITE, 1.0));
+    }
+
+    /// Canvas text inside a layer away from the origin, drawn through a
+    /// translation as a canvas in a scrollable or pane is.
+    #[cfg(feature = "geometry")]
+    #[test]
+    fn canvas_text_in_a_translated_layer_is_drawn() {
+        use crate::graphics::geometry::frame::Backend as _;
+        use crate::graphics::geometry::{Renderer as _, Text};
+
+        let offset = Vector::new(50.0, 50.0);
+        let mut renderer = Renderer::new(renderer::Settings::default());
+
+        renderer.start_layer(Rectangle::new(
+            Point::new(offset.x, offset.y),
+            Size::new(100.0, 100.0),
+        ));
+        renderer.start_transformation(Transformation::translate(offset.x, offset.y));
+
+        let mut frame = renderer.new_frame(Rectangle::with_size(Size::new(100.0, 100.0)));
+        frame.fill_text(Text {
+            content: "HHHH".to_owned(),
+            position: Point::new(10.0, 10.0),
+            color: Color::WHITE,
+            size: core::Pixels(20.0),
+            ..Text::default()
+        });
+        renderer.draw_geometry(frame.into_geometry());
+
+        renderer.end_transformation();
+        renderer.end_layer();
+
+        let rgba = renderer.screenshot(Size::new(200, 200), 1.0, Color::BLACK);
+        let ink = rgba
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|[r, g, b, _]| (*r, *g, *b) != (0, 0, 0))
+            .count();
+
+        assert!(ink > 0, "canvas text in a translated layer drew no pixels");
+    }
+}
+
+/// Fork #3412/#3445: raw text respects its own clip bounds and the layer's.
+#[cfg(test)]
+mod raw_text {
+    use super::*;
+    use crate::graphics::text::{self, Raw, Renderer as _, cosmic_text};
+    use iced_graphics::core::Renderer as _;
+    use iced_graphics::core::renderer::Headless as _;
+
+    use std::borrow::Cow;
+    use std::ops::Range;
+    use std::sync::Arc;
+
+    const WIDTH: u32 = 180;
+    const HEIGHT: u32 = 60;
+    const CLIP_EDGE: u32 = 48;
+
+    #[test]
+    fn respects_clip_bounds_and_keeps_inner_ink() {
+        let pixels = draw_raw_text(
+            (Some(WIDTH as f32), Some(HEIGHT as f32)),
+            clip_edge_bounds(),
+            canvas_bounds(),
+        );
+
+        assert!(has_ink(&pixels, 0..CLIP_EDGE));
+        assert!(!has_ink(&pixels, CLIP_EDGE..WIDTH));
+    }
+
+    #[test]
+    fn intersects_layer_clip_bounds() {
+        let pixels = draw_raw_text(
+            (Some(WIDTH as f32), Some(HEIGHT as f32)),
+            canvas_bounds(),
+            clip_edge_bounds(),
+        );
+
+        assert!(has_ink(&pixels, 0..CLIP_EDGE));
+        assert!(!has_ink(&pixels, CLIP_EDGE..WIDTH));
+    }
+
+    #[test]
+    fn without_a_complete_size_is_masked() {
+        for size in [
+            (None, None),
+            (Some(WIDTH as f32), None),
+            (None, Some(HEIGHT as f32)),
+        ] {
+            let pixels = draw_raw_text(size, clip_edge_bounds(), canvas_bounds());
+
+            assert!(has_ink(&pixels, 0..CLIP_EDGE));
+            assert!(!has_ink(&pixels, CLIP_EDGE..WIDTH));
+        }
+    }
+
+    #[test]
+    fn a_dropped_buffer_skips_only_its_text() {
+        let mut renderer = Renderer::new(renderer::Settings::default());
+
+        renderer.fill_raw(Raw {
+            buffer: std::sync::Weak::new(),
+            position: Point::ORIGIN,
+            color: Color::WHITE,
+            clip_bounds: canvas_bounds(),
+        });
+        renderer.fill_quad(
+            renderer::Quad {
+                bounds: canvas_bounds(),
+                ..renderer::Quad::default()
+            },
+            Background::Color(Color::from_rgb(1.0, 0.0, 0.0)),
+        );
+
+        let rgba = renderer.screenshot(Size::new(WIDTH, HEIGHT), 1.0, Color::BLACK);
+
+        assert_eq!(rgba[..4], [255, 0, 0, 255]);
+    }
+
+    /// Draws white `MMMMMMMM` at the origin on black and returns RGBA bytes.
+    fn draw_raw_text(
+        size: (Option<f32>, Option<f32>),
+        raw_clip_bounds: Rectangle,
+        layer_clip_bounds: Rectangle,
+    ) -> Vec<u8> {
+        let buffer = {
+            let mut font_system = text::font_system().write().expect("Write font system");
+
+            font_system.load_font(Cow::Borrowed(
+                include_bytes!("../../graphics/fonts/FiraSans-Regular.ttf").as_slice(),
+            ));
+
+            let mut buffer =
+                cosmic_text::Buffer::new(font_system.raw(), cosmic_text::Metrics::new(32.0, 40.0));
+
+            buffer.set_size(size.0, size.1);
+            buffer.set_wrap(cosmic_text::Wrap::None);
+            buffer.set_text(
+                "MMMMMMMM",
+                &cosmic_text::Attrs::new().family(cosmic_text::Family::Name("Fira Sans")),
+                cosmic_text::Shaping::Advanced,
+                None,
+            );
+            buffer.shape_until_scroll(font_system.raw(), false);
+
+            Arc::new(buffer)
+        };
+
+        let mut renderer = Renderer::new(renderer::Settings::default());
+
+        renderer.start_layer(layer_clip_bounds);
+        renderer.fill_raw(Raw {
+            buffer: Arc::downgrade(&buffer),
+            position: Point::ORIGIN,
+            color: Color::WHITE,
+            clip_bounds: raw_clip_bounds,
+        });
+        renderer.end_layer();
+
+        renderer.screenshot(Size::new(WIDTH, HEIGHT), 1.0, Color::BLACK)
+    }
+
+    fn canvas_bounds() -> Rectangle {
+        Rectangle::new(Point::ORIGIN, Size::new(WIDTH as f32, HEIGHT as f32))
+    }
+
+    fn clip_edge_bounds() -> Rectangle {
+        Rectangle::new(Point::ORIGIN, Size::new(CLIP_EDGE as f32, HEIGHT as f32))
+    }
+
+    fn has_ink(pixels: &[u8], x_range: Range<u32>) -> bool {
+        (0..HEIGHT).any(|y| {
+            x_range.clone().any(|x| {
+                let i = ((y * WIDTH + x) * 4) as usize;
+                pixels[i..i + 3] != [0, 0, 0]
+            })
+        })
     }
 }
