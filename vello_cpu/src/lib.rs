@@ -126,6 +126,10 @@ impl Renderer {
                 match border_sides::resolve(&quad.border, quad.bounds) {
                     border_sides::Resolved::Uniform { width, color } => {
                         if width > 0.0 && color.a > 0.0 {
+                            let width = width
+                                .min(quad.bounds.width / 2.0)
+                                .min(quad.bounds.height / 2.0);
+
                             renderer.set_paint(into_color(color));
                             renderer.set_stroke(vello_cpu::kurbo::Stroke::new(f64::from(width)));
 
@@ -134,8 +138,26 @@ impl Renderer {
                             if is_square {
                                 renderer.stroke_rect(&into_rect(bounds));
                             } else {
-                                renderer
-                                    .stroke_path(&into_rounded_rect(bounds, quad.border.radius));
+                                // As tiny_skia did: the stroke runs along the
+                                // inset of the outer curve, so its outer edge
+                                // matches the background's.
+                                let (radius, has_small_corner) =
+                                    inset_radius(quad.border.radius, width, bounds);
+
+                                // Corners tighter than the half width are
+                                // stroked square and masked by the outer curve.
+                                if has_small_corner {
+                                    renderer.push_clip_path(&into_rounded_rect(
+                                        quad.bounds,
+                                        clamp_radius(quad.border.radius, quad.bounds),
+                                    ));
+                                }
+
+                                renderer.stroke_path(&into_rounded_rect(bounds, radius));
+
+                                if has_small_corner {
+                                    renderer.pop_clip();
+                                }
                             }
                         }
                     }
@@ -462,6 +484,43 @@ fn into_point(point: Point) -> vello_cpu::kurbo::Point {
 
 fn into_vec2(vector: Vector) -> vello_cpu::kurbo::Vec2 {
     vello_cpu::kurbo::Vec2::new(f64::from(vector.x), f64::from(vector.y))
+}
+
+fn from_corners([top_left, top_right, bottom_right, bottom_left]: [f32; 4]) -> border::Radius {
+    border::Radius {
+        top_left,
+        top_right,
+        bottom_right,
+        bottom_left,
+    }
+}
+
+/// Limits each corner to what fits in `bounds`.
+fn clamp_radius(radius: border::Radius, bounds: Rectangle) -> border::Radius {
+    from_corners(
+        <[f32; 4]>::from(radius).map(|r| r.min(bounds.width / 2.0).min(bounds.height / 2.0)),
+    )
+}
+
+/// The radius of the stroke path of a uniform border `width` wide, inset by
+/// half of it, and whether any corner is too tight for that (stroked square).
+fn inset_radius(radius: border::Radius, width: f32, bounds: Rectangle) -> (border::Radius, bool) {
+    let mut has_small_corner = false;
+
+    let corners = <[f32; 4]>::from(radius).map(|r| {
+        let inset = if r == 0.0 {
+            0.0
+        } else if r > width / 2.0 {
+            r - width / 2.0
+        } else {
+            has_small_corner = true;
+            0.0
+        };
+
+        inset.min(bounds.width / 2.0).min(bounds.height / 2.0)
+    });
+
+    (from_corners(corners), has_small_corner)
 }
 
 fn into_rounded_rect(rectangle: Rectangle, radius: border::Radius) -> vello_cpu::kurbo::BezPath {

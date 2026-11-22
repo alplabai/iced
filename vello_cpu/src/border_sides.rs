@@ -311,6 +311,55 @@ mod tests {
         [color.r, color.g, color.b, color.a].map(|channel| (channel * 255.0).round() as u8)
     }
 
+    /// A 40x40 blue quad with a red uniform border on a black page.
+    fn draw_uniform(radius: f32, width: f32) -> Vec<u8> {
+        let mut renderer = Renderer::new(renderer::Settings::default());
+
+        renderer.fill_quad(
+            Quad {
+                bounds: Rectangle::with_size(Size::new(40.0, 40.0)),
+                border: Border::default()
+                    .rounded(radius)
+                    .width(width)
+                    .color(Color::from_rgb(1.0, 0.0, 0.0)),
+                ..Quad::default()
+            },
+            Background::Color(Color::from_rgb(0.0, 0.0, 1.0)),
+        );
+
+        renderer.screenshot(Size::new(40, 40), 1.0, Color::BLACK)
+    }
+
+    fn rgb_at(pixels: &[u8], x: usize, y: usize) -> [u8; 3] {
+        let i = (y * 40 + x) * 4;
+
+        [pixels[i], pixels[i + 1], pixels[i + 2]]
+    }
+
+    #[test]
+    fn a_wide_rounded_uniform_border_reaches_the_outer_curve() {
+        // Radius 16, width 10: the stroke follows the inset curve, so its outer
+        // edge is the background's. (5, 5) is inside the curve but outside a
+        // stroke that ran along the full radius.
+        let pixels = draw_uniform(16.0, 10.0);
+
+        assert_eq!(rgb_at(&pixels, 5, 5), [255, 0, 0]);
+        assert_eq!(rgb_at(&pixels, 1, 1), [0, 0, 0]);
+        assert_eq!(rgb_at(&pixels, 20, 20), [0, 0, 255]);
+    }
+
+    #[test]
+    fn a_tight_corner_with_a_wide_border_is_masked_by_the_outer_curve() {
+        // Radius 2 is under half the width: stroked square, masked rounded.
+        let pixels = draw_uniform(2.0, 10.0);
+
+        assert_eq!(rgb_at(&pixels, 3, 3), [255, 0, 0]);
+        // Inside the curve, where a stroke rounded by the full radius is not.
+        assert!(rgb_at(&pixels, 1, 1)[0] > 50);
+        // No border colour outside the rounded corner.
+        assert_eq!(rgb_at(&pixels, 0, 0)[0], 0);
+    }
+
     #[test]
     fn asymmetric_border_uses_each_side_and_allows_a_disabled_edge() {
         let pixels = draw_border(

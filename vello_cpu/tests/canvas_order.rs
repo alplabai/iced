@@ -7,7 +7,9 @@
 
 use iced_graphics::cache::{self, Cached};
 use iced_graphics::core::renderer::{self, Headless as _};
-use iced_graphics::core::{Color, Pixels, Point, Rectangle, Size};
+use iced_graphics::core::{
+    self, Color, Pixels, Point, Rectangle, Renderer as _, Size, Transformation, image,
+};
 use iced_graphics::geometry::frame::Backend as _;
 use iced_graphics::geometry::{MAX_ATLAS_TEXT_SIZE, Renderer as _, Text};
 use iced_vello_cpu::Renderer;
@@ -173,4 +175,160 @@ fn oversize_canvas_text_still_renders_ink() {
         rgba.as_chunks::<4>().0.iter().any(|p| p[..3] != BLACK),
         "oversize canvas text drew no pixels"
     );
+}
+
+/// The rows of the column `x` that hold `color`.
+fn rows_with(rgba: &[u8], width: u32, x: u32, color: [u8; 3]) -> Vec<u32> {
+    (0..rgba.len() as u32 / 4 / width)
+        .filter(|y| {
+            let start = ((y * width + x) * 4) as usize;
+
+            rgba[start..start + 3] == color
+        })
+        .collect()
+}
+
+/// A canvas in a layer clipped to 40x40, drawn through `transformation`,
+/// with a black fill at y 30..34 of its 40x60 frame.
+fn black_fill_in_layer(transformation: Transformation, scale_factor: f32) -> Vec<u32> {
+    let mut renderer = renderer();
+
+    renderer.start_layer(rectangle(0.0, 0.0, 40.0, 40.0));
+    renderer.with_transformation(transformation, |renderer| {
+        let mut frame = renderer.new_frame(Rectangle::with_size(Size::new(40.0, 60.0)));
+        frame.fill_rectangle(Point::new(0.0, 30.0), Size::new(40.0, 4.0), Color::BLACK);
+        renderer.draw_geometry(frame.into_geometry());
+    });
+    renderer.end_layer();
+
+    let side = (SIZE as f32 * scale_factor) as u32;
+    let rgba = renderer.screenshot(Size::new(side, side), scale_factor, Color::WHITE);
+
+    rows_with(&rgba, side, 5, BLACK)
+}
+
+#[test]
+fn shapes_in_a_scrolled_clipped_canvas_are_drawn_in_place() {
+    // Fill at y 30..34 scrolled up by 20: rows 10..14.
+    assert_eq!(
+        black_fill_in_layer(Transformation::translate(0.0, -20.0), 1.0),
+        (10..14).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn shapes_in_a_scrolled_clipped_canvas_are_drawn_in_place_at_scale_two() {
+    // The same at 2x: rows 20..28.
+    assert_eq!(
+        black_fill_in_layer(Transformation::translate(0.0, -20.0), 2.0),
+        (20..28).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn shapes_follow_a_scaled_layer_transformation() {
+    // Fill at y 30..34 at half size: rows 15..17.
+    assert_eq!(
+        black_fill_in_layer(Transformation::scale(0.5), 1.0),
+        (15..17).collect::<Vec<_>>()
+    );
+}
+
+const BLUE: [u8; 3] = [0, 0, 255];
+
+fn white_image(size: u32) -> core::Image {
+    core::Image::new(image::Handle::from_rgba(
+        size,
+        size,
+        vec![255u8; (size * size * 4) as usize],
+    ))
+    .filter_method(image::FilterMethod::Nearest)
+}
+
+fn blue_pixel(renderer: &mut Renderer, x: u32, y: u32) -> [u8; 3] {
+    pixel(&render(renderer, Color::from_rgb(0.0, 0.0, 1.0)), x, y)
+}
+
+#[test]
+fn image_then_shape_is_drawn_in_draw_order() {
+    let mut renderer = renderer();
+    let mut frame = frame(&renderer);
+
+    frame.draw_image(rectangle(0.0, 0.0, 20.0, 20.0), white_image(20));
+    frame.fill_rectangle(Point::new(10.0, 10.0), Size::new(20.0, 20.0), Color::BLACK);
+    renderer.draw_geometry(frame.into_geometry());
+
+    let rgba = render(&mut renderer, Color::from_rgb(0.0, 0.0, 1.0));
+
+    assert_eq!(pixel(&rgba, 5, 5), WHITE);
+    assert_eq!(pixel(&rgba, 15, 15), BLACK);
+    assert_eq!(pixel(&rgba, 25, 25), BLACK);
+    assert_eq!(pixel(&rgba, 35, 35), BLUE);
+}
+
+#[test]
+fn shapes_are_drawn_over_images_in_draw_order() {
+    let mut renderer = renderer();
+    let mut frame = frame(&renderer);
+
+    frame.fill_rectangle(Point::ORIGIN, Size::new(40.0, 40.0), Color::BLACK);
+    frame.draw_image(rectangle(10.0, 10.0, 20.0, 20.0), white_image(20));
+    frame.fill_rectangle(
+        Point::new(20.0, 20.0),
+        Size::new(20.0, 20.0),
+        Color::from_rgb(0.0, 1.0, 0.0),
+    );
+    renderer.draw_geometry(frame.into_geometry());
+
+    assert_eq!(renderer.layers().len(), 2);
+
+    let rgba = render(&mut renderer, Color::from_rgb(0.0, 0.0, 1.0));
+
+    assert_eq!(pixel(&rgba, 5, 5), BLACK);
+    assert_eq!(pixel(&rgba, 15, 15), WHITE);
+    assert_eq!(pixel(&rgba, 25, 25), [0, 255, 0]);
+    assert_eq!(pixel(&rgba, 35, 35), [0, 255, 0]);
+}
+
+#[test]
+fn shape_then_image_use_a_single_layer() {
+    let mut renderer = renderer();
+    let mut frame = frame(&renderer);
+
+    frame.fill_rectangle(Point::ORIGIN, Size::new(40.0, 40.0), Color::BLACK);
+    frame.draw_image(rectangle(10.0, 10.0, 20.0, 20.0), white_image(20));
+    renderer.draw_geometry(frame.into_geometry());
+
+    assert_eq!(renderer.layers().len(), 1);
+    assert_eq!(blue_pixel(&mut renderer, 5, 5), BLACK);
+    assert_eq!(blue_pixel(&mut renderer, 15, 15), WHITE);
+}
+
+#[test]
+fn shapes_only_use_a_single_layer() {
+    let mut renderer = renderer();
+    let mut frame = frame(&renderer);
+
+    frame.fill_rectangle(Point::ORIGIN, Size::new(40.0, 40.0), Color::BLACK);
+    frame.fill_rectangle(Point::new(10.0, 10.0), Size::new(20.0, 20.0), Color::WHITE);
+    renderer.draw_geometry(frame.into_geometry());
+
+    assert_eq!(renderer.layers().len(), 1);
+}
+
+#[test]
+fn clipped_frames_clip_images() {
+    let mut renderer = renderer();
+    let mut frame = frame(&renderer);
+
+    let mut child = frame.draft(rectangle(10.0, 10.0, 20.0, 20.0));
+    child.draw_image(rectangle(0.0, 0.0, 40.0, 40.0), white_image(40));
+    frame.paste(child);
+    renderer.draw_geometry(frame.into_geometry());
+
+    let rgba = render(&mut renderer, Color::from_rgb(0.0, 0.0, 1.0));
+
+    assert_eq!(pixel(&rgba, 5, 5), BLUE);
+    assert_eq!(pixel(&rgba, 15, 15), WHITE);
+    assert_eq!(pixel(&rgba, 35, 35), BLUE);
 }

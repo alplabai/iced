@@ -44,4 +44,4 @@ required-features = ["geometry"]
 
 [[test]]
 name = "canvas_order"
-required-features = ["geometry"]
+required-features = ["geometry", "image"]
