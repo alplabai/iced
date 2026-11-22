@@ -117,6 +117,13 @@ impl Frame {
     }
 }
 
+/// Custom primitives are renderer-specific and cannot be drawn by a
+/// software renderer, so they are skipped (fork #40: the fallback renderer
+/// needs both backends to implement it).
+impl<P> geometry::frame::DrawPrimitive<P> for Frame {
+    fn draw_primitive(&mut self, _bounds: Rectangle, _primitive: P) {}
+}
+
 impl geometry::frame::Backend for Frame {
     type Geometry = Geometry;
 
@@ -433,5 +440,32 @@ pub fn into_stroke(stroke: &Stroke<'_>) -> kurbo::Stroke {
             .collect(),
         dash_offset: stroke.line_dash.offset as f64,
         ..Default::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn primitives_are_skipped() {
+        use crate::graphics::geometry::frame::{Backend as _, DrawPrimitive};
+
+        let bounds = Rectangle::with_size(Size::new(10.0, 10.0));
+        let mut frame = Frame::new(bounds);
+
+        DrawPrimitive::draw_primitive(&mut frame, bounds, ());
+
+        let Geometry::Live {
+            primitives,
+            images,
+            text,
+            ..
+        } = frame.into_geometry()
+        else {
+            unreachable!("a new frame is live");
+        };
+
+        assert!(primitives.is_empty() && images.is_empty() && text.is_empty());
     }
 }
