@@ -4,6 +4,7 @@
 use iced_graphics as graphics;
 use iced_graphics::core;
 
+mod border_sides;
 mod layer;
 mod text;
 
@@ -114,33 +115,38 @@ impl Renderer {
 
                 renderer.set_paint(into_background(background, quad.bounds));
 
-                if quad.border.radius == border::Radius::default() {
+                let is_square = quad.border.radius == border::Radius::default();
+
+                if is_square {
                     renderer.fill_rect(&into_rect(quad.bounds));
-
-                    if quad.border.width > 0.0 && quad.border.color.a > 0.0 {
-                        renderer.set_paint(into_color(quad.border.color));
-                        renderer.set_stroke(vello_cpu::kurbo::Stroke::new(f64::from(
-                            quad.border.width,
-                        )));
-
-                        renderer
-                            .stroke_rect(&into_rect(quad.bounds.shrink(quad.border.width / 2.0)));
-                    }
                 } else {
                     renderer.fill_path(&into_rounded_rect(quad.bounds, quad.border.radius));
+                }
 
-                    if quad.border.width > 0.0 && quad.border.color.a > 0.0 {
-                        renderer.set_paint(into_color(quad.border.color));
-                        renderer.set_stroke(vello_cpu::kurbo::Stroke::new(f64::from(
-                            quad.border.width,
-                        )));
+                match border_sides::resolve(&quad.border, quad.bounds) {
+                    border_sides::Resolved::Uniform { width, color } => {
+                        if width > 0.0 && color.a > 0.0 {
+                            renderer.set_paint(into_color(color));
+                            renderer.set_stroke(vello_cpu::kurbo::Stroke::new(f64::from(width)));
 
-                        let border_rect = into_rounded_rect(
-                            quad.bounds.shrink(quad.border.width / 2.0),
+                            let bounds = quad.bounds.shrink(width / 2.0);
+
+                            if is_square {
+                                renderer.stroke_rect(&into_rect(bounds));
+                            } else {
+                                renderer
+                                    .stroke_path(&into_rounded_rect(bounds, quad.border.radius));
+                            }
+                        }
+                    }
+                    border_sides::Resolved::Sides { widths, colors } => {
+                        border_sides::draw_sides(
+                            renderer,
+                            quad.bounds,
                             quad.border.radius,
+                            widths,
+                            colors,
                         );
-
-                        renderer.stroke_path(&border_rect);
                     }
                 }
             }
