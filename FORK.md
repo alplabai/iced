@@ -28,11 +28,12 @@ Fork deltas inside `vello_cpu` (each with a test):
 - #3360 / canvas text clip: `Text::Cached` (canvas `fill_text`) intersects its clip with the layer bounds scaled to physical pixels; upstream multiplied the screen-space layer bounds by the item transformation, so canvas text in a layer away from the origin (scrollable, pane, clipped container) drew nothing. Test: `canvas_text_in_a_translated_layer_is_drawn`.
 - #3412/#3445: `Text::Raw` intersects `Raw::clip_bounds` with the text and layer bounds, and a dropped buffer skips only that text (upstream returned from `draw`, leaving a clip pushed and skipping every later layer). Tests ported from tiny_skia.
 - `impl graphics::text::Renderer` (`fill_raw`), which upstream's vello_cpu dropped and tiny_skia had: the fallback renderer needs it from both backends.
+- #3391: per-side border widths and colours (`src/border_sides.rs`), same semantics as the old tiny_skia code: a border with no side overrides keeps the uniform stroke; zero-width sides paint nothing; rounded corners keep asymmetric widths (elliptical inner corners). Tests ported from tiny_skia.
 - #40: `impl DrawPrimitive<P> for Frame` as a no-op, so `canvas::Frame::draw_primitive` compiles with wgpu + vello-cpu (the fallback `Frame` needs both backends to implement it). Test: `primitives_are_skipped`.
 
 Fork tiny_skia work lost with the crate, and where `vello_cpu` stands. (a) = vello_cpu does it (upstream or a fork delta above); (b) = worth re-porting to vello_cpu, follow-up; (c) = obsolete:
 
-- #3391 per-side border widths and colours: (b). vello_cpu strokes one uniform border and ignores `Border::top/right/bottom/left`; wgpu still draws them. Signex's `tab_pill` pixel tests pass on vello_cpu.
+- #3391 per-side border widths and colours: (a), fork delta above. Signex's `tab_pill` pixel tests pass on vello_cpu.
 - #3215 failed image loads: (a), fork delta above.
 - #3434 SVG `currentColor`: (b). vello_cpu ignores `Svg::current_color`, so a recoloured SVG draws with its own colours on the software path. No Signex code sets it.
 - #18 canvas draw order and child clips: (b), follow-up issue. vello_cpu's `Geometry::Live` keeps text, images and primitives in separate lists, so canvas text and images draw above shapes regardless of order, and `Frame::with_clip` child clips are ignored for shapes.
@@ -49,7 +50,7 @@ Fork tiny_skia work lost with the crate, and where `vello_cpu` stands. (a) = vel
 
 tiny_skia tests not ported, and the feature each pinned:
 
-- `engine.rs`: `asymmetric_border_uses_each_side_and_allows_a_disabled_edge`, `resolved_uniform_border_uses_the_resolved_side_color`, `rounded_same_color_border_preserves_asymmetric_widths`, `zero_radius_multicolor_border_skips_zero_width_sides`, `zero_radius_one_sided_border_only_paints_the_enabled_side` (#3391 per-side borders, (b)); `adjust_clip_mask_matches_a_fresh_mask` (#73 clip mask, (c)). Ported instead: `respects_clip_bounds_and_keeps_inner_ink`, `intersects_layer_clip_bounds`, `without_a_complete_size_is_masked` (#3412/#3445).
+- `engine.rs`: `adjust_clip_mask_matches_a_fresh_mask` (#73 clip mask, (c)). Ported instead: `respects_clip_bounds_and_keeps_inner_ink`, `intersects_layer_clip_bounds`, `without_a_complete_size_is_masked` (#3412/#3445), and the five per-side border tests (#3391, in `src/border_sides.rs`).
 - `geometry.rs`: `text_past_the_glyph_cache_limit_is_primitives_and_ordinary_text_is_text` (#22, (b) or (c)). Ported instead: `primitives_are_skipped` (#40).
 - `lib.rs`: `cached_geometry_keeps_draw_order`, `image_then_shape_is_drawn_in_draw_order`, `pasted_frames_keep_draw_order`, `shapes_are_drawn_over_images_in_draw_order`, `shape_then_image_use_a_single_layer`, `shapes_only_use_a_single_layer`, `clipped_frames_clip_images`, `clipped_frames_clip_shapes` (#18 draw order and child clips, (b)); `clip_mask_is_reset_per_frame_and_tracked_through_images` (#73 clip mask, (c)).
 - `vector.rs`: `current_color_fills_svg`, `current_color_keeps_its_alpha` (#3434 SVG `currentColor`, (b)).
