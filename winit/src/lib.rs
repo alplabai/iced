@@ -221,8 +221,9 @@ where
 
             // Spike (#131): run the instance only once Android has a native
             // window, so the first window and compositor get a real handle.
+            // Later resumes rebuild the surfaces for the new native window.
             #[cfg(target_os = "android")]
-            if !self.is_resumed {
+            {
                 self.is_resumed = true;
                 self.process_event(
                     event_loop,
@@ -920,6 +921,18 @@ async fn run_instance<P>(
                     event::Event::NewEvents(event::StartCause::Init) => {
                         for (_id, window) in window_manager.iter_mut() {
                             window.raw.request_redraw();
+                        }
+                    }
+                    // Spike (#131): Android destroys the native window on
+                    // suspend, so each surface must be rebuilt on resume.
+                    #[cfg(target_os = "android")]
+                    event::Event::Resumed => {
+                        if let Some(compositor) = &mut compositor {
+                            for (_id, window) in window_manager.iter_mut() {
+                                window.surface = compositor.create_surface(window.raw.clone());
+                                window.configure_surface(compositor);
+                                window.raw.request_redraw();
+                            }
                         }
                     }
                     event::Event::NewEvents(event::StartCause::ResumeTimeReached { .. }) => {
