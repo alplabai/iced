@@ -808,11 +808,21 @@ mod tests {
         assert_eq!(settings(backend::Api::OpenGL), wgpu::Backends::GL);
     }
 
+    /// An instance with the backends the compositor uses by default, so the
+    /// tests never create a device on a backend apps would not use (Intel's
+    /// Vulkan driver crashes in `vkCreateDescriptorPool` on Windows).
+    fn test_instance() -> wgpu::Instance {
+        wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: default_backends(),
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        })
+    }
+
     /// Creates a device with an adapter, if the machine has one.
     fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
         futures::executor::block_on(async {
             let instance =
-                wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+                test_instance();
 
             let adapter = instance
                 .request_adapter(&wgpu::RequestAdapterOptions {
@@ -878,7 +888,7 @@ mod tests {
     fn screenshot_returns_early_on_a_lost_device() {
         let (instance, adapter) = futures::executor::block_on(async {
             let instance =
-                wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+                test_instance();
             let adapter = instance
                 .request_adapter(&wgpu::RequestAdapterOptions::default())
                 .await
@@ -956,7 +966,7 @@ mod tests {
 
         let (instance, adapter) = futures::executor::block_on(async {
             let instance =
-                wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+                test_instance();
             let adapter = instance
                 .request_adapter(&wgpu::RequestAdapterOptions::default())
                 .await
