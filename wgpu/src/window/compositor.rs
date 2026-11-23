@@ -821,8 +821,7 @@ mod tests {
     /// Creates a device with an adapter, if the machine has one.
     fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
         futures::executor::block_on(async {
-            let instance =
-                test_instance();
+            let instance = test_instance();
 
             let adapter = instance
                 .request_adapter(&wgpu::RequestAdapterOptions {
@@ -887,8 +886,7 @@ mod tests {
     #[test]
     fn screenshot_returns_early_on_a_lost_device() {
         let (instance, adapter) = futures::executor::block_on(async {
-            let instance =
-                test_instance();
+            let instance = test_instance();
             let adapter = instance
                 .request_adapter(&wgpu::RequestAdapterOptions::default())
                 .await
@@ -965,8 +963,7 @@ mod tests {
         }
 
         let (instance, adapter) = futures::executor::block_on(async {
-            let instance =
-                test_instance();
+            let instance = test_instance();
             let adapter = instance
                 .request_adapter(&wgpu::RequestAdapterOptions::default())
                 .await
