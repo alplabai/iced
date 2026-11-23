@@ -1323,6 +1323,13 @@ async fn run_instance<P>(
                                 &mut renderer_settings,
                             );
                         } else {
+                            // A press in a caption region moves, maximizes or
+                            // opens the menu of the window instead of reaching
+                            // the widgets (Windows handles it natively).
+                            if window.caption_press(&window_event) {
+                                continue;
+                            }
+
                             if window.releases_grab(&window_event) {
                                 let _ =
                                     window.set_cursor_grab(crate::core::window::CursorGrab::None);

@@ -1,8 +1,10 @@
-//! A window that draws its own title bar on Windows 11 while keeping the
-//! native frame: resize borders, shadow, rounded corners and, through a
-//! caption region, native dragging, Aero Snap, double-click to maximize and
-//! the system menu. Its maximize button is a maximize region, so hovering it
-//! shows Snap Layouts.
+//! A window that draws its own title bar. On Windows 11 it keeps the native
+//! frame: resize borders, shadow, rounded corners and, through a caption
+//! region, native dragging, Aero Snap, double-click to maximize and the system
+//! menu. Its maximize button is a maximize region, so hovering it shows Snap
+//! Layouts. On Linux and macOS the window has no decorations, and the caption
+//! region drags it, toggles maximization on a double click and opens the
+//! window menu on a right click.
 //!
 //! The window events it receives are printed to stdout, so a test script can
 //! follow them.
@@ -17,10 +19,15 @@ pub fn main() -> iced::Result {
         ..Default::default()
     };
 
-    // Windows 11 only; other platforms keep their native title bar.
+    // Windows 11 keeps the native frame around the app-drawn title bar; the
+    // other platforms draw the whole window.
     #[cfg(target_os = "windows")]
     {
         settings.platform_specific.extend_content_into_title_bar = true;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        settings.decorations = false;
     }
 
     iced::application(TitleBar::default, TitleBar::update, TitleBar::view)

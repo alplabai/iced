@@ -1,3 +1,5 @@
+#[cfg(any(not(target_os = "windows"), test))]
+mod caption;
 pub mod centering;
 mod enablement;
 mod mode_flags;
@@ -408,6 +410,10 @@ where
                 title_bar_caption: Vec::new(),
                 #[cfg(target_os = "windows")]
                 title_bar_maximize: None,
+                #[cfg(not(target_os = "windows"))]
+                title_bar_caption: Vec::new(),
+                #[cfg(not(target_os = "windows"))]
+                caption_click: None,
                 last_frame: None,
                 frame_burst: 0,
             },
@@ -530,6 +536,13 @@ where
         winit::dpi::PhysicalPosition<i32>,
         winit::dpi::PhysicalSize<u32>,
     )>,
+    /// Caption regions in logical window coordinates, acted on by
+    /// [`Window::caption_press`].
+    #[cfg(not(target_os = "windows"))]
+    title_bar_caption: Vec<Rectangle>,
+    /// The last press handled in a caption region, to detect double clicks.
+    #[cfg(not(target_os = "windows"))]
+    caption_click: Option<mouse::Click>,
     last_frame: Option<Instant>,
     frame_burst: usize,
 }
@@ -661,8 +674,9 @@ where
     }
 
     /// Hands the title bar regions reported by the widgets to the platform.
-    /// Only Windows windows that extend into the title bar use them; a
-    /// disabled window reports none, so a click cannot move it.
+    /// On Windows only windows that extend into the title bar use them; on
+    /// other platforms [`Window::caption_press`] acts on the caption regions.
+    /// A disabled window reports none, so a click cannot move it.
     pub fn request_title_bar(&mut self, title_bar: core::window::TitleBar) {
         #[cfg(target_os = "windows")]
         {
@@ -696,7 +710,73 @@ where
         }
 
         #[cfg(not(target_os = "windows"))]
-        let _ = title_bar;
+        {
+            self.title_bar_caption = if self.enabled {
+                title_bar.caption
+            } else {
+                Vec::new()
+            };
+        }
+    }
+
+    /// On platforms without native caption hit testing, handles a mouse press
+    /// inside a caption region the way the native caption would: a left
+    /// press drags the window, a double click toggles maximization and a
+    /// right press opens the window menu. Returns whether it handled the
+    /// event, which then does not reach the widgets. Always `false` on
+    /// Windows, where the system handles caption regions.
+    pub fn caption_press(&mut self, event: &winit::event::WindowEvent) -> bool {
+        #[cfg(not(target_os = "windows"))]
+        {
+            let winit::event::WindowEvent::MouseInput {
+                state: winit::event::ElementState::Pressed,
+                button,
+                ..
+            } = event
+            else {
+                return false;
+            };
+
+            let mouse::Cursor::Available(position) = self.state.cursor() else {
+                return false;
+            };
+
+            let button = conversion::mouse_button(*button);
+            let click = mouse::Click::new(position, button, self.caption_click);
+
+            let Some(action) =
+                caption::action(&self.title_bar_caption, position, button, click.kind())
+            else {
+                return false;
+            };
+
+            self.caption_click = Some(click);
+
+            match action {
+                caption::Action::Drag => {
+                    // Unsupported on some platforms (web); the press is still
+                    // the caption's, as on Windows.
+                    let _ = self.raw.drag_window();
+                }
+                caption::Action::ToggleMaximize => {
+                    self.raw.set_maximized(!self.raw.is_maximized());
+                }
+                caption::Action::ShowMenu => {
+                    self.raw.show_window_menu(LogicalPosition {
+                        x: position.x,
+                        y: position.y,
+                    });
+                }
+            }
+
+            true
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            let _ = event;
+            false
+        }
     }
 
     pub fn request_input_method(&mut self, input_method: InputMethod) {

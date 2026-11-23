@@ -1,14 +1,23 @@
 //! Mark a part of an application-drawn title bar, such as the empty space of a
 //! title strip, as a native title bar region.
 //!
-//! This only has an effect on Windows, in a window created with
-//! `extend_content_into_title_bar` in its Windows
-//! [`PlatformSpecific`](crate::core::window::settings::PlatformSpecific)
-//! settings. There a [`Caption`](window::TitleBarRegion::Caption) region
-//! behaves like the native caption: dragging it moves the window and snaps it
-//! to screen edges, double-clicking it maximizes the window and right-clicking
-//! it opens the system menu. The wrapped content still draws, but receives no
-//! mouse input while the regions are active.
+//! A [`Caption`](window::TitleBarRegion::Caption) region behaves like the
+//! native caption: dragging it moves the window, double-clicking it toggles
+//! maximization and right-clicking it opens the window menu. The wrapped
+//! content still draws, but receives no mouse presses while the regions are
+//! active.
+//!
+//! - On Windows 11 it needs a window created with
+//!   `extend_content_into_title_bar` in its Windows
+//!   [`PlatformSpecific`](crate::core::window::settings::PlatformSpecific)
+//!   settings, and the system does the work: the region is the real caption,
+//!   so dragging also snaps the window to screen edges.
+//! - On Linux (Wayland, X11) and macOS, typically in a window with
+//!   `decorations: false`, the runtime turns a press in the region into the
+//!   matching window request: `drag_window`, a maximize toggle (macOS does not
+//!   follow the user's "double-click a title bar to" setting) or
+//!   `show_window_menu`, which does nothing where the platform has no window
+//!   menu.
 //!
 //! Wrap the application's maximize button in a
 //! [`Maximize`](window::TitleBarRegion::Maximize) region to get the Windows 11
