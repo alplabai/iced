@@ -513,6 +513,9 @@ pub use iced_highlighter as highlighter;
 #[cfg(feature = "wgpu-bare")]
 pub use iced_renderer::wgpu::wgpu;
 
+#[cfg(target_os = "android")]
+pub use iced_winit::android;
+
 mod error;
 
 #[cfg(feature = "hot")]

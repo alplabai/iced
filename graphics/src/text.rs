@@ -194,6 +194,17 @@ pub fn font_system() -> &'static RwLock<FontSystem> {
             raw.db_mut().set_monospace_family("Consolas");
         }
 
+        // fontdb has no Android branch in `load_system_fonts`, so nothing is
+        // found unless the system font directory is scanned here.
+        #[cfg(target_os = "android")]
+        {
+            raw.db_mut().load_fonts_dir("/system/fonts");
+            #[cfg(not(feature = "fira-sans"))]
+            raw.db_mut().set_sans_serif_family("Roboto");
+            raw.db_mut().set_serif_family("Noto Serif");
+            raw.db_mut().set_monospace_family("Droid Sans Mono");
+        }
+
         RwLock::new(FontSystem {
             raw,
             loaded_fonts: HashSet::new(),

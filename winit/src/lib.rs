@@ -29,6 +29,8 @@ pub use program::graphics;
 pub use runtime::futures;
 pub use winit;
 
+#[cfg(target_os = "android")]
+pub mod android;
 pub mod clipboard;
 pub mod conversion;
 
@@ -93,6 +95,13 @@ where
         let _ = event_loop
             .with_default_menu(settings.default_menu)
             .with_terminate_requests(!settings.exit_on_quit_request);
+    }
+
+    #[cfg(target_os = "android")]
+    {
+        use winit::platform::android::EventLoopBuilderExtAndroid;
+
+        let _ = event_loop.with_android_app(android::app());
     }
 
     let event_loop = event_loop.build().expect("Create event loop");
@@ -174,6 +183,10 @@ where
 
         #[cfg(target_arch = "wasm32")]
         canvas: Option<web_sys::HtmlCanvasElement>,
+
+        /// Android has no native window before the first `resumed`.
+        #[cfg(target_os = "android")]
+        is_resumed: bool,
     }
 
     let runner = Runner {
@@ -188,6 +201,9 @@ where
 
         #[cfg(target_arch = "wasm32")]
         canvas: None,
+
+        #[cfg(target_os = "android")]
+        is_resumed: false,
     };
 
     boot_span.finish();
@@ -200,6 +216,17 @@ where
                         .system_theme()
                         .map(conversion::theme_mode)
                         .unwrap_or_default(),
+                );
+            }
+
+            // Spike (#131): run the instance only once Android has a native
+            // window, so the first window and compositor get a real handle.
+            #[cfg(target_os = "android")]
+            if !self.is_resumed {
+                self.is_resumed = true;
+                self.process_event(
+                    event_loop,
+                    Event::EventLoopAwakened(winit::event::Event::Resumed),
                 );
             }
         }
@@ -345,6 +372,12 @@ where
             }
 
             self.sender.start_send(event).expect("Send event");
+
+            // Events queue in the channel until the first `resumed`.
+            #[cfg(target_os = "android")]
+            if !self.is_resumed {
+                return;
+            }
 
             loop {
                 let poll = self.instance.as_mut().poll(&mut self.context);

@@ -39,8 +39,11 @@ winit.workspace = true
 sysinfo.workspace = true
 sysinfo.optional = true
 
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+[target.'cfg(not(any(target_arch = "wasm32", target_os = "android")))'.dependencies]
 arboard.workspace = true
+
+[target.'cfg(target_os = "android")'.dependencies]
+winit = { workspace = true, features = ["android-native-activity"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 web-sys.workspace = true
