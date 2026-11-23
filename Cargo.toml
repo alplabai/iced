@@ -260,7 +260,7 @@ wgpu = { version = "30", default-features = false, features = ["std", "wgsl"] }
 # + an Occluded event after a macOS fullscreen exit ends (#107)
 # + Windows content extended into the title bar: geometry (#114), caption and maximize regions (#105).
 # + one Resized per fullscreen change on Windows (#111).
-winit = { git = "https://github.com/alplabai/winit.git", rev = "757269b13c4a0874fb6200fde8231c5094ad7718", default-features = false, features = ["rwh_06"] }
+winit = { git = "https://github.com/alplabai/winit.git", rev = "444a4745ba700ca7494a2708debc946c285737fb", default-features = false, features = ["rwh_06"] }
 
 [workspace.lints.rust]
 rust_2018_idioms = { level = "deny", priority = -1 }
