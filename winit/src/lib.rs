@@ -1147,6 +1147,7 @@ async fn run_instance<P>(
                         if let user_interface::State::Updated {
                             redraw_request,
                             input_method,
+                            title_bar,
                             mouse_interaction,
                             clipboard: clipboard_requests,
                             ..
@@ -1154,6 +1155,7 @@ async fn run_instance<P>(
                         {
                             window.request_redraw(redraw_request);
                             window.request_input_method(input_method);
+                            window.request_title_bar(title_bar);
                             window.update_mouse(&cursors, mouse_interaction);
 
                             run_clipboard(&mut proxy, &mut clipboard, clipboard_requests, id);
