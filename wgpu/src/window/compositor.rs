@@ -352,8 +352,8 @@ fn keep_contents_unscaled(surface: &wgpu::Surface<'_>) {
 
     let layer = surface.render_layer().lock();
 
-    // The gravity names assume y pointing down, but this layer is not flipped
-    // (y points up), so `Bottom` lands on the window's top edge on screen.
+    // winit's view is flipped, so the layer's `contentsAreFlipped` is YES and
+    // `Bottom` aligns the content to the window's top edge on screen.
     // SAFETY: `kCAGravityBottomLeft` is a constant string provided by QuartzCore.
     layer.setContentsGravity(unsafe { objc2_quartz_core::kCAGravityBottomLeft });
 }
