@@ -288,3 +288,21 @@ useless_conversion = "deny"
 
 [workspace.lints.rustdoc]
 broken_intra_doc_links = "forbid"
+
+# Fork: wgpu 30.0.1 with DX12 window swapchains on `DXGI_SCALING_NONE`, so the
+# last frame is not stretched while a window resizes (#132). The whole wgpu
+# family comes from the same rev, so the crates agree on one copy of each.
+# `[patch]` only applies to the root workspace: applications pinning this fork
+# (Signex) need the same entries.
+[patch.crates-io]
+naga = { git = "https://github.com/alplabai/wgpu.git", rev = "e738655e169b416fb53c31e3ceb9581d1a63035e" }
+naga-types = { git = "https://github.com/alplabai/wgpu.git", rev = "e738655e169b416fb53c31e3ceb9581d1a63035e" }
+wgpu = { git = "https://github.com/alplabai/wgpu.git", rev = "e738655e169b416fb53c31e3ceb9581d1a63035e" }
+wgpu-core = { git = "https://github.com/alplabai/wgpu.git", rev = "e738655e169b416fb53c31e3ceb9581d1a63035e" }
+wgpu-core-deps-apple = { git = "https://github.com/alplabai/wgpu.git", rev = "e738655e169b416fb53c31e3ceb9581d1a63035e" }
+wgpu-core-deps-emscripten = { git = "https://github.com/alplabai/wgpu.git", rev = "e738655e169b416fb53c31e3ceb9581d1a63035e" }
+wgpu-core-deps-wasm = { git = "https://github.com/alplabai/wgpu.git", rev = "e738655e169b416fb53c31e3ceb9581d1a63035e" }
+wgpu-core-deps-windows-linux-android = { git = "https://github.com/alplabai/wgpu.git", rev = "e738655e169b416fb53c31e3ceb9581d1a63035e" }
+wgpu-hal = { git = "https://github.com/alplabai/wgpu.git", rev = "e738655e169b416fb53c31e3ceb9581d1a63035e" }
+wgpu-naga-bridge = { git = "https://github.com/alplabai/wgpu.git", rev = "e738655e169b416fb53c31e3ceb9581d1a63035e" }
+wgpu-types = { git = "https://github.com/alplabai/wgpu.git", rev = "e738655e169b416fb53c31e3ceb9581d1a63035e" }
