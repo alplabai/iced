@@ -13,7 +13,9 @@
 //! Wrap the application's maximize button in a
 //! [`Maximize`](window::TitleBarRegion::Maximize) region to get the Windows 11
 //! Snap Layouts flyout when hovering it. Unlike a caption, the button keeps
-//! its mouse input and toggles maximization itself. Report at most one.
+//! its mouse input and toggles maximization itself. Report at most one, and
+//! do not give that button a [`Tooltip`](crate::Tooltip): a tooltip is an
+//! overlay, so showing it drops the region and Snap Layouts with it.
 //!
 //! The regions are dropped while any overlay is open (a menu, a pick list, a
 //! tooltip anywhere in the window), so its clicks are not taken by the window.
