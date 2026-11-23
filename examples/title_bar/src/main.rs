@@ -151,6 +151,12 @@ impl TitleBar {
                     | mouse::Event::CursorEntered
                     | mouse::Event::CursorLeft),
                 ) => Some(Message::Mouse(mouse, status)),
+                // A jump to the window origin shows up as a hover on the top-left widget.
+                iced::Event::Mouse(mouse @ mouse::Event::CursorMoved { position })
+                    if position.x < 2.0 && position.y < 2.0 =>
+                {
+                    Some(Message::Mouse(mouse, status))
+                }
                 _ => None,
             }),
         ])
