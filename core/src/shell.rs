@@ -224,6 +224,9 @@ impl<'a, Message> Shell<'a, Message> {
     ) {
         match region {
             window::TitleBarRegion::Caption => self.title_bar.caption.push(bounds),
+            window::TitleBarRegion::Maximize => {
+                self.title_bar.maximize = Some(bounds);
+            }
         }
     }
 

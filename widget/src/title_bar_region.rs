@@ -10,6 +10,11 @@
 //! it opens the system menu. The wrapped content still draws, but receives no
 //! mouse input while the regions are active.
 //!
+//! Wrap the application's maximize button in a
+//! [`Maximize`](window::TitleBarRegion::Maximize) region to get the Windows 11
+//! Snap Layouts flyout when hovering it. Unlike a caption, the button keeps
+//! its mouse input and toggles maximization itself. Report at most one.
+//!
 //! The regions are dropped while any overlay is open (a menu, a pick list, a
 //! tooltip anywhere in the window), so its clicks are not taken by the window.
 //! A layer of a [`Stack`](crate::Stack) is not an overlay: while a stacked
@@ -26,6 +31,7 @@
 //!
 //! #[derive(Clone)]
 //! enum Message {
+//!     ToggleMaximize,
 //!     Close,
 //! }
 //!
@@ -33,6 +39,10 @@
 //!     row![
 //!         text("My app"),
 //!         title_bar_region(TitleBarRegion::Caption, space::horizontal()),
+//!         title_bar_region(
+//!             TitleBarRegion::Maximize,
+//!             button("☐").on_press(Message::ToggleMaximize),
+//!         ),
 //!         button("×").on_press(Message::Close),
 //!     ]
 //! }

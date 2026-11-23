@@ -1,7 +1,8 @@
 //! A window that draws its own title bar on Windows 11 while keeping the
 //! native frame: resize borders, shadow, rounded corners and, through a
 //! caption region, native dragging, Aero Snap, double-click to maximize and
-//! the system menu.
+//! the system menu. Its maximize button is a maximize region, so hovering it
+//! shows Snap Layouts.
 //!
 //! The window events it receives are printed to stdout, so a test script can
 //! follow them.
@@ -113,7 +114,11 @@ impl TitleBar {
             // Everything else in the strip is the native caption.
             title_bar_region(TitleBarRegion::Caption, space::horizontal().height(Fill)),
             button(text("—").size(13)).on_press(Message::Minimize),
-            button(text("☐").size(13)).on_press(Message::ToggleMaximize),
+            // Hovering the maximize button shows Snap Layouts on Windows 11.
+            title_bar_region(
+                TitleBarRegion::Maximize,
+                button(text("☐").size(13)).on_press(Message::ToggleMaximize),
+            ),
             button(text("✕").size(13)).on_press(Message::Close),
         ]
         .spacing(8)

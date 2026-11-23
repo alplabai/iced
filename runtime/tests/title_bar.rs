@@ -19,7 +19,15 @@ const CAPTION: Rectangle = Rectangle {
     height: 36.0,
 };
 
-/// Reports [`CAPTION`] on every redraw, and shows an empty overlay when asked.
+const MAXIMIZE: Rectangle = Rectangle {
+    x: 700.0,
+    y: 0.0,
+    width: 46.0,
+    height: 36.0,
+};
+
+/// Reports [`CAPTION`] and [`MAXIMIZE`] on every redraw, and shows an empty
+/// overlay when asked.
 struct Strip {
     overlay: bool,
 }
@@ -57,6 +65,7 @@ impl Widget<(), core::Theme, Renderer> for Strip {
     ) {
         if let Event::Window(window::Event::RedrawRequested(_)) = event {
             shell.request_title_bar_region(window::TitleBarRegion::Caption, CAPTION);
+            shell.request_title_bar_region(window::TitleBarRegion::Maximize, MAXIMIZE);
         }
     }
 
@@ -92,7 +101,7 @@ impl overlay::Overlay<(), core::Theme, Renderer> for Popup {
     }
 }
 
-fn caption_after_redraw(overlay: bool) -> Vec<Rectangle> {
+fn title_bar_after_redraw(overlay: bool) -> window::TitleBar {
     let mut renderer = ();
     let mut user_interface = UserInterface::build(
         Strip { overlay },
@@ -113,17 +122,23 @@ fn caption_after_redraw(overlay: bool) -> Vec<Rectangle> {
     );
 
     match state {
-        State::Updated { title_bar, .. } => title_bar.caption,
+        State::Updated { title_bar, .. } => title_bar,
         State::Outdated => panic!("the user interface should stay up to date"),
     }
 }
 
 #[test]
-fn a_redraw_reports_the_caption_regions() {
-    assert_eq!(caption_after_redraw(false), vec![CAPTION]);
+fn a_redraw_reports_the_title_bar_regions() {
+    assert_eq!(
+        title_bar_after_redraw(false),
+        window::TitleBar {
+            caption: vec![CAPTION],
+            maximize: Some(MAXIMIZE),
+        }
+    );
 }
 
 #[test]
-fn an_open_overlay_suspends_the_caption_regions() {
-    assert_eq!(caption_after_redraw(true), Vec::<Rectangle>::new());
+fn an_open_overlay_suspends_the_title_bar_regions() {
+    assert_eq!(title_bar_after_redraw(true), window::TitleBar::default());
 }

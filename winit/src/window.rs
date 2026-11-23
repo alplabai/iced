@@ -406,6 +406,8 @@ where
                 ime_state: None,
                 #[cfg(target_os = "windows")]
                 title_bar_caption: Vec::new(),
+                #[cfg(target_os = "windows")]
+                title_bar_maximize: None,
                 last_frame: None,
                 frame_burst: 0,
             },
@@ -519,6 +521,12 @@ where
     /// Caption regions last handed to winit, in physical client pixels.
     #[cfg(target_os = "windows")]
     title_bar_caption: Vec<(
+        winit::dpi::PhysicalPosition<i32>,
+        winit::dpi::PhysicalSize<u32>,
+    )>,
+    /// Maximize region last handed to winit, in physical client pixels.
+    #[cfg(target_os = "windows")]
+    title_bar_maximize: Option<(
         winit::dpi::PhysicalPosition<i32>,
         winit::dpi::PhysicalSize<u32>,
     )>,
@@ -674,6 +682,16 @@ where
             if caption != self.title_bar_caption {
                 self.raw.set_title_bar_caption(&caption);
                 self.title_bar_caption = caption;
+            }
+
+            let maximize = title_bar
+                .maximize
+                .filter(|_| self.enabled)
+                .map(|bounds| conversion::physical_region(bounds, scale));
+
+            if maximize != self.title_bar_maximize {
+                self.raw.set_title_bar_maximize(maximize);
+                self.title_bar_maximize = maximize;
             }
         }
 

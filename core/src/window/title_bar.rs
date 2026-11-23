@@ -18,12 +18,19 @@ pub struct TitleBar {
     /// window, double-clicking maximizes it and right-clicking opens the
     /// system menu. They receive no mouse input.
     pub caption: Vec<Rectangle>,
+    /// The application's own maximize button. Hovering it shows the Windows
+    /// 11 Snap Layouts flyout; its mouse input still reaches the button,
+    /// which toggles maximization itself. It wins over a caption region it
+    /// overlaps.
+    pub maximize: Option<Rectangle>,
 }
 
 impl TitleBar {
-    /// Adds the regions of `other`.
+    /// Adds the regions of `other`; its maximize region, if any, replaces
+    /// the current one.
     pub fn merge(&mut self, other: &Self) {
         self.caption.extend_from_slice(&other.caption);
+        self.maximize = other.maximize.or(self.maximize);
     }
 }
 
@@ -33,4 +40,6 @@ impl TitleBar {
 pub enum TitleBarRegion {
     /// An area that acts as the native caption; see [`TitleBar::caption`].
     Caption,
+    /// The application's maximize button; see [`TitleBar::maximize`].
+    Maximize,
 }
