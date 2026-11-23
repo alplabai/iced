@@ -7,7 +7,7 @@
 //! follow them.
 use iced::widget::{button, column, container, pick_list, row, space, text, title_bar_region};
 use iced::window::{self, TitleBarRegion};
-use iced::{Center, Fill, Subscription, Task, Widget};
+use iced::{Center, Fill, Subscription, Task, Widget, mouse};
 
 pub fn main() -> iced::Result {
     #[allow(unused_mut)]
@@ -44,6 +44,7 @@ enum Message {
     ToggleMaximize,
     Close,
     Window(window::Event),
+    Mouse(mouse::Event, iced::event::Status),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,6 +84,10 @@ impl TitleBar {
             Message::Minimize => window::latest().and_then(|id| window::minimize(id, true)),
             Message::ToggleMaximize => window::latest().and_then(window::toggle_maximize),
             Message::Close => window::latest().and_then(window::close),
+            Message::Mouse(event, status) => {
+                println!("mouse {event:?} {status:?}");
+                Task::none()
+            }
             Message::Window(event) => {
                 let line = match event {
                     window::Event::Moved(position) => {
@@ -137,6 +142,17 @@ impl TitleBar {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        window::events().map(|(_id, event)| Message::Window(event))
+        Subscription::batch([
+            window::events().map(|(_id, event)| Message::Window(event)),
+            iced::event::listen_with(|event, status, _window| match event {
+                iced::Event::Mouse(
+                    mouse @ (mouse::Event::ButtonPressed(_)
+                    | mouse::Event::ButtonReleased(_)
+                    | mouse::Event::CursorEntered
+                    | mouse::Event::CursorLeft),
+                ) => Some(Message::Mouse(mouse, status)),
+                _ => None,
+            }),
+        ])
     }
 }
