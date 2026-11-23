@@ -249,6 +249,7 @@ where
 
             shell.request_redraw_at(local_shell.redraw_request());
             shell.request_input_method(local_shell.input_method());
+            shell.request_title_bar(local_shell.title_bar());
             shell.clipboard_mut().merge(local_shell.clipboard_mut());
 
             invalidation = local_shell.invalidation();
@@ -319,6 +320,9 @@ where
                 &mut local_shell,
                 viewport,
             );
+
+            // The rebuilt view reports its own title bar regions.
+            shell.request_title_bar(local_shell.title_bar());
 
             if internal.events.is_empty() {
                 return;
@@ -468,6 +472,7 @@ where
         shell.invalidate(local_shell.invalidation());
         shell.request_redraw_at(local_shell.redraw_request());
         shell.request_input_method(local_shell.input_method());
+        shell.request_title_bar(local_shell.title_bar());
         shell.clipboard_mut().merge(local_shell.clipboard_mut());
 
         if internal.events.is_empty() {

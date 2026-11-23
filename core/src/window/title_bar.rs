@@ -7,7 +7,9 @@ use crate::Rectangle;
 /// `extend_content_into_title_bar` in the Windows
 /// [`PlatformSpecific`](super::settings::PlatformSpecific) settings. Widgets
 /// report the regions through [`Shell::request_title_bar_region`] while
-/// handling [`Event::RedrawRequested`](super::Event::RedrawRequested).
+/// handling [`Event::RedrawRequested`](super::Event::RedrawRequested). The
+/// runtime reports none while any overlay is open (tooltips included) or the
+/// window is disabled.
 ///
 /// [`Shell::request_title_bar_region`]: crate::Shell::request_title_bar_region
 #[derive(Debug, Clone, Default, PartialEq)]

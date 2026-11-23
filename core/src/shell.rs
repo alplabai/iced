@@ -215,8 +215,8 @@ impl<'a, Message> Shell<'a, Message> {
     /// Reports a region of the window's title bar drawn by the application,
     /// in logical window coordinates. See [`window::TitleBar`].
     ///
-    /// __Important__: This request will only be honored by the
-    /// [`Shell`] only during a [`window::Event::RedrawRequested`].
+    /// __Important__: The runtime applies only the regions reported while
+    /// handling a [`window::Event::RedrawRequested`].
     pub fn request_title_bar_region(
         &mut self,
         region: window::TitleBarRegion,
@@ -225,6 +225,12 @@ impl<'a, Message> Shell<'a, Message> {
         match region {
             window::TitleBarRegion::Caption => self.title_bar.caption.push(bounds),
         }
+    }
+
+    /// Adds every region of `title_bar`; for widgets that run their content
+    /// with a [`Shell::local`] shell and pass its requests on.
+    pub fn request_title_bar(&mut self, title_bar: &window::TitleBar) {
+        self.title_bar.merge(title_bar);
     }
 
     /// Returns the title bar regions reported to the [`Shell`].

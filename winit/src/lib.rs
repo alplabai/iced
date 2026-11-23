@@ -2033,6 +2033,10 @@ fn run_action<'a, P, C>(
                             } else {
                                 // The pointer no longer reaches the window: end any hover.
                                 events.push((id, core::Event::Mouse(mouse::Event::CursorLeft)));
+                                // Drop the caption regions now, not at the next redraw: a
+                                // window disabled for the runtime only is still natively
+                                // enabled, so they would still move it.
+                                window.request_title_bar(core::window::TitleBar::default());
                             }
                         }
                     }

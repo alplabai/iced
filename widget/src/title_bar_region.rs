@@ -10,8 +10,11 @@
 //! it opens the system menu. The wrapped content still draws, but receives no
 //! mouse input while the regions are active.
 //!
-//! The regions are dropped while an overlay (a menu, a pick list) is open, so
-//! its clicks are not taken by the window. Do not place a region inside a
+//! The regions are dropped while any overlay is open (a menu, a pick list, a
+//! tooltip anywhere in the window), so its clicks are not taken by the window.
+//! A layer of a [`Stack`](crate::Stack) is not an overlay: while a stacked
+//! modal or drawer covers a region, leave the region out of the view, or the
+//! clicks there move the window. Do not place a region inside a
 //! [`Scrollable`](crate::Scrollable): its bounds ignore the scroll offset.
 //!
 //! # Example
