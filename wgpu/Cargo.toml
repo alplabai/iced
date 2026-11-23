@@ -18,7 +18,9 @@ rustdoc-args = ["--cfg", "docsrs"]
 all-features = true
 
 [features]
-default = ["wgpu/default"]
+default = ["wgpu/default", "metal"]
+# Metal-specific surface tweaks on macOS (#132); needs wgpu's Metal backend
+metal = ["wgpu/metal", "dep:objc2-quartz-core"]
 geometry = ["iced_graphics/geometry", "lyon"]
 image = ["iced_graphics/image", "guillotiere"]
 svg = ["iced_graphics/svg", "resvg", "guillotiere"]
@@ -51,7 +53,7 @@ resvg.workspace = true
 resvg.optional = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2-quartz-core = { version = "0.3", default-features = false, features = ["std", "CALayer"] }
+objc2-quartz-core = { version = "0.3", default-features = false, features = ["std", "CALayer"], optional = true }
 
 [dev-dependencies]
 futures = { workspace = true, features = ["executor"] }

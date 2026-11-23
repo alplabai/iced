@@ -341,7 +341,7 @@ pub async fn new(
 /// Keeps the last frame unscaled while the window resizes (#132). The Metal
 /// layer's default gravity stretches it to the new size until the next frame
 /// is presented, which looks like a zoom during maximize and restore.
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "metal"))]
 #[allow(unsafe_code)]
 fn keep_contents_unscaled(surface: &wgpu::Surface<'_>) {
     // SAFETY: only a property of the layer changes; the surface is neither
@@ -352,7 +352,8 @@ fn keep_contents_unscaled(surface: &wgpu::Surface<'_>) {
 
     let layer = surface.render_layer().lock();
 
-    // The layer is not flipped, so its bottom is the window's top edge.
+    // The gravity names assume y pointing down, but this layer is not flipped
+    // (y points up), so `Bottom` lands on the window's top edge on screen.
     // SAFETY: `kCAGravityBottomLeft` is a constant string provided by QuartzCore.
     layer.setContentsGravity(unsafe { objc2_quartz_core::kCAGravityBottomLeft });
 }
@@ -455,7 +456,7 @@ impl graphics::Compositor for Compositor {
             .create_surface(wgpu::SurfaceTarget::Window(Box::new(window)))
             .expect("Create surface");
 
-        #[cfg(target_os = "macos")]
+        #[cfg(all(target_os = "macos", feature = "metal"))]
         keep_contents_unscaled(&surface);
 
         surface
