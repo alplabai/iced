@@ -32,7 +32,7 @@ fn android_main(app: iced::android::AndroidApp) {
     iced::android::set_app(app);
 
     if let Err(error) = run() {
-        log::error!("iced exited with an error: {error}");
+        log::error!("iced exited with an error: {error:?}");
     }
 }
 
