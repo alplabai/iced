@@ -411,7 +411,7 @@ where
                 #[cfg(target_os = "windows")]
                 title_bar_maximize: None,
                 #[cfg(not(target_os = "windows"))]
-                title_bar_caption: Vec::new(),
+                title_bar_regions: core::window::TitleBar::default(),
                 #[cfg(not(target_os = "windows"))]
                 caption_click: None,
                 last_frame: None,
@@ -536,10 +536,10 @@ where
         winit::dpi::PhysicalPosition<i32>,
         winit::dpi::PhysicalSize<u32>,
     )>,
-    /// Caption regions in logical window coordinates, acted on by
+    /// Title bar regions in UI coordinates, acted on by
     /// [`Window::caption_press`].
     #[cfg(not(target_os = "windows"))]
-    title_bar_caption: Vec<Rectangle>,
+    title_bar_regions: core::window::TitleBar,
     /// The last press handled in a caption region, to detect double clicks.
     #[cfg(not(target_os = "windows"))]
     caption_click: Option<mouse::Click>,
@@ -711,23 +711,35 @@ where
 
         #[cfg(not(target_os = "windows"))]
         {
-            self.title_bar_caption = if self.enabled {
-                title_bar.caption
+            self.title_bar_regions = if self.enabled {
+                title_bar
             } else {
-                Vec::new()
+                core::window::TitleBar::default()
             };
         }
     }
 
-    /// On platforms without native caption hit testing, handles a mouse press
-    /// inside a caption region the way the native caption would: a left
-    /// press drags the window, a double click toggles maximization and a
-    /// right press opens the window menu. Returns whether it handled the
-    /// event, which then does not reach the widgets. Always `false` on
-    /// Windows, where the system handles caption regions.
+    /// On Linux, the BSDs and macOS, handles a mouse press inside a caption
+    /// region the way the native caption would: a left press drags the
+    /// window, a double click toggles maximization and a right press opens
+    /// the window menu. Returns whether it handled the event, which then does
+    /// not reach the widgets. Always `false` on Windows, where the system
+    /// handles caption regions, and on platforms that cannot move a window
+    /// (web, Android, iOS), where the press reaches the widgets as before.
     pub fn caption_press(&mut self, event: &winit::event::WindowEvent) -> bool {
         #[cfg(not(target_os = "windows"))]
         {
+            if !cfg!(any(
+                target_os = "linux",
+                target_os = "freebsd",
+                target_os = "dragonfly",
+                target_os = "netbsd",
+                target_os = "openbsd",
+                target_os = "macos",
+            )) {
+                return false;
+            }
+
             let winit::event::WindowEvent::MouseInput {
                 state: winit::event::ElementState::Pressed,
                 button,
@@ -744,9 +756,13 @@ where
             let button = conversion::mouse_button(*button);
             let click = mouse::Click::new(position, button, self.caption_click);
 
-            let Some(action) =
-                caption::action(&self.title_bar_caption, position, button, click.kind())
-            else {
+            let Some(action) = caption::action(
+                &self.title_bar_regions.caption,
+                self.title_bar_regions.maximize,
+                position,
+                button,
+                click.kind(),
+            ) else {
                 return false;
             };
 
@@ -754,17 +770,21 @@ where
 
             match action {
                 caption::Action::Drag => {
-                    // Unsupported on some platforms (web); the press is still
-                    // the caption's, as on Windows.
+                    // The press stays the caption's even if the request
+                    // fails, as on Windows.
                     let _ = self.raw.drag_window();
                 }
                 caption::Action::ToggleMaximize => {
                     self.raw.set_maximized(!self.raw.is_maximized());
                 }
                 caption::Action::ShowMenu => {
-                    self.raw.show_window_menu(LogicalPosition {
-                        x: position.x,
-                        y: position.y,
+                    // `position` is in UI coordinates, which include the
+                    // application's scale on top of the window's.
+                    let scale = f64::from(self.state.scale_factor());
+
+                    self.raw.show_window_menu(winit::dpi::PhysicalPosition {
+                        x: f64::from(position.x) * scale,
+                        y: f64::from(position.y) * scale,
                     });
                 }
             }

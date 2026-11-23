@@ -18,15 +18,20 @@ pub enum Action {
 }
 
 /// The action for a `button` press of the given click `kind` at `position`,
-/// or `None` when the press is outside every caption region or uses another
-/// button. A double click toggles maximization; any other left press drags.
+/// or `None` when the press is outside every caption region, inside the
+/// `maximize` region (the application's button wins over a caption, as on
+/// Windows) or uses another button. A double click toggles maximization; any
+/// other left press drags.
 pub fn action(
     regions: &[Rectangle],
+    maximize: Option<Rectangle>,
     position: Point,
     button: mouse::Button,
     kind: mouse::click::Kind,
 ) -> Option<Action> {
-    if !regions.iter().any(|region| region.contains(position)) {
+    if maximize.is_some_and(|maximize| maximize.contains(position))
+        || !regions.iter().any(|region| region.contains(position))
+    {
         return None;
     }
 
@@ -55,6 +60,7 @@ mod tests {
     fn a_left_press_in_a_region_drags() {
         let action = action(
             &[STRIP],
+            None,
             Point::new(200.0, 10.0),
             mouse::Button::Left,
             Kind::Single,
@@ -68,11 +74,11 @@ mod tests {
         let at = Point::new(200.0, 10.0);
 
         assert_eq!(
-            action(&[STRIP], at, mouse::Button::Left, Kind::Double),
+            action(&[STRIP], None, at, mouse::Button::Left, Kind::Double),
             Some(Action::ToggleMaximize)
         );
         assert_eq!(
-            action(&[STRIP], at, mouse::Button::Left, Kind::Triple),
+            action(&[STRIP], None, at, mouse::Button::Left, Kind::Triple),
             Some(Action::Drag)
         );
     }
@@ -81,6 +87,7 @@ mod tests {
     fn a_right_press_opens_the_window_menu() {
         let action = action(
             &[STRIP],
+            None,
             Point::new(200.0, 10.0),
             mouse::Button::Right,
             Kind::Single,
@@ -96,6 +103,7 @@ mod tests {
         assert_eq!(
             action(
                 &[STRIP],
+                None,
                 Point::new(119.0, 10.0),
                 mouse::Button::Left,
                 Kind::Single
@@ -105,6 +113,7 @@ mod tests {
         assert_eq!(
             action(
                 &[STRIP],
+                None,
                 Point::new(200.0, 37.0),
                 mouse::Button::Left,
                 Kind::Single
@@ -112,9 +121,43 @@ mod tests {
             None
         );
         assert_eq!(
-            action(&[STRIP], inside, mouse::Button::Middle, Kind::Single),
+            action(&[STRIP], None, inside, mouse::Button::Middle, Kind::Single),
             None
         );
-        assert_eq!(action(&[], inside, mouse::Button::Left, Kind::Single), None);
+        assert_eq!(
+            action(&[], None, inside, mouse::Button::Left, Kind::Single),
+            None
+        );
+    }
+
+    #[test]
+    fn the_maximize_region_wins_over_a_caption_region() {
+        let maximize = Rectangle {
+            x: 380.0,
+            y: 0.0,
+            width: 40.0,
+            height: 36.0,
+        };
+
+        assert_eq!(
+            action(
+                &[STRIP],
+                Some(maximize),
+                Point::new(400.0, 10.0),
+                mouse::Button::Left,
+                Kind::Single
+            ),
+            None
+        );
+        assert_eq!(
+            action(
+                &[STRIP],
+                Some(maximize),
+                Point::new(200.0, 10.0),
+                mouse::Button::Left,
+                Kind::Single
+            ),
+            Some(Action::Drag)
+        );
     }
 }
