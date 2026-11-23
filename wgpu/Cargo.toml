@@ -50,5 +50,8 @@ guillotiere.optional = true
 resvg.workspace = true
 resvg.optional = true
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-quartz-core = { version = "0.3", default-features = false, features = ["std", "CALayer"] }
+
 [dev-dependencies]
 futures = { workspace = true, features = ["executor"] }
