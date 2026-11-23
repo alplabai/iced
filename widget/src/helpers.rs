@@ -540,6 +540,15 @@ pub fn opaque<W>(content: W) -> Opaque<W> {
     Opaque::new(content)
 }
 
+/// Marks the content as a native title bar region of the given kind; see
+/// [`TitleBarRegion`](crate::TitleBarRegion).
+pub fn title_bar_region<W>(
+    region: core::window::TitleBarRegion,
+    content: W,
+) -> crate::TitleBarRegion<W> {
+    crate::TitleBarRegion::new(region, content)
+}
+
 /// Displays a widget on top of another one, only when the base widget is hovered.
 ///
 /// This works analogously to a [`stack`], but it will only display the layer on top

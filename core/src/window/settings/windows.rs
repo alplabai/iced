@@ -43,8 +43,14 @@ pub struct PlatformSpecific {
     /// (resize borders, shadow, rounded corners). The application draws its own
     /// caption buttons; `window::drag` still moves the window.
     ///
+    /// Wrap the empty parts of the application's title strip in
+    /// `widget::title_bar_region` with
+    /// [`TitleBarRegion::Caption`](crate::window::TitleBarRegion::Caption) to
+    /// get the native caption there: dragging, Aero Snap, double-click to
+    /// maximize and the system menu on right-click.
+    ///
     /// Only effective with `decorations: true` and outside fullscreen. Windows 11
-    /// is the primary target; Windows 10 works with native borders. See issue #105.
+    /// only; Windows 10 is not supported. See issue #105.
     pub extend_content_into_title_bar: bool,
 }
 

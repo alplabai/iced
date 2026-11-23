@@ -258,8 +258,8 @@ web-time = "1.1"
 wgpu = { version = "30", default-features = false, features = ["std", "wgsl"] }
 # alplabai/winit `iced-signex`: iced-rs/winit 48116469 + cancellable macOS terminate requests (#37)
 # + an Occluded event after a macOS fullscreen exit ends (#107)
-# + Windows content extended into the title bar, geometry only (#114, #105).
-winit = { git = "https://github.com/alplabai/winit.git", rev = "0570f8454e03e9d86bbc079047a54a82a766ffaf", default-features = false, features = ["rwh_06"] }
+# + Windows content extended into the title bar: geometry (#114), caption and maximize regions (#105).
+winit = { git = "https://github.com/alplabai/winit.git", rev = "10ae162cfb22781111ca2baacc531889f0fc8f9a", default-features = false, features = ["rwh_06"] }
 
 [workspace.lints.rust]
 rust_2018_idioms = { level = "deny", priority = -1 }

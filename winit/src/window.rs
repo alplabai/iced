@@ -404,6 +404,10 @@ where
                 },
                 preedit: None,
                 ime_state: None,
+                #[cfg(target_os = "windows")]
+                title_bar_caption: Vec::new(),
+                #[cfg(target_os = "windows")]
+                title_bar_maximize: None,
                 last_frame: None,
                 frame_burst: 0,
             },
@@ -514,6 +518,18 @@ where
     frame_clock: FrameClock,
     preedit: Option<Preedit<P::Renderer>>,
     ime_state: Option<(Rectangle, input_method::Purpose)>,
+    /// Caption regions last handed to winit, in physical client pixels.
+    #[cfg(target_os = "windows")]
+    title_bar_caption: Vec<(
+        winit::dpi::PhysicalPosition<i32>,
+        winit::dpi::PhysicalSize<u32>,
+    )>,
+    /// Maximize region last handed to winit, in physical client pixels.
+    #[cfg(target_os = "windows")]
+    title_bar_maximize: Option<(
+        winit::dpi::PhysicalPosition<i32>,
+        winit::dpi::PhysicalSize<u32>,
+    )>,
     last_frame: Option<Instant>,
     frame_burst: usize,
 }
@@ -642,6 +658,45 @@ where
                 self.frame_burst = 0;
             }
         }
+    }
+
+    /// Hands the title bar regions reported by the widgets to the platform.
+    /// Only Windows windows that extend into the title bar use them; a
+    /// disabled window reports none, so a click cannot move it.
+    pub fn request_title_bar(&mut self, title_bar: core::window::TitleBar) {
+        #[cfg(target_os = "windows")]
+        {
+            use winit::platform::windows::WindowExtWindows;
+
+            let scale = self.state.scale_factor();
+            let caption: Vec<_> = if self.enabled {
+                title_bar
+                    .caption
+                    .iter()
+                    .map(|bounds| conversion::physical_region(*bounds, scale))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+
+            if caption != self.title_bar_caption {
+                self.raw.set_title_bar_caption(&caption);
+                self.title_bar_caption = caption;
+            }
+
+            let maximize = title_bar
+                .maximize
+                .filter(|_| self.enabled)
+                .map(|bounds| conversion::physical_region(bounds, scale));
+
+            if maximize != self.title_bar_maximize {
+                self.raw.set_title_bar_maximize(maximize);
+                self.title_bar_maximize = maximize;
+            }
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        let _ = title_bar;
     }
 
     pub fn request_input_method(&mut self, input_method: InputMethod) {
