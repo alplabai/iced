@@ -338,6 +338,26 @@ pub async fn new(
     Compositor::request(settings, display, compatible_window, shell).await
 }
 
+/// Keeps the last frame unscaled while the window resizes (#132). The Metal
+/// layer's default gravity stretches it to the new size until the next frame
+/// is presented, which looks like a zoom during maximize and restore.
+#[cfg(all(target_os = "macos", feature = "metal"))]
+#[allow(unsafe_code)]
+fn keep_contents_unscaled(surface: &wgpu::Surface<'_>) {
+    // SAFETY: only a property of the layer changes; the surface is neither
+    // destroyed nor used by the GPU here.
+    let Some(surface) = (unsafe { surface.as_hal::<wgpu::hal::api::Metal>() }) else {
+        return;
+    };
+
+    let layer = surface.render_layer().lock();
+
+    // winit's view is flipped, so the layer's `contentsAreFlipped` is YES and
+    // `Bottom` aligns the content to the window's top edge on screen.
+    // SAFETY: `kCAGravityBottomLeft` is a constant string provided by QuartzCore.
+    layer.setContentsGravity(unsafe { objc2_quartz_core::kCAGravityBottomLeft });
+}
+
 /// Chooses the alpha mode for a surface out of the ones it supports now.
 fn alpha_mode(supported: &[wgpu::CompositeAlphaMode]) -> wgpu::CompositeAlphaMode {
     if supported.contains(&wgpu::CompositeAlphaMode::PreMultiplied) {
@@ -431,9 +451,15 @@ impl graphics::Compositor for Compositor {
     }
 
     fn create_surface(&mut self, window: impl compositor::Window) -> Self::Surface {
-        self.instance
+        let surface = self
+            .instance
             .create_surface(wgpu::SurfaceTarget::Window(Box::new(window)))
-            .expect("Create surface")
+            .expect("Create surface");
+
+        #[cfg(all(target_os = "macos", feature = "metal"))]
+        keep_contents_unscaled(&surface);
+
+        surface
     }
 
     fn configure_surface(&mut self, surface: &mut Self::Surface, width: u32, height: u32) {
