@@ -616,7 +616,11 @@ mod tests {
     #[test]
     #[ignore = "needs a wgpu adapter; run with --ignored on a machine with a GPU or lavapipe"]
     fn primitives_with_different_keys_get_their_own_pipeline() {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        // The compositor's default backends: Intel's Vulkan driver crashes on Windows.
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: crate::window::compositor::default_backends(),
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
 
         let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::LowPower,

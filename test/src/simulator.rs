@@ -355,6 +355,12 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
+    /// The name of the renderer that drew this [`Snapshot`], as used in the file names
+    /// written by [`matches_image`](Self::matches_image) (e.g. `name-vello_cpu.png`).
+    pub fn renderer(&self) -> &str {
+        &self.renderer
+    }
+
     /// Compares the [`Snapshot`] with the PNG image found in the given path, returning
     /// `true` if they are identical.
     ///

@@ -237,14 +237,11 @@ fn focus_ring_is_drawn_over_an_image() {
             "image_ring_off"
         };
         let path = directory.join(format!("{name}.png"));
-        let rendered = directory.join(format!("{name}-vello_cpu.png"));
+        let snapshot = simulator.snapshot(&theme).unwrap();
+        let rendered = directory.join(format!("{name}-{}.png", snapshot.renderer()));
         let _ = std::fs::remove_file(&rendered);
 
-        let _ = simulator
-            .snapshot(&theme)
-            .unwrap()
-            .matches_image(&path)
-            .unwrap();
+        let _ = snapshot.matches_image(&path).unwrap();
 
         let mut reader = png::Decoder::new(std::io::BufReader::new(
             std::fs::File::open(&rendered).unwrap(),
@@ -273,20 +270,19 @@ fn focus_ring_is_drawn_inside_the_button() {
 
     let render = |simulator: &mut Simulator<'_, Message>, name: &str| {
         let path = directory.join(format!("{name}.png"));
-        let _ = std::fs::remove_file(directory.join(format!("{name}-vello_cpu.png")));
+        let snapshot = simulator.snapshot(&theme).unwrap();
+        let rendered = directory.join(format!("{name}-{}.png", snapshot.renderer()));
+        let _ = std::fs::remove_file(&rendered);
 
-        let _ = simulator
-            .snapshot(&theme)
-            .unwrap()
-            .matches_image(&path)
-            .unwrap();
+        let _ = snapshot.matches_image(&path).unwrap();
 
-        let file = std::fs::File::open(directory.join(format!("{name}-vello_cpu.png"))).unwrap();
+        let file = std::fs::File::open(&rendered).unwrap();
         let mut reader = png::Decoder::new(std::io::BufReader::new(file))
             .read_info()
             .unwrap();
         let mut bytes = vec![0; reader.output_buffer_size().unwrap()];
         let info = reader.next_frame(&mut bytes).unwrap();
+        let _ = std::fs::remove_file(&rendered);
 
         (info.width as usize, bytes)
     };
@@ -330,10 +326,6 @@ fn focus_ring_is_drawn_inside_the_button() {
         pixel(&plain, x, 8),
         "the ring does not reach past its width"
     );
-
-    for name in ["plain", "keyboard", "pointer"] {
-        let _ = std::fs::remove_file(directory.join(format!("button_ring_{name}-vello_cpu.png")));
-    }
 }
 
 /// The ring must not paint outside a clipping ancestor (a short scrollable).
@@ -376,14 +368,11 @@ fn focus_ring_is_clipped_by_the_viewport() {
             "clip_ring_off"
         };
         let path = directory.join(format!("{name}.png"));
-        let rendered = directory.join(format!("{name}-vello_cpu.png"));
+        let snapshot = simulator.snapshot(&theme).unwrap();
+        let rendered = directory.join(format!("{name}-{}.png", snapshot.renderer()));
         let _ = std::fs::remove_file(&rendered);
 
-        let _ = simulator
-            .snapshot(&theme)
-            .unwrap()
-            .matches_image(&path)
-            .unwrap();
+        let _ = snapshot.matches_image(&path).unwrap();
 
         let mut reader = png::Decoder::new(std::io::BufReader::new(
             std::fs::File::open(&rendered).unwrap(),
