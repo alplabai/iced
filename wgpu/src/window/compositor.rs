@@ -1,7 +1,7 @@
 //! Connect a window with a renderer.
-use crate::core::Color;
 use crate::core::backend;
 use crate::core::renderer;
+use crate::core::{Color, Size};
 use crate::graphics::color;
 use crate::graphics::compositor;
 use crate::graphics::{self, Antialiasing, Shell, Viewport};
@@ -381,33 +381,56 @@ pub fn present(
         return Err(compositor::SurfaceError::Outdated);
     }
 
-    match surface.get_current_texture() {
-        wgpu::CurrentSurfaceTexture::Success(frame) => {
-            let view = &frame
-                .texture
-                .create_view(&wgpu::TextureViewDescriptor::default());
+    let (frame, is_suboptimal) = match surface.get_current_texture() {
+        wgpu::CurrentSurfaceTexture::Success(frame) => (frame, false),
+        // pop-os/iced dfcd989: show the frame, then reconfigure, instead of dropping it
+        wgpu::CurrentSurfaceTexture::Suboptimal(frame) => (frame, true),
+        wgpu::CurrentSurfaceTexture::Outdated => return Err(compositor::SurfaceError::Outdated),
+        wgpu::CurrentSurfaceTexture::Timeout => return Err(compositor::SurfaceError::Timeout),
+        wgpu::CurrentSurfaceTexture::Occluded => return Err(compositor::SurfaceError::Occluded),
+        wgpu::CurrentSurfaceTexture::Lost => return Err(compositor::SurfaceError::Lost),
+        wgpu::CurrentSurfaceTexture::Validation => return Err(compositor::SurfaceError::Other),
+    };
 
-            let _submission = renderer.present(
-                Some(background_color),
-                frame.texture.format(),
-                view,
-                viewport,
-            );
+    // `configure_surface` clamps the surface to the same limit, so the viewport
+    // must match it (pop-os/iced 6522bf6).
+    let viewport = &Viewport::with_physical_size(
+        clamp_surface_size(
+            size,
+            renderer.engine.device.limits().max_texture_dimension_2d,
+        ),
+        viewport.scale(),
+    );
 
-            // Present the frame
-            on_pre_present();
-            renderer.engine.queue.present(frame);
+    let view = &frame
+        .texture
+        .create_view(&wgpu::TextureViewDescriptor::default());
 
-            Ok(())
-        }
-        wgpu::CurrentSurfaceTexture::Suboptimal(_) | wgpu::CurrentSurfaceTexture::Outdated => {
-            Err(compositor::SurfaceError::Outdated)
-        }
-        wgpu::CurrentSurfaceTexture::Timeout => Err(compositor::SurfaceError::Timeout),
-        wgpu::CurrentSurfaceTexture::Occluded => Err(compositor::SurfaceError::Occluded),
-        wgpu::CurrentSurfaceTexture::Lost => Err(compositor::SurfaceError::Lost),
-        wgpu::CurrentSurfaceTexture::Validation => Err(compositor::SurfaceError::Other),
+    let _submission = renderer.present(
+        Some(background_color),
+        frame.texture.format(),
+        view,
+        viewport,
+    );
+
+    // Present the frame
+    on_pre_present();
+    renderer.engine.queue.present(frame);
+
+    if is_suboptimal {
+        return Err(compositor::SurfaceError::Outdated);
     }
+
+    Ok(())
+}
+
+/// Clamps a surface size to the largest texture the device accepts; a larger
+/// surface is a validation error.
+fn clamp_surface_size(size: Size<u32>, max_dimension: u32) -> Size<u32> {
+    Size::new(
+        size.width.min(max_dimension),
+        size.height.min(max_dimension),
+    )
 }
 
 impl graphics::Compositor for Compositor {
@@ -479,6 +502,13 @@ impl graphics::Compositor for Compositor {
         // its lifetime (some Vulkan drivers on Windows stop offering
         // `PreMultiplied` after a resize or restore), so pick one each time.
         let alpha_mode = alpha_mode(&capabilities.alpha_modes);
+
+        // A window past the device limit (several 4K monitors, a high scale)
+        // renders clipped instead of failing validation (pop-os/iced 6522bf6).
+        let Size { width, height } = clamp_surface_size(
+            Size::new(width, height),
+            self.engine.device.limits().max_texture_dimension_2d,
+        );
 
         log::debug!("Configuring surface ({width}x{height}) with alpha mode: {alpha_mode:?}");
 
@@ -770,6 +800,26 @@ mod tests {
         // after a resize must not be configured with it.
         assert_eq!(alpha_mode(&[Opaque, PostMultiplied]), Auto);
         assert_eq!(alpha_mode(&[]), Auto);
+    }
+
+    #[test]
+    fn surface_size_is_clamped_to_the_device_limit() {
+        assert_eq!(
+            clamp_surface_size(Size::new(800, 600), 8192),
+            Size::new(800, 600)
+        );
+        assert_eq!(
+            clamp_surface_size(Size::new(15360, 600), 8192),
+            Size::new(8192, 600)
+        );
+        assert_eq!(
+            clamp_surface_size(Size::new(600, 20000), 16384),
+            Size::new(600, 16384)
+        );
+        assert_eq!(
+            clamp_surface_size(Size::new(8192, 8192), 8192),
+            Size::new(8192, 8192)
+        );
     }
 
     #[test]

@@ -215,6 +215,15 @@ impl FontSystem {
         &mut self.raw
     }
 
+    /// Returns the [`fontdb::Database`](cosmic_text::fontdb::Database) of the
+    /// font system.
+    ///
+    /// Unlike going through [`raw`](Self::raw) and `db_mut`, this keeps
+    /// `cosmic-text`'s font matching cache.
+    pub fn db(&self) -> &cosmic_text::fontdb::Database {
+        self.raw.db()
+    }
+
     /// Loads a font from its bytes.
     pub fn load_font(&mut self, bytes: Cow<'static, [u8]>) {
         if let Cow::Borrowed(bytes) = bytes {
