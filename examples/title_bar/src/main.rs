@@ -4,7 +4,7 @@
 //! menu. Its maximize button is a maximize region, so hovering it shows Snap
 //! Layouts. On Linux and macOS the window has no decorations, and the caption
 //! region drags it, toggles maximization on a double click and opens the
-//! window menu on a right click.
+//! window menu on a right click. On Linux its edges resize it.
 //!
 //! The window events it receives are printed to stdout, so a test script can
 //! follow them.
