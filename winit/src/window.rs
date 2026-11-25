@@ -754,6 +754,18 @@ where
             };
 
             let button = conversion::mouse_button(*button);
+
+            if button == mouse::Button::Left
+                && let Some(direction) = self.resize_band(position)
+            {
+                // The press stays the band's even if the request fails.
+                let _ = self
+                    .raw
+                    .drag_resize_window(conversion::resize_direction(direction));
+
+                return true;
+            }
+
             let click = mouse::Click::new(position, button, self.caption_click);
 
             let Some(action) = caption::action(
@@ -797,6 +809,33 @@ where
             let _ = event;
             false
         }
+    }
+
+    /// The resize band under `position`, if any. On Linux and the BSDs an
+    /// undecorated, resizable, restored window that draws its own title bar
+    /// (it reports caption regions) has no resize borders from the system, so
+    /// a thin band along its edges resizes it; it wins over a caption region.
+    #[cfg(not(target_os = "windows"))]
+    fn resize_band(&self, position: Point) -> Option<core::window::Direction> {
+        if !cfg!(any(
+            target_os = "linux",
+            target_os = "freebsd",
+            target_os = "dragonfly",
+            target_os = "netbsd",
+            target_os = "openbsd",
+        )) || self.title_bar_regions.caption.is_empty()
+        {
+            return None;
+        }
+
+        let direction = caption::resize_direction(self.state.logical_size(), position)?;
+
+        let restored = self.raw.is_resizable()
+            && !self.raw.is_decorated()
+            && !self.raw.is_maximized()
+            && self.raw.fullscreen().is_none();
+
+        restored.then_some(direction)
     }
 
     pub fn request_input_method(&mut self, input_method: InputMethod) {
@@ -882,6 +921,14 @@ where
     }
 
     pub fn update_mouse(&mut self, cursors: &Cursors, interaction: mouse::Interaction) {
+        #[cfg(not(target_os = "windows"))]
+        let interaction = match self.state.cursor() {
+            mouse::Cursor::Available(position) => self
+                .resize_band(position)
+                .map_or(interaction, caption::resize_interaction),
+            _ => interaction,
+        };
+
         if interaction != self.mouse_interaction {
             if let Some(cursor) = cursor_for(cursors, interaction) {
                 self.raw.set_cursor(cursor);

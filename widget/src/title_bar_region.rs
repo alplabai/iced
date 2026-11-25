@@ -17,11 +17,15 @@
 //!   `decorations: false`, the runtime turns a press in the region into the
 //!   matching window request: `drag_window`, a maximize toggle (macOS does not
 //!   follow the user's "double-click a title bar to" setting) or
-//!   `show_window_menu`, which does nothing where the platform has no window
-//!   menu. This happens whatever the window's decorations, so leave the
-//!   regions out of the view where the strip should not move the window. A
-//!   press inside a [`Maximize`](window::TitleBarRegion::Maximize) region
-//!   still reaches its button.
+//!   `show_window_menu` (on X11 through `_GTK_SHOW_WINDOW_MENU`, which needs
+//!   a window manager that handles it, such as KWin or Mutter). This happens
+//!   whatever the window's decorations, so leave the regions out of the view
+//!   where the strip should not move the window. A press inside a
+//!   [`Maximize`](window::TitleBarRegion::Maximize) region still reaches its
+//!   button. On Linux and the BSDs, while such a window is undecorated,
+//!   resizable and neither maximized nor fullscreen, a 6-pixel band along its
+//!   edges resizes it, with the matching cursor; the band wins over a
+//!   caption region.
 //! - On the web, Android and iOS the regions do nothing.
 //!
 //! Wrap the application's maximize button in a
