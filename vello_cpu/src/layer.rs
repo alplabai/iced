@@ -242,17 +242,30 @@ impl Layer {
             },
         );
 
+        let text_bounds = |item: &Item<Text>| -> Vec<Rectangle> {
+            item.as_slice()
+                .iter()
+                .filter_map(Text::visible_bounds)
+                .map(|bounds| bounds.expand(1.0) * item.transformation())
+                .collect()
+        };
+
         let text = damage::diff(
             &previous.text,
             &current.text,
-            |item| {
-                item.as_slice()
-                    .iter()
-                    .filter_map(Text::visible_bounds)
-                    .map(|bounds| bounds.expand(1.0) * item.transformation())
-                    .collect()
-            },
+            text_bounds,
             |text_a, text_b| {
+                // A group or cache that moved or changed its clip damages its old
+                // and new positions, even when the texts inside are equal (#121).
+                if text_a.transformation() != text_b.transformation()
+                    || text_a.clip_bounds() != text_b.clip_bounds()
+                {
+                    return text_bounds(text_a)
+                        .into_iter()
+                        .chain(text_bounds(text_b))
+                        .collect();
+                }
+
                 damage::list(
                     text_a.as_slice(),
                     text_b.as_slice(),
@@ -770,6 +783,65 @@ mod tests {
                     && region.width >= covered.width
                     && region.height >= covered.height),
             "{damage:?} leaves the anti-aliased edge of the old glyphs on screen"
+        );
+    }
+
+    fn texts() -> Vec<Text> {
+        layer_with_text("1.000")
+            .text
+            .iter()
+            .flat_map(|item| item.as_slice().to_vec())
+            .collect()
+    }
+
+    fn assert_damages(damage: &[Rectangle], positions: [Point; 2]) {
+        for position in positions {
+            assert!(
+                damage.iter().any(|region| region.contains(position)),
+                "{damage:?} misses the text at {position:?}"
+            );
+        }
+    }
+
+    // Fork #121: a text cache or group that only moves damages both positions.
+    #[test]
+    fn moved_text_cache_damages_old_and_new_positions() {
+        let text: Arc<[Text]> = texts().into();
+
+        let at = |dy: f32| {
+            let mut layer = Layer::default();
+            layer.draw_text_cache(
+                Arc::clone(&text),
+                Rectangle::INFINITE,
+                Transformation::translate(0.0, dy),
+            );
+            layer
+        };
+
+        assert_damages(
+            &Layer::damage(&at(0.0), &at(100.0)),
+            [Point::new(12.0, 25.0), Point::new(12.0, 125.0)],
+        );
+        assert!(Layer::damage(&at(0.0), &at(0.0)).is_empty());
+    }
+
+    #[test]
+    fn moved_text_group_damages_old_and_new_positions() {
+        let text = texts();
+
+        let at = |dy: f32| {
+            let mut layer = Layer::default();
+            layer.draw_text_group(
+                text.clone(),
+                Rectangle::INFINITE,
+                Transformation::translate(0.0, dy),
+            );
+            layer
+        };
+
+        assert_damages(
+            &Layer::damage(&at(0.0), &at(100.0)),
+            [Point::new(12.0, 25.0), Point::new(12.0, 125.0)],
         );
     }
 }

@@ -22,6 +22,7 @@ pub struct Shell<'a, Message> {
     event_status: event::Status,
     redraw_request: window::RedrawRequest,
     input_method: InputMethod,
+    title_bar: window::TitleBar,
     invalidation: Invalidation,
     clipboard: Clipboard,
 }
@@ -56,6 +57,7 @@ impl<'a, Message> Shell<'a, Message> {
             redraw_request: window::RedrawRequest::Wait,
             invalidation: Invalidation::None,
             input_method: InputMethod::Disabled,
+            title_bar: window::TitleBar::default(),
             clipboard: Clipboard {
                 reads: Vec::new(),
                 write: None,
@@ -210,6 +212,36 @@ impl<'a, Message> Shell<'a, Message> {
         &mut self.input_method
     }
 
+    /// Reports a region of the window's title bar drawn by the application,
+    /// in logical window coordinates. See [`window::TitleBar`].
+    ///
+    /// __Important__: The runtime applies only the regions reported while
+    /// handling a [`window::Event::RedrawRequested`].
+    pub fn request_title_bar_region(
+        &mut self,
+        region: window::TitleBarRegion,
+        bounds: crate::Rectangle,
+    ) {
+        match region {
+            window::TitleBarRegion::Caption => self.title_bar.caption.push(bounds),
+            window::TitleBarRegion::Maximize => {
+                self.title_bar.maximize = Some(bounds);
+            }
+        }
+    }
+
+    /// Adds every region of `title_bar`; for widgets that run their content
+    /// with a [`Shell::local`] shell and pass its requests on.
+    pub fn request_title_bar(&mut self, title_bar: &window::TitleBar) {
+        self.title_bar.merge(title_bar);
+    }
+
+    /// Returns the title bar regions reported to the [`Shell`].
+    #[must_use]
+    pub fn title_bar(&self) -> &window::TitleBar {
+        &self.title_bar
+    }
+
     /// Invalidates the current application overlay.
     ///
     /// The shell will recreate the application overlays.
@@ -264,6 +296,7 @@ impl<'a, Message> Shell<'a, Message> {
         self.event_status = self.event_status.merge(other.event_status);
 
         self.input_method.merge(&other.input_method);
+        self.title_bar.merge(&other.title_bar);
         self.clipboard.merge(&mut other.clipboard);
     }
 }

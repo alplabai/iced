@@ -1147,6 +1147,7 @@ async fn run_instance<P>(
                         if let user_interface::State::Updated {
                             redraw_request,
                             input_method,
+                            title_bar,
                             mouse_interaction,
                             clipboard: clipboard_requests,
                             ..
@@ -1154,6 +1155,7 @@ async fn run_instance<P>(
                         {
                             window.request_redraw(redraw_request);
                             window.request_input_method(input_method);
+                            window.request_title_bar(title_bar);
                             window.update_mouse(&cursors, mouse_interaction);
 
                             run_clipboard(&mut proxy, &mut clipboard, clipboard_requests, id);
@@ -1321,6 +1323,13 @@ async fn run_instance<P>(
                                 &mut renderer_settings,
                             );
                         } else {
+                            // A press in a caption region moves, maximizes or
+                            // opens the menu of the window instead of reaching
+                            // the widgets (Windows handles it natively).
+                            if window.caption_press(&window_event) {
+                                continue;
+                            }
+
                             if window.releases_grab(&window_event) {
                                 let _ =
                                     window.set_cursor_grab(crate::core::window::CursorGrab::None);
@@ -2031,6 +2040,10 @@ fn run_action<'a, P, C>(
                             } else {
                                 // The pointer no longer reaches the window: end any hover.
                                 events.push((id, core::Event::Mouse(mouse::Event::CursorLeft)));
+                                // Drop the caption regions now, not at the next redraw: a
+                                // window disabled for the runtime only is still natively
+                                // enabled, so they would still move it.
+                                window.request_title_bar(core::window::TitleBar::default());
                             }
                         }
                     }

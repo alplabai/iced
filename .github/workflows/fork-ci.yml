@@ -68,6 +68,10 @@ jobs:
         run: cargo nextest run --workspace --all-features --no-fail-fast
       - name: Doc tests
         run: cargo test --workspace --all-features --doc
+      - name: vello_cpu multithreading on default features (#123)
+        # --all-features above turns the feature on directly, so only a
+        # default-feature run catches the fork default being reverted.
+        run: cargo test -p iced_vello_cpu --test multithreading
 
   wasm:
     name: check wasm

@@ -30,6 +30,7 @@ wgpu-bare = ["iced_renderer/wgpu-bare", "iced_widget/wgpu"]
 # Enables the `vello-cpu` software renderer
 vello-cpu = ["iced_renderer/vello-cpu"]
 # Enables multithreading in the `vello-cpu` software renderer
+# (fork: already on for every target except wasm32, #123)
 vello-cpu-multithreading = ["iced_renderer/vello-cpu-multithreading"]
 # Enables the `image` widget and image clipboard support
 image = ["image-without-codecs", "image/default"]
@@ -257,8 +258,9 @@ web-time = "1.1"
 wgpu = { version = "30", default-features = false, features = ["std", "wgsl"] }
 # alplabai/winit `iced-signex`: iced-rs/winit 48116469 + cancellable macOS terminate requests (#37)
 # + an Occluded event after a macOS fullscreen exit ends (#107)
-# + Windows content extended into the title bar, geometry only (#114, #105).
-winit = { git = "https://github.com/alplabai/winit.git", rev = "0570f8454e03e9d86bbc079047a54a82a766ffaf", default-features = false, features = ["rwh_06"] }
+# + Windows content extended into the title bar: geometry (#114), caption and maximize regions (#105).
+# + one Resized per fullscreen change on Windows (#111).
+winit = { git = "https://github.com/alplabai/winit.git", rev = "cb4f2acd880df0eb0983393c0be98a95b4fdc032", default-features = false, features = ["rwh_06"] }
 
 [workspace.lints.rust]
 rust_2018_idioms = { level = "deny", priority = -1 }
@@ -287,3 +289,21 @@ useless_conversion = "deny"
 
 [workspace.lints.rustdoc]
 broken_intra_doc_links = "forbid"
+
+# Fork: wgpu 30.0.1 with DX12 window swapchains on `DXGI_SCALING_NONE`, so the
+# last frame is not stretched while a window resizes (#132). The whole wgpu
+# family comes from the same rev, so the crates agree on one copy of each.
+# `[patch]` only applies to the root workspace: applications pinning this fork
+# (Signex) need the same entries.
+[patch.crates-io]
+naga = { git = "https://github.com/alplabai/wgpu.git", rev = "e738655e169b416fb53c31e3ceb9581d1a63035e" }
+naga-types = { git = "https://github.com/alplabai/wgpu.git", rev = "e738655e169b416fb53c31e3ceb9581d1a63035e" }
+wgpu = { git = "https://github.com/alplabai/wgpu.git", rev = "e738655e169b416fb53c31e3ceb9581d1a63035e" }
+wgpu-core = { git = "https://github.com/alplabai/wgpu.git", rev = "e738655e169b416fb53c31e3ceb9581d1a63035e" }
+wgpu-core-deps-apple = { git = "https://github.com/alplabai/wgpu.git", rev = "e738655e169b416fb53c31e3ceb9581d1a63035e" }
+wgpu-core-deps-emscripten = { git = "https://github.com/alplabai/wgpu.git", rev = "e738655e169b416fb53c31e3ceb9581d1a63035e" }
+wgpu-core-deps-wasm = { git = "https://github.com/alplabai/wgpu.git", rev = "e738655e169b416fb53c31e3ceb9581d1a63035e" }
+wgpu-core-deps-windows-linux-android = { git = "https://github.com/alplabai/wgpu.git", rev = "e738655e169b416fb53c31e3ceb9581d1a63035e" }
+wgpu-hal = { git = "https://github.com/alplabai/wgpu.git", rev = "e738655e169b416fb53c31e3ceb9581d1a63035e" }
+wgpu-naga-bridge = { git = "https://github.com/alplabai/wgpu.git", rev = "e738655e169b416fb53c31e3ceb9581d1a63035e" }
+wgpu-types = { git = "https://github.com/alplabai/wgpu.git", rev = "e738655e169b416fb53c31e3ceb9581d1a63035e" }

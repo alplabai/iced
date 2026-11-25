@@ -1,7 +1,7 @@
 //! Connect a window with a renderer.
-use crate::core::Color;
 use crate::core::backend;
 use crate::core::renderer;
+use crate::core::{Color, Size};
 use crate::graphics::color;
 use crate::graphics::compositor;
 use crate::graphics::{self, Antialiasing, Shell, Viewport};
@@ -338,6 +338,26 @@ pub async fn new(
     Compositor::request(settings, display, compatible_window, shell).await
 }
 
+/// Keeps the last frame unscaled while the window resizes (#132). The Metal
+/// layer's default gravity stretches it to the new size until the next frame
+/// is presented, which looks like a zoom during maximize and restore.
+#[cfg(all(target_os = "macos", feature = "metal"))]
+#[allow(unsafe_code)]
+fn keep_contents_unscaled(surface: &wgpu::Surface<'_>) {
+    // SAFETY: only a property of the layer changes; the surface is neither
+    // destroyed nor used by the GPU here.
+    let Some(surface) = (unsafe { surface.as_hal::<wgpu::hal::api::Metal>() }) else {
+        return;
+    };
+
+    let layer = surface.render_layer().lock();
+
+    // winit's view is flipped, so the layer's `contentsAreFlipped` is YES and
+    // `Bottom` aligns the content to the window's top edge on screen.
+    // SAFETY: `kCAGravityBottomLeft` is a constant string provided by QuartzCore.
+    layer.setContentsGravity(unsafe { objc2_quartz_core::kCAGravityBottomLeft });
+}
+
 /// Chooses the alpha mode for a surface out of the ones it supports now.
 fn alpha_mode(supported: &[wgpu::CompositeAlphaMode]) -> wgpu::CompositeAlphaMode {
     if supported.contains(&wgpu::CompositeAlphaMode::PreMultiplied) {
@@ -361,33 +381,56 @@ pub fn present(
         return Err(compositor::SurfaceError::Outdated);
     }
 
-    match surface.get_current_texture() {
-        wgpu::CurrentSurfaceTexture::Success(frame) => {
-            let view = &frame
-                .texture
-                .create_view(&wgpu::TextureViewDescriptor::default());
+    let (frame, is_suboptimal) = match surface.get_current_texture() {
+        wgpu::CurrentSurfaceTexture::Success(frame) => (frame, false),
+        // pop-os/iced dfcd989: show the frame, then reconfigure, instead of dropping it
+        wgpu::CurrentSurfaceTexture::Suboptimal(frame) => (frame, true),
+        wgpu::CurrentSurfaceTexture::Outdated => return Err(compositor::SurfaceError::Outdated),
+        wgpu::CurrentSurfaceTexture::Timeout => return Err(compositor::SurfaceError::Timeout),
+        wgpu::CurrentSurfaceTexture::Occluded => return Err(compositor::SurfaceError::Occluded),
+        wgpu::CurrentSurfaceTexture::Lost => return Err(compositor::SurfaceError::Lost),
+        wgpu::CurrentSurfaceTexture::Validation => return Err(compositor::SurfaceError::Other),
+    };
 
-            let _submission = renderer.present(
-                Some(background_color),
-                frame.texture.format(),
-                view,
-                viewport,
-            );
+    // `configure_surface` clamps the surface to the same limit, so the viewport
+    // must match it (pop-os/iced 6522bf6).
+    let viewport = &Viewport::with_physical_size(
+        clamp_surface_size(
+            size,
+            renderer.engine.device.limits().max_texture_dimension_2d,
+        ),
+        viewport.scale(),
+    );
 
-            // Present the frame
-            on_pre_present();
-            renderer.engine.queue.present(frame);
+    let view = &frame
+        .texture
+        .create_view(&wgpu::TextureViewDescriptor::default());
 
-            Ok(())
-        }
-        wgpu::CurrentSurfaceTexture::Suboptimal(_) | wgpu::CurrentSurfaceTexture::Outdated => {
-            Err(compositor::SurfaceError::Outdated)
-        }
-        wgpu::CurrentSurfaceTexture::Timeout => Err(compositor::SurfaceError::Timeout),
-        wgpu::CurrentSurfaceTexture::Occluded => Err(compositor::SurfaceError::Occluded),
-        wgpu::CurrentSurfaceTexture::Lost => Err(compositor::SurfaceError::Lost),
-        wgpu::CurrentSurfaceTexture::Validation => Err(compositor::SurfaceError::Other),
+    let _submission = renderer.present(
+        Some(background_color),
+        frame.texture.format(),
+        view,
+        viewport,
+    );
+
+    // Present the frame
+    on_pre_present();
+    renderer.engine.queue.present(frame);
+
+    if is_suboptimal {
+        return Err(compositor::SurfaceError::Outdated);
     }
+
+    Ok(())
+}
+
+/// Clamps a surface size to the largest texture the device accepts; a larger
+/// surface is a validation error.
+fn clamp_surface_size(size: Size<u32>, max_dimension: u32) -> Size<u32> {
+    Size::new(
+        size.width.min(max_dimension),
+        size.height.min(max_dimension),
+    )
 }
 
 impl graphics::Compositor for Compositor {
@@ -431,9 +474,15 @@ impl graphics::Compositor for Compositor {
     }
 
     fn create_surface(&mut self, window: impl compositor::Window) -> Self::Surface {
-        self.instance
+        let surface = self
+            .instance
             .create_surface(wgpu::SurfaceTarget::Window(Box::new(window)))
-            .expect("Create surface")
+            .expect("Create surface");
+
+        #[cfg(all(target_os = "macos", feature = "metal"))]
+        keep_contents_unscaled(&surface);
+
+        surface
     }
 
     fn configure_surface(&mut self, surface: &mut Self::Surface, width: u32, height: u32) {
@@ -453,6 +502,13 @@ impl graphics::Compositor for Compositor {
         // its lifetime (some Vulkan drivers on Windows stop offering
         // `PreMultiplied` after a resize or restore), so pick one each time.
         let alpha_mode = alpha_mode(&capabilities.alpha_modes);
+
+        // A window past the device limit (several 4K monitors, a high scale)
+        // renders clipped instead of failing validation (pop-os/iced 6522bf6).
+        let Size { width, height } = clamp_surface_size(
+            Size::new(width, height),
+            self.engine.device.limits().max_texture_dimension_2d,
+        );
 
         log::debug!("Configuring surface ({width}x{height}) with alpha mode: {alpha_mode:?}");
 
@@ -747,6 +803,26 @@ mod tests {
     }
 
     #[test]
+    fn surface_size_is_clamped_to_the_device_limit() {
+        assert_eq!(
+            clamp_surface_size(Size::new(800, 600), 8192),
+            Size::new(800, 600)
+        );
+        assert_eq!(
+            clamp_surface_size(Size::new(15360, 600), 8192),
+            Size::new(8192, 600)
+        );
+        assert_eq!(
+            clamp_surface_size(Size::new(600, 20000), 16384),
+            Size::new(600, 16384)
+        );
+        assert_eq!(
+            clamp_surface_size(Size::new(8192, 8192), 8192),
+            Size::new(8192, 8192)
+        );
+    }
+
+    #[test]
     fn windows_defaults_to_dx12_then_gl_without_vulkan() {
         let windows = default_backends_for(true, wgpu::Backends::all());
 
@@ -782,11 +858,20 @@ mod tests {
         assert_eq!(settings(backend::Api::OpenGL), wgpu::Backends::GL);
     }
 
+    /// An instance with the backends the compositor uses by default, so the
+    /// tests never create a device on a backend apps would not use (Intel's
+    /// Vulkan driver crashes in `vkCreateDescriptorPool` on Windows).
+    fn test_instance() -> wgpu::Instance {
+        wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: default_backends(),
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        })
+    }
+
     /// Creates a device with an adapter, if the machine has one.
     fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
         futures::executor::block_on(async {
-            let instance =
-                wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+            let instance = test_instance();
 
             let adapter = instance
                 .request_adapter(&wgpu::RequestAdapterOptions {
@@ -851,8 +936,7 @@ mod tests {
     #[test]
     fn screenshot_returns_early_on_a_lost_device() {
         let (instance, adapter) = futures::executor::block_on(async {
-            let instance =
-                wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+            let instance = test_instance();
             let adapter = instance
                 .request_adapter(&wgpu::RequestAdapterOptions::default())
                 .await
@@ -929,8 +1013,7 @@ mod tests {
         }
 
         let (instance, adapter) = futures::executor::block_on(async {
-            let instance =
-                wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+            let instance = test_instance();
             let adapter = instance
                 .request_adapter(&wgpu::RequestAdapterOptions::default())
                 .await

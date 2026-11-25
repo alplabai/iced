@@ -13,6 +13,7 @@ mod mode;
 mod monitor;
 mod position;
 mod redraw_request;
+mod title_bar;
 mod user_attention;
 
 pub use cursor_grab::CursorGrab;
@@ -27,6 +28,7 @@ pub use position::{Position, PositionOnMonitor};
 pub use redraw_request::RedrawRequest;
 pub use screenshot::Screenshot;
 pub use settings::Settings;
+pub use title_bar::{TitleBar, TitleBarRegion};
 pub use user_attention::UserAttention;
 
 use raw_window_handle::{

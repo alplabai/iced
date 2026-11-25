@@ -207,6 +207,7 @@ where
         let mut status = shell::Invalidation::None;
         let mut redraw_request = window::RedrawRequest::Wait;
         let mut input_method = InputMethod::Disabled;
+        let mut title_bar = window::TitleBar::default();
         let mut clipboard = Clipboard::new();
         let mut layout = Layout::new(self.state.size);
         let viewport = Rectangle::with_size(self.bounds);
@@ -379,6 +380,7 @@ where
                 status = status.max(invalidation);
                 redraw_request = redraw_request.min(shell.redraw_request());
                 input_method.merge(shell.input_method());
+                title_bar.merge(shell.title_bar());
                 clipboard.merge(shell.clipboard_mut());
 
                 shell.event_status()
@@ -467,11 +469,18 @@ where
             shell::Invalidation::Widgets => return (State::Outdated, event_statuses),
         };
 
+        // An open overlay (a menu, a pick list) may cover the title bar; its
+        // clicks must reach it rather than move the window.
+        if self.overlay.is_some() {
+            title_bar = window::TitleBar::default();
+        }
+
         (
             State::Updated {
                 mouse_interaction,
                 redraw_request,
                 input_method,
+                title_bar,
                 clipboard,
                 change,
             },
@@ -698,6 +707,9 @@ pub enum State {
         redraw_request: window::RedrawRequest,
         /// The current [`InputMethod`] strategy of the user interface.
         input_method: InputMethod,
+        /// The title bar regions the user interface reported; empty while an
+        /// overlay is open.
+        title_bar: window::TitleBar,
         /// The set of [`Clipboard`] requests that the user interface has produced.
         clipboard: Clipboard,
         /// The [`Change`] that the [`UserInterface`] experienced.

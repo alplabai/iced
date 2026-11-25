@@ -81,6 +81,7 @@ mod tests {
     /// An image scrolled out of view above the viewport must keep its
     /// negative position when snapped; saturating it to the origin would
     /// leave it stuck to the upper edge of the scrollable.
+    #[cfg(any(feature = "image", feature = "svg"))]
     #[test]
     fn round_keeps_negative_coordinates() {
         let bounds = Rectangle::new(Point::new(10.0, -50.0), Size::new(100.0, 100.0));
@@ -93,6 +94,7 @@ mod tests {
 
     /// Coordinates landing a hair below a half-pixel boundary must round
     /// up onto the grid, like the `quad` vertex shader.
+    #[cfg(any(feature = "image", feature = "svg"))]
     #[test]
     fn round_applies_the_nudge() {
         let bounds = Rectangle::new(Point::new(0.0, 10.4998), Size::new(10.0, 1.0));
@@ -114,6 +116,7 @@ mod tests {
         let snapped = snap(bounds).expect("Visible rectangle");
 
         assert_eq!(snapped.y, 0);
+        #[cfg(any(feature = "image", feature = "svg"))]
         assert_eq!(round(bounds).y, -50.0);
     }
 }

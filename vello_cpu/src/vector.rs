@@ -105,7 +105,7 @@ struct Cache {
     rasters: FxHashMap<RasterKey, Arc<vello_cpu::Pixmap>>,
     raster_hits: FxHashSet<RasterKey>,
     #[cfg(feature = "svg-text")]
-    fontdb: Option<Arc<usvg::fontdb::Database>>,
+    fontdb: Option<(crate::graphics::text::Version, Arc<usvg::fontdb::Database>)>,
 }
 
 /// Key for identifying SVGs.
@@ -138,13 +138,22 @@ impl Cache {
     fn load(&mut self, handle: &Handle, current_color: Option<Color>) -> Option<&usvg::Tree> {
         let id = handle.id();
 
-        // TODO: Reuse `cosmic-text` font database
+        // Reuse the `cosmic-text` font database instead of scanning the system
+        // fonts again, and clone it again once a font is loaded (pop-os/iced 5013f63).
         #[cfg(feature = "svg-text")]
-        if self.fontdb.is_none() {
-            let mut fontdb = usvg::fontdb::Database::new();
-            fontdb.load_system_fonts();
+        {
+            let font_system = crate::graphics::text::font_system()
+                .read()
+                .expect("Read font system");
+            let version = font_system.version();
 
-            self.fontdb = Some(Arc::new(fontdb));
+            if self
+                .fontdb
+                .as_ref()
+                .is_none_or(|(cached, _)| *cached != version)
+            {
+                self.fontdb = Some((version, Arc::new(font_system.db().clone())));
+            }
         }
 
         let options = usvg::Options {
@@ -153,6 +162,7 @@ impl Cache {
                 .fontdb
                 .as_ref()
                 .expect("fontdb must be initialized")
+                .1
                 .clone(),
             style_sheet: current_color.map(crate::core::svg::color_style_sheet),
             ..usvg::Options::default()
@@ -347,5 +357,40 @@ mod tests {
 
         assert!((120..=136).contains(&alpha), "alpha was {alpha}");
         assert_eq!([red, green, blue], [alpha, 0, 0]);
+    }
+
+    #[cfg(feature = "svg-text")]
+    #[test]
+    fn font_loaded_later_reaches_the_next_svg() {
+        let mut cache = Cache::default();
+        let _ = cache.load(&Handle::from_memory(SQUARE), None);
+        let (version, before) = cache.fontdb.clone().expect("fontdb after a load");
+
+        // The SVG database is the font system's, not a second system scan
+        // (unless another test loaded a font in between).
+        {
+            let font_system = crate::graphics::text::font_system()
+                .read()
+                .expect("Read font system");
+
+            if font_system.version() == version {
+                assert_eq!(before.len(), font_system.db().len());
+            }
+        }
+
+        // Owned bytes, so the load is not skipped as a duplicate of another test's.
+        crate::graphics::text::font_system()
+            .write()
+            .expect("Write font system")
+            .load_font(std::borrow::Cow::Owned(
+                include_bytes!("../../graphics/fonts/Iced-Icons.ttf").to_vec(),
+            ));
+
+        let other: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"/>"#;
+        let _ = cache.load(&Handle::from_memory(other), None);
+        let (new_version, after) = cache.fontdb.clone().expect("fontdb after a load");
+
+        assert_ne!(new_version, version);
+        assert!(after.len() > before.len());
     }
 }

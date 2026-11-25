@@ -1556,13 +1556,60 @@ fn is_private_use(c: char) -> bool {
     ('\u{E000}'..='\u{F8FF}').contains(&c)
 }
 
+/// Converts a logical title bar region to physical client pixels. Edges are
+/// rounded, not the size, so adjacent regions stay adjacent.
+#[cfg(any(target_os = "windows", test))]
+pub(crate) fn physical_region(
+    bounds: crate::core::Rectangle,
+    scale_factor: f32,
+) -> (
+    winit::dpi::PhysicalPosition<i32>,
+    winit::dpi::PhysicalSize<u32>,
+) {
+    let left = (bounds.x * scale_factor).round() as i32;
+    let top = (bounds.y * scale_factor).round() as i32;
+    let right = ((bounds.x + bounds.width) * scale_factor).round() as i32;
+    let bottom = ((bounds.y + bounds.height) * scale_factor).round() as i32;
+
+    (
+        winit::dpi::PhysicalPosition::new(left, top),
+        winit::dpi::PhysicalSize::new(
+            right.saturating_sub(left).max(0) as u32,
+            bottom.saturating_sub(top).max(0) as u32,
+        ),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        build_monitor_list, device_event, is_primary_monitor, title_color_rgb, window_theme,
+        build_monitor_list, device_event, is_primary_monitor, physical_region, title_color_rgb,
+        window_theme,
     };
     use crate::core::window::MonitorData;
-    use crate::core::{Color, Size, theme};
+    use crate::core::{Color, Rectangle, Size, theme};
+
+    #[test]
+    fn title_bar_regions_round_edges_to_physical_pixels() {
+        let region = |x, y, width, height, scale| {
+            let (origin, size) = physical_region(
+                Rectangle {
+                    x,
+                    y,
+                    width,
+                    height,
+                },
+                scale,
+            );
+            (origin.x, origin.y, size.width, size.height)
+        };
+
+        assert_eq!(region(40.0, 0.0, 300.0, 32.0, 1.0), (40, 0, 300, 32));
+        // 1.25: 0.0..33.0 -> 0..41 (41.25 rounds down), 33.0..133.0 -> 41..166.
+        assert_eq!(region(0.0, 0.0, 33.0, 32.0, 1.25), (0, 0, 41, 40));
+        assert_eq!(region(33.0, 0.0, 100.0, 32.0, 1.25), (41, 0, 125, 40));
+        assert_eq!(region(10.0, 5.0, 0.0, 0.0, 2.0), (20, 10, 0, 0));
+    }
 
     #[test]
     fn title_colors_convert_to_rgb_and_ignore_alpha() {
